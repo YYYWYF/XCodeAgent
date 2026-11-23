@@ -2,6 +2,7 @@ import { Select } from 'antd'
 import { useState, type ReactElement } from 'react'
 import type { WorkflowApiDesignDraft, WorkflowApiField, WorkflowApiSourceField } from '../../../../typings'
 import { apiDesignFieldKey, endpointFieldSnapshot, replaceFieldMapping } from '../WorkflowRunCard/apiDesignSerialization'
+import { mappingFieldOption } from './MappingFieldLabel'
 import { sourceFieldKey } from './model'
 import RuleEditor, { type RuleContent } from './RuleEditor'
 import BusinessRuleEntry from './BusinessRuleEntry'
@@ -38,9 +39,12 @@ export default function ResponseFieldMapping({ field, fields, sources, draft, re
   const requestDependencies = ruleInputs?.endpointFields || (valueMapping?.right.kind === 'endpoint' && valueMapping.right.endpointField ? [valueMapping.right.endpointField] : [])
   const endpointField = endpointFieldSnapshot(field)
   const selected = mapped?.sourceFields || []
-  const options = sources.map((source) => ({ value: sourceFieldKey(source), label: `${source.sourceType === 'database' ? source.column : source.path}${source.description ? `（${source.description}）` : ''} · ${source.type}` }))
+  const options = sources.map((source) => mappingFieldOption({
+    name: source.sourceType === 'database' ? source.column : source.path,
+    value: sourceFieldKey(source), type: source.type, description: source.description
+  }))
   const issue = error || (!readOnly && selected.some((source) => !sources.some((candidate) => sourceFieldKey(candidate) === sourceFieldKey(source))) ? '来源字段已失效，请重新配置。' : '')
-  const ruleOptions = [...options.map((item) => ({ ...item, value: `source:${item.value}` })),
+  const ruleOptions = [...options.map((item) => ({ value: `source:${item.value}`, label: item.title })),
     ...fields.filter((item) => item.side === 'request').map((item) => ({ value: `endpoint:${apiDesignFieldKey(item)}`, label: `${item.path} · ${item.type}`, group: ({ path: '路径参数', query: '查询参数', header: '请求头', request_body: '请求体', response_body: '响应体' })[item.location] })),
     ...BUILTIN_OPTIONS.map((item) => ({ ...item, value: `builtin:${item.value}` }))]
   /** 将多字段规则应用为已有的来源映射契约。 */
@@ -81,7 +85,7 @@ export default function ResponseFieldMapping({ field, fields, sources, draft, re
         }} /> : null}
         {editing || processed ? <BusinessRuleEntry title={field.path} configured={Boolean(ruleDescription)}
             inputCount={selected.length + requestDependencies.length + (ruleInputs?.builtinFields?.length || 0)} disabled={disabled} onClick={() => setEditing(true)} />
-            : <Select allowClear showSearch optionFilterProp="label" disabled={disabled} placeholder="选择当前数据源字段" value={selected[0] ? sourceFieldKey(selected[0]) : undefined} options={options} onChange={direct} />}
+            : <Select allowClear showSearch optionLabelProp="selectedLabel" optionFilterProp="title" disabled={disabled} placeholder="选择当前数据源字段" value={selected[0] ? sourceFieldKey(selected[0]) : undefined} options={options} onChange={direct} />}
         </div>
         {editing ? <RuleEditor ruleTarget={{ area: 'return', key: apiDesignFieldKey(field) }} title={`业务处理 · ${field.path}`} initial={{ dependencies: [...selected.map((source) => `source:${sourceFieldKey(source)}`), ...requestDependencies.map((item) => `endpoint:${apiDesignFieldKey(item)}`), ...(ruleInputs?.builtinFields || []).map((key) => `builtin:${key}`)], description: ruleDescription, missing: ruleInputs?.missingBehavior || 'error', defaultValue: ruleInputs?.defaultValue }} options={ruleOptions} type={field.type} disabled={disabled} canDirect={selected.length === 1} onDirect={() => direct(selected[0] && sourceFieldKey(selected[0]))} onApply={apply} onClose={() => setEditing(false)} /> : null}
       </> : <ValueRuleEditor title={field.path} fields={fields} type={field.type} disabled={disabled} readOnly={readOnly} onBusiness={() => setEditing(true)} onSource={() => direct()} right={valueMapping?.right} onChange={(right) => onChange(replaceFieldMapping(draft, right ? { endpointField, mappingType: 'value_mapping', right } : { endpointField, mappingType: 'unconfigured' }))} />}

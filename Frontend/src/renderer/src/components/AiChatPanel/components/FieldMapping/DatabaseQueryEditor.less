@@ -1,5 +1,5 @@
 .database-query-editor {
-  --database-query-columns: minmax(120px, 1.08fr) 120px 120px minmax(150px, .95fr) 34px;
+  --database-query-columns: minmax(120px, .87fr) 120px 120px minmax(170px, 1.16fr) 34px;
   --database-query-rail: var(--wb-accent);
   --database-query-root-fill: color-mix(in srgb, var(--wb-accent) 2%, var(--wb-canvas));
   --database-query-group-fill: color-mix(in srgb, var(--wb-accent) 5%, var(--wb-canvas));
@@ -39,9 +39,6 @@
   .database-query-column-cell, .database-query-parameter-cell { display: grid; min-width: 0; gap: 3px;
     > .ant-select, > .ant-input { width: 100%; min-width: 0; }
   }
-  .database-query-readonly-field { display: block; min-width: 0;
-    > span { display: block; overflow: hidden; color: var(--wb-text); font-size: 14px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
-  }
   .database-query-source-cell { min-width: 0; }
   .database-query-source-select { width: 100%; min-width: 0; }
   .database-query-source-label { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--wb-accent) 24%, var(--wb-border)); border-radius: 999px; background: color-mix(in srgb, var(--wb-accent) 9%, var(--wb-canvas)); color: var(--wb-accent); font-size: 12px; font-weight: 600; line-height: 1; }
@@ -71,13 +68,9 @@
   .ant-select-selector, .ant-radio-button-wrapper, .ant-input { border-color: var(--wb-border-strong); background: var(--wb-canvas); color: var(--wb-text); }
   .ant-select:not(.ant-select-disabled):hover .ant-select-selector, .ant-select-focused:not(.ant-select-disabled) .ant-select-selector, .ant-input:not(:disabled):hover, .ant-input:focus { border-color: var(--wb-accent-border); }
   &.is-readonly {
-    --database-query-columns: minmax(150px, 1.2fr) 90px minmax(100px, .75fr) minmax(160px, 1.2fr);
+    --database-query-columns: minmax(130px, 1fr) 90px minmax(100px, .75fr) minmax(180px, 1.4fr);
     .database-query-head, .database-query-row { min-width: 0; gap: 16px; }
     .database-query-row { border-left: 0; border-right: 0; border-radius: 0; min-height: 60px; }
-    .database-query-readonly-field { display: flex; min-width: 0; align-items: center; gap: 5px; white-space: nowrap;
-      code { min-width: 0; overflow: hidden; color: var(--wb-text); text-overflow: ellipsis; white-space: nowrap; }
-      .field-detail-type { flex: 0 0 auto; margin-left: 5px; color: var(--wb-text-secondary); font-size: 12px; }
-    }
     .database-static-operator { color: var(--wb-text-secondary); font-size: 13px; white-space: nowrap; }
   }
 }

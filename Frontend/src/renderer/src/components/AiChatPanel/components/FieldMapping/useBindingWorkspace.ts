@@ -15,6 +15,7 @@ import { observeBindingSources, type BindingSourcesReader } from './bindingSourc
 
 export type BindingEntry = {
   preparation: EndpointDesignPreparation; value: BindingDraft; readOnly: boolean; complex: boolean; conflict: boolean; dirty: boolean
+  manualMapping: boolean
 }
 
 type BindingWorkspaceState = {
@@ -32,7 +33,7 @@ type BindingWorkspaceState = {
   metadata?: ApiDesignDatabaseMetadata | ApiDesignExternalOperationMetadata
   metadataLoading: boolean
   update: (next: BindingEntry) => void
-  edit: (draft: WorkflowApiDesignDraft, selection?: BindingDraft['selection']) => void
+  edit: (draft: WorkflowApiDesignDraft, selection?: BindingDraft['selection'], manualMapping?: boolean) => void
   save: (confirm: boolean) => Promise<void>
   reload: () => void
   discard: () => Promise<void>
@@ -128,7 +129,7 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
       const conflict = Boolean(saved && (saved.baseRevision !== (preparation.artifactRevision || null) || saved.technicalPlanHash !== preparation.technicalPlanHash))
       update({ preparation, value: saved || { draft, selection: inferred.selection, baseRevision: preparation.artifactRevision || null,
         technicalPlanHash: preparation.technicalPlanHash }, readOnly: !saved && preparation.payload.existingStatus?.status === 'confirmed',
-        complex: inferred.complex, conflict, dirty: false })
+        complex: inferred.complex, conflict, dirty: false, manualMapping: Boolean(saved || inferred.selection) })
     }).catch((reason) => { if (!disposed) failRead(reason, 'prepare') })
       .finally(() => { if (!disposed) setLoading(false) })
     return () => { disposed = true }
@@ -175,9 +176,12 @@ export function useBindingWorkspace(workspaceRoot: string, target: ApiDesignConf
   }
   retryRef.current = recover
 
-  /** 更新内存草稿，正式确认状态直到明确提交才发生变化。 */
-  const edit = (draft: WorkflowApiDesignDraft, selection = entry?.value.selection): void => {
-    if (entry) update({ ...entry, readOnly: false, dirty: true, value: { ...entry.value, draft, selection: selection || null } })
+  /** 更新内存草稿；切换实际来源时重新选择映射方式。 */
+  const edit: BindingWorkspaceState['edit'] = (draft, selection = entry?.value.selection, manualMapping): void => {
+    if (!entry) return
+    const sameSource = selectionKey(selection) === selectionKey(entry.value.selection)
+    update({ ...entry, readOnly: false, dirty: true, manualMapping: sameSource && (manualMapping ?? entry.manualMapping),
+      value: { ...entry.value, draft, selection: selection || null } })
   }
 
   /** 保存草稿或复用正式确认动作，并锁定重复点击。 */

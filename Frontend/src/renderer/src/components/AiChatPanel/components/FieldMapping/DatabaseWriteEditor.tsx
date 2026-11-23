@@ -3,6 +3,8 @@ import { Button, Select, Typography } from 'antd'
 import type { ReactElement } from 'react'
 import type { WorkflowApiDatabaseWriteDraft, WorkflowApiField } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
+import { mappingFieldOption } from './MappingFieldLabel'
+import { mappingFieldTitle } from './model'
 import ValueRuleEditor from './ValueRuleEditor'
 import './DatabaseWriteEditor.less'
 import MappingAssistReview from './MappingAssistReview'
@@ -21,6 +23,8 @@ type Props = {
 
 /** 按数据库写入列优先配置目标字段、值来源和接口参数。 */
 export default function DatabaseWriteEditor({ selection, columns, fields, writes, editable, readOnly, busy, errors, onChange }: Props): ReactElement {
+  const columnOptions = columns.map(mappingFieldOption)
+
   /** 追加绑定当前表的写入行，并将值来源默认为接口参数。 */
   const addWrite = (): void => onChange([...writes, {
     sourceType: 'database', sourceId: selection.sourceId, schema: selection.schema, table: selection.table,
@@ -38,17 +42,17 @@ export default function DatabaseWriteEditor({ selection, columns, fields, writes
   /** 渲染一行先选目标列、再选值来源及参数的写入配置。 */
   const renderWrite = (write: WorkflowApiDatabaseWriteDraft, index: number): ReactElement => {
     const right = write.right
-    const targetColumn = readOnly ? write : columns.find((column) => column.name === write.column)
-    const targetLabel = `${write.column || '—'}${targetColumn?.description ? `（${targetColumn.description}）` : ''} · ${write.type}`
     const rowError = errors[`__databaseWrite:${index}`]
 
     return <div className={`database-write-row${rowError ? ' is-error' : ''}`} key={`${write.sourceId}:${write.table}:${write.column}:${index}`}>
       <div className="database-write-column-cell">
         {readOnly
-          ? <span className="database-write-static-field" title={targetLabel}><code>{write.column}</code>{targetColumn?.description ? <span className="field-detail-meaning">（{targetColumn.description}）</span> : null}<span className="field-detail-type">{write.type}</span></span>
-          : <Select className="database-write-column-select" allowClear showSearch optionFilterProp="label"
+          ? <span className="database-write-static-field" title={mappingFieldTitle(write.column || '—', write.type, write.description)}>
+            <code>{write.column}</code>{write.description ? <span className="field-detail-meaning">（{write.description}）</span> : null}
+          </span>
+          : <Select className="database-write-column-select" allowClear showSearch optionLabelProp="selectedLabel" optionFilterProp="title"
             disabled={!editable || busy} placeholder="选择数据表字段" value={write.column || undefined}
-            options={columns.map((column) => ({ value: column.name, label: `${column.name}${column.description ? `（${column.description}）` : ''} · ${column.type}` }))}
+            options={columnOptions}
             onChange={(columnName) => {
               const column = columns.find((item) => item.name === columnName)
               updateWrite(index, { ...write, column: column?.name || '', type: column?.type || 'unknown', description: column?.description || '',

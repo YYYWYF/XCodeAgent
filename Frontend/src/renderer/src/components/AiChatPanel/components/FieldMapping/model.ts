@@ -105,6 +105,11 @@ export function sourceFieldKey(field: WorkflowApiSourceField): string {
   return field.sourceType === 'database' ? field.column : field.sourceType === 'static' ? field.path : `${field.section}:${field.path}`
 }
 
+/** 拼接字段名、注释和类型，供映射字段的悬停提示和搜索使用。 */
+export function mappingFieldTitle(name: string, type: string, description?: string): string {
+  return `${name}${description ? `（${description}）` : ''}${type ? ` · ${type}` : ''}`
+}
+
 /** 替换一条直接映射，保留其他字段和现有实现说明。 */
 export function setDirectMapping(draft: WorkflowApiDesignDraft, field: WorkflowApiField, source?: WorkflowApiSourceField): WorkflowApiDesignDraft {
   const next = source

@@ -6,6 +6,8 @@ import type { WorkflowApiDatabaseCondition, WorkflowApiDatabaseConditionOperator
 import type { BindingSelection } from '../../../../typings/endpointDesign'
 import { allowedDatabaseConditionOperators, apiDesignFieldKey, queryParameterCompatible } from '../WorkflowRunCard/apiDesignSerialization'
 import { addQueryCondition, addQueryGroup, DATABASE_CONDITION_LABELS, emptyQueryCondition, removeQueryItem, replaceQueryCondition } from './databaseQueryModel'
+import { MappingFieldLabel, mappingFieldOption } from './MappingFieldLabel'
+import { mappingFieldTitle } from './model'
 import ValueRuleEditor from './ValueRuleEditor'
 import './DatabaseQueryEditor.less'
 
@@ -29,6 +31,7 @@ type Props = {
 /** 渲染数据库列优先的查询条件与一层 AND/OR 分组。 */
 export default function DatabaseQueryEditor({ selection, columns, fields, query, editable, readOnly, busy, error, onChange }: Props): ReactElement {
   const [rowRevision, setRowRevision] = useState(0)
+  const columnOptions = columns.map(mappingFieldOption)
   const requestFields = fields.filter((field) => field.side === 'request')
   const fieldByKey = new Map(requestFields.map((field) => [apiDesignFieldKey(field), field]))
   // 首个条件组之前保留普通条件行；从首个条件组起，后续顶层项共用连接主干。
@@ -51,8 +54,10 @@ export default function DatabaseQueryEditor({ selection, columns, fields, query,
       : ['eq']
     return <div className={`database-query-row${readOnly ? ' is-readonly' : ''}`} key={`${key}:${rowRevision}`}>
       <div className="database-query-column-cell">
-        {readOnly ? <div className="database-query-readonly-field" title={`${condition.column}${condition.description ? `（${condition.description}）` : ''}`}><code>{condition.column}</code>{condition.description ? <span className="field-detail-meaning">（{condition.description}）</span> : null}<span className="field-detail-type">{condition.type}</span></div> : <Select className="database-query-column-select" showSearch optionFilterProp="label" placeholder="选择字段" disabled={!editable || busy} value={condition.column || undefined}
-          options={columns.map((column) => ({ value: column.name, label: `${column.name}${column.description ? `（${column.description}）` : ''} · ${column.type}` }))}
+        {readOnly ? <MappingFieldLabel name={condition.column} description={condition.description} monospace
+          title={mappingFieldTitle(condition.column, condition.type, condition.description)} /> : <Select className="database-query-column-select"
+          showSearch optionLabelProp="selectedLabel" optionFilterProp="title" placeholder="选择字段" disabled={!editable || busy} value={condition.column || undefined}
+          options={columnOptions}
           onChange={(name) => { const column = columns.find((item) => item.name === name); if (column) { update(index, { ...condition, column: name, type: column.type, description: column.description, operator: 'eq', right: undefined }, groupIndex) } }} />}
       </div>
       {readOnly ? <span className="database-static-operator">{DATABASE_CONDITION_LABELS[condition.operator]}</span> : <Select disabled={!editable || busy || !condition.column} value={condition.operator} options={operators.map((operator) => ({ value: operator, label: DATABASE_CONDITION_LABELS[operator] }))}
