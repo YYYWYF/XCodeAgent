@@ -176,6 +176,50 @@ class DirectEndpointRevisionTests(unittest.TestCase):
                 self.assertFalse(self._targets(request, base)[_ENDPOINT_ID]["deleted"])
         self.assertTrue(self._targets("/api/greetings/morning 接口删除", base)[_ENDPOINT_ID]["deleted"])
 
+    def test_model_generated_root_path_supports_nested_response_field_removal(self) -> None:
+        """模型生成的无 /api 前缀路径也可精确修订嵌套响应字段并标为修改。"""
+
+        base = _base_plan()
+        _endpoint(base).update({
+            "name": "分页查询人员明细",
+            "path": "/personnel",
+            "response_schema_ref": "PageResult",
+        })
+        _contract(base)["schemas"].update({
+            "PageResult": {
+                "type": "object",
+                "properties": {
+                    "list": {
+                        "type": "array",
+                        "items": {"$ref": "PersonnelListItem"},
+                    },
+                },
+            },
+            "PersonnelListItem": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "phone": {"type": "string", "description": "人员的联系电话号码。"},
+                },
+            },
+        })
+        targets = self._targets(
+            "分页查询人员明细/personnel接口的响应体的list中去除phone字段", base,
+        )
+        self.assertEqual(targets[_ENDPOINT_ID]["path"], "/personnel")
+        self.assertFalse(targets[_ENDPOINT_ID]["deleted"])
+
+        candidate = json.loads(json.dumps(base))
+        properties = _contract(candidate)["schemas"]["PersonnelListItem"]["properties"]
+        properties.pop("phone")
+        merged = merge_direct_endpoint_revision(base, candidate, targets)
+
+        self.assertNotIn(
+            "phone", _contract(merged)["schemas"]["PersonnelListItem"]["properties"],
+        )
+        self.assertEqual(_endpoint(merged)["_change_status"], "modified")
+        self.assertEqual(_endpoint(merged, _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
+
     def test_only_unrequested_edits_cannot_become_successful_unchanged_candidate(self) -> None:
         """只改错对象后全部回退必须报告未落实，显式无变更复核仍保持原语义。"""
 

@@ -13,7 +13,7 @@ from typing import Any
 
 _DIRECT_ENDPOINT_PATTERN = re.compile(
     r"(?:(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+[`\"“']?)?"
-    r"(/api/[A-Za-z0-9_\-/{}.:]+)", re.IGNORECASE,
+    r"(/[A-Za-z0-9_\-/{}.:]+)", re.IGNORECASE,
 )
 
 
