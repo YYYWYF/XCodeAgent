@@ -72,6 +72,11 @@
 .@{class-prefix}-split-dragging {
   cursor: col-resize;
 
+  // 拖拽时分隔线和布局按钮使用同一宽度，避免对话区的过渡造成位置错位。
+  .@{class-prefix}-ai-chat-assistant {
+    transition: none;
+  }
+
   .@{class-prefix}-embedded-preview-pane {
     pointer-events: none;
   }
