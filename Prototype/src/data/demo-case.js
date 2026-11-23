@@ -5,6 +5,13 @@ export const exampleApi = {
   response: 'title：标题；summary：摘要；content：内容；publishDate：发布日期'
 };
 
+// AI 辅助映射的异常提示：只在需人工处理的字段上出现，hover 展示分析结果与建议。
+// warn = 未找到映射、留待人工填写；info = AI 已填但置信度不高，建议核对。
+export const aiMappingHints = {
+  total: { level: 'info', text: 'AI 分析：total 与业务处理记录总数的对应基于语义推断，置信度中等。建议：核对业务处理的统计口径后再确认。' },
+  'list[].sequenceNumber': { level: 'warn', text: 'AI 分析：接口字段 list[].sequenceNumber（序号）在 portal_news 表中未找到可映射的字段。建议：选择 id 充当序号，或与业务方确认序号来源后手动指定，请人工确认。' }
+};
+
 // 已完成版本的各阶段产物与状态保持一致。
 export function completedDemo() {
   return {
@@ -21,6 +28,7 @@ export function completedDemo() {
     fieldMappings: {total:'业务处理',pageSize:'pageSize',current:'current','list[].sequenceNumber':'id',
       'list[].title':'title','list[].summary':'summary','list[].dimension':'dimension',
       'list[].publishDate':'publish_date','list[].source':'source','list[].content':'content'},
+    mappingHints: aiMappingHints,
     databases: ['新闻数据库'], database: '新闻数据库', databaseTables: {'新闻数据库':['portal_news']},
     databaseConfigs: {'新闻数据库':{mode:'本地直连',host:'127.0.0.1',port:'3306',schema:'portal',user:'demo'}},
     domains: ['门户平台'], domain: '门户平台', domainApis: {'门户平台':[]},

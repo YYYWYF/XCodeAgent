@@ -1,10 +1,10 @@
 import { state, safe } from '../state.js?v=20261122a';
 import { phases } from '../data/mock-data.js?v=20261118o';
-import { auxiliaryDrawer } from '../components/auxiliary.js?v=20261122a';
-import { icon } from '../components/icons.js?v=20261121a';
+import { auxiliaryDrawer } from '../components/auxiliary.js?v=20261123l';
+import { icon } from '../components/icons.js?v=20261123d';
 import { action, message } from '../components/video-common.js?v=20261122a';
 import { designConversation, planningConversation, requirementPanel, uiPanel, technicalPanel } from './video-design.js?v=20261122a';
-import { developmentConversation, artifactsPanel, applicationFilesPanel, pageDebugPanel, apiDebugPanel, mappingPanel, taskPlanPanel, previewPanel } from './video-development.js?v=20261122a';
+import { developmentConversation, artifactsPanel, applicationFilesPanel, pageDebugPanel, apiDebugPanel, mappingPanel, taskPlanPanel, previewPanel } from './video-development.js?v=20261123l';
 import { testConversation, testReport, reviewConversation, reviewReport, acceptanceConversation, acceptanceBar } from './video-verification.js?v=20261122a';
 
 // 保留跨阶段的公共功能入口，图标按功能语义统一使用线框 SVG。
@@ -26,8 +26,7 @@ function conversation() {
 }
 
 function panelAvailable(name) {
-  if (name==='页面调试') return state.completed.includes('门户首页');
-  if (name==='接口调试') return state.completed.includes('查询新闻列表');
+  // 页面调试与接口调试随时可进入，可选目标由地址栏下拉按产物完成情况控制。
   return !(name==='UI设计稿' && state.phase===0 && !state.designStep && !state.uiGenerated) && !(name==='测试报告' && !state.testStep) && !(name==='审查报告' && !state.reviewStep);
 }
 
@@ -46,8 +45,7 @@ function panelLayoutControl(full) {
 
 function panelTabs(names, selected) {
   const control = acceptanceFocus() ? '<button data-action="close-preview" title="关闭预览" aria-label="关闭预览">×</button>' : '';
-  const disabledTitle = name => name==='页面调试'?'完成「门户首页」开发后可调试':name==='接口调试'?'完成「查询新闻列表」开发后可调试':'';
-  return `<div class="workspace-tabs">${names.map(name=>`<button data-tab="${name}" class="${name===selected?'selected':''}" ${panelAvailable(name)?'':`disabled${disabledTitle(name)?` title="${disabledTitle(name)}"`:''}`}>${name}</button>`).join('')}<span class="panel-controls">${control}</span></div>`;
+  return `<div class="workspace-tabs">${names.map(name=>`<button data-tab="${name}" class="${name===selected?'selected':''}" ${panelAvailable(name)?'':'disabled'}>${name}</button>`).join('')}<span class="panel-controls">${control}</span></div>`;
 }
 
 // 右侧内容按阶段和所选标签切换。
@@ -56,7 +54,7 @@ function workspacePanel() {
   if (state.phase===0) names = ['需求文档','UI设计稿'];
   else if (state.phase===1) names = ['技术规划'];
   else {
-    names = state.phase===5 ? ['开发产物','应用预览','页面调试','接口调试','应用文件','字段映射'] : ['开发产物','页面调试','接口调试','应用文件','字段映射'];
+    names = state.phase===5 ? ['开发产物','页面调试','接口调试','应用文件','字段映射','应用预览'] : ['开发产物','页面调试','接口调试','应用文件','字段映射'];
     if (state.phase===2 && state.buildStep==='task-ready') names.push('待确认任务');
     if (state.phase===3) names.push('测试报告');
     if (state.phase===4) names.push('审查报告');

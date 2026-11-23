@@ -1,6 +1,6 @@
 import { state, safe } from '../state.js?v=20261122a';
-import { exampleApi } from '../data/demo-case.js?v=20261122a';
-import { icon } from './icons.js?v=20261121a';
+import { exampleApi } from '../data/demo-case.js?v=20261123l';
+import { icon } from './icons.js?v=20261123d';
 
 const labels = {
   history: ['对话管理', '按需拆分上下文，当前阶段仅一条对话可继续推进'],

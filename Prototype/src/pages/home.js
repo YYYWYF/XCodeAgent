@@ -1,6 +1,6 @@
 import { state, projectMemory, safe } from '../state.js?v=20261122a';
 import { phases } from '../data/mock-data.js?v=20261118o';
-import { icon } from '../components/icons.js?v=20261121a';
+import { icon } from '../components/icons.js?v=20261123d';
 
 // 最近项目始终提供可直接回放的完整案例，也保留当前会话中新建的项目。
 function recentProjects() {

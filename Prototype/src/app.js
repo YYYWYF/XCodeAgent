@@ -1,10 +1,10 @@
 import { state, projectMemory, buildApiDebugUrl } from './state.js?v=20261122a';
-import { completedDemo } from './data/demo-case.js?v=20261122a';
+import { completedDemo, aiMappingHints } from './data/demo-case.js?v=20261123l';
 import { toast } from './components/feedback.js?v=20261118o';
-import { home } from './pages/home.js?v=20261122a';
-import { create } from './pages/create-application.js?v=20261122a';
-import { openWorkspace } from './pages/open-workspace.js?v=20261122a';
-import { workbench } from './pages/workbench.js?v=20261122a';
+import { home } from './pages/home.js?v=20261123d';
+import { create } from './pages/create-application.js?v=20261123d';
+import { openWorkspace } from './pages/open-workspace.js?v=20261123d';
+import { workbench } from './pages/workbench.js?v=20261123l';
 import { currentRoute } from './router.js?v=20261118o';
 import { updateAnnotations } from './components/annotations.js?v=20261118o';
 
@@ -85,16 +85,17 @@ function autoStartService(kind) {
   setTimeout(()=>{ state.serviceStarting[kind]=false; markServiceReady(kind); render(); },700);
 }
 
-// 调试面板只在对应产物完成后开放；进入时自动启动所需服务。
+// 调试面板随时可进入；对应产物完成后进入时自动拉起所需服务，未完成时由面板提示先开发。
 function openDebug(tab) {
   const isPage = tab==='页面调试';
   const artifact = isPage?'门户首页':'查询新闻列表';
-  if (!state.completed.includes(artifact)) { toast(`完成「${artifact}」开发后即可${isPage?'预览和调试页面':'调试接口'}。`); return false; }
   state.tab=tab; state.pane=''; state.previewStatus=false; state.debugServiceMenuOpen=false;
   if (state.phase===5&&!state.accepted) state.panelLayout='split';
-  autoStartService(isPage?'frontend':'backend');
-  // 页面调试需要接口数据，接口产物已完成时顺带拉起后端服务。
-  if (isPage && state.completed.includes('查询新闻列表')) autoStartService('backend');
+  if (state.completed.includes(artifact)) {
+    autoStartService(isPage?'frontend':'backend');
+    // 页面调试需要接口数据，接口产物已完成时顺带拉起后端服务。
+    if (isPage && state.completed.includes('查询新闻列表')) autoStartService('backend');
+  }
   return true;
 }
 
@@ -202,21 +203,27 @@ function handleAction(action) {
     case 'start-api': beginBuild('查询新闻列表','api'); return;
     case 'start-page': beginBuild('门户首页','page'); return;
     case 'open-mapping': state.tab='字段映射'; break;
-    case 'mapping-source': state.mappingSourceSelected=false; state.mappingConfirmed=false; state.mappingStep=''; state.fieldMappings={}; break;
+    case 'mapping-source': state.mappingSourceSelected=false; state.mappingConfirmed=false; state.mappingStep=''; state.fieldMappings={}; state.mappingHints={}; break;
     case 'source-external': toast('请先添加外部 API。'); return;
     case 'source-static': toast('当前示例使用数据库作为数据来源。'); return;
     case 'source-confirm': state.modal=''; break;
     case 'open-data': state.modal=''; state.pane='data'; break;
-    case 'mapping-edit':
-      if (!(state.databaseTables[state.database]||[]).includes('portal_news') || !state.mappingSourceSelected) { toast('请先选择 portal_news 数据表。'); return; }
-      state.mappingStep='input'; break;
     case 'mapping-generate': {
-      const input = document.querySelector('#mapping-request');
-      const value = input?.value.trim();
-      if (!value) { toast('请填写需求说明。'); return; }
-      state.mappingDescription=value; state.mappingStep='review'; break;
+      // AI 生成映射是辅助手段：一键把建议映射落入配置表单，可再次点击重新生成。
+      if (!(state.databaseTables[state.database]||[]).includes('portal_news') || !state.mappingSourceSelected) { toast('请先选择 portal_news 数据表。'); return; }
+      if (state.mappingGenerating) return;
+      state.mappingGenerating=true; render();
+      setTimeout(()=>{
+        state.mappingGenerating=false;
+        // 接口映射说明由 AI 生成映射一并给出，重新生成时同步更新。
+        state.mappingDescription='按维度查询新闻列表，返回标题、摘要、发布日期、来源与内容。';
+        state.fieldMappings={total:'业务处理',pageSize:'pageSize',current:'current','list[].title':'title','list[].summary':'summary','list[].dimension':'dimension','list[].publishDate':'publish_date','list[].source':'source','list[].content':'content'};
+        state.mappingHints=aiMappingHints;
+        state.mappingStep='draft'; state.mappingConfirmed=false;
+        render(); toast('AI 映射已生成，请检查字段旁的 AI 提示后保存。');
+      },600);
+      return;
     }
-    case 'mapping-apply': state.mappingStep='draft'; state.fieldMappings={'total':'业务处理','pageSize':'pageSize','current':'current','list[].title':'title','list[].summary':'summary','list[].dimension':'dimension','list[].publishDate':'publish_date','list[].source':'source','list[].content':'content'}; break;
     case 'mapping-draft': toast('映射草稿已暂存。'); return;
     case 'mapping-save':
       if (!state.mappingSourceSelected || !(state.databaseTables[state.database]||[]).includes('portal_news') || Object.keys(state.fieldMappings).length<10 || Object.values(state.fieldMappings).some(value=>!value)) { toast('请先选择数据表并完成字段映射。'); return; }
@@ -234,7 +241,7 @@ function handleAction(action) {
     case 'open-debug-preview': state.selectedArtifact='page'; openDebug('页面调试'); break;
     case 'open-api-debug': state.selectedArtifact='api'; openDebug('接口调试'); break;
     case 'close-preview': state.tab='开发产物'; state.panelLayout='split'; state.previewStatus=false; break;
-    case 'preview-visit': if (!state.frontendServiceRunning) { autoStartService('frontend'); toast('前端服务正在启动，请稍候。'); } else if (!state.backendServiceRunning) { toast('页面已打开，后端服务未启动，数据暂不可用。'); } else { toast('已访问当前应用预览。'); } return;
+    case 'preview-visit': if (!state.completed.includes('门户首页')) { toast('完成「门户首页」开发后即可访问页面。'); return; } if (!state.frontendServiceRunning) { autoStartService('frontend'); toast('前端服务正在启动，请稍候。'); } else if (!state.backendServiceRunning) { toast('页面已打开，后端服务未启动，数据暂不可用。'); } else { toast('已访问当前应用预览。'); } return;
     case 'toggle-debug-service-menu': state.debugServiceMenuOpen=!state.debugServiceMenuOpen; break;
     case 'toggle-debug-log': state.debugLogOpen=!state.debugLogOpen; break;
     case 'close-debug-log': state.debugLogOpen=false; break;
@@ -263,6 +270,7 @@ function handleAction(action) {
     case 'service-follow-frontend': state.serviceLogFollowing.frontend=!state.serviceLogFollowing.frontend; break;
     case 'service-follow-backend': state.serviceLogFollowing.backend=!state.serviceLogFollowing.backend; break;
     case 'api-call': {
+      if (!state.completed.includes('查询新闻列表')) { toast('完成「查询新闻列表」开发后即可发送调试请求。'); return; }
       if (state.serviceStarting.backend) { toast('后端服务正在启动，请稍候再发送。'); return; }
       state.apiCalled=true;
       state.apiLastRequestUrl=buildApiDebugUrl();
@@ -271,8 +279,8 @@ function handleAction(action) {
       else { state.apiCallStatus='success'; state.apiCallError=''; }
       break;
     }
-    case 'service-open-frontend': if (!openDebug('页面调试')) return; state.debugServiceMenuOpen=true; state.debugLogOpen=true; break;
-    case 'service-open-backend': if (!openDebug('接口调试')) return; state.debugServiceMenuOpen=true; state.debugLogOpen=true; break;
+    case 'service-open-frontend': openDebug('页面调试'); state.debugServiceMenuOpen=true; state.debugLogOpen=true; break;
+    case 'service-open-backend': openDebug('接口调试'); state.debugServiceMenuOpen=true; state.debugLogOpen=true; break;
     case 'panel-full': state.panelLayout=state.panelLayout==='full'?'split':'full'; break;
     case 'go-test': if (state.completed.length<2) { toast('请先完成页面和接口开发。'); return; } state.testStep=0; enterPhase(3); return;
     case 'test-perform': state.testStep=1; state.performanceSkipped=false; state.tab='测试报告'; break;
@@ -288,7 +296,9 @@ function handleAction(action) {
     case 'checkpoint-confirm': if (!document.querySelector('#checkpoint-note')?.value.trim()) { toast('请填写变更说明。'); return; } state.acceptanceReminderDismissed=true; state.modal=''; toast('已完成版本保存演示。'); break;
     case 'accept':
       if (!state.frontendServiceRunning || !state.backendServiceRunning) { beginAcceptancePreflight(); return; }
-      state.accepted=true; state.panelLayout='split'; state.tab='应用预览'; break;
+      state.accepted=true; state.panelLayout='split'; state.tab='应用预览';
+      // 验收通过后自动弹出生成版本弹框，衔接版本提交动作。
+      state.releaseNote='门户首页已接入新闻资讯数据，按行情聚焦、战略推动、一线扫描、文化故事四个区块分类展示新闻列表，每条新闻直接呈现序号、标题、概要、维度、发布日期、来源与内容。'; state.modal='release'; break;
     case 'accept-reject': state.modal='accept-reject'; break;
     case 'accept-feedback': {
       const value=document.querySelector('#accept-feedback')?.value.trim();
@@ -361,8 +371,8 @@ document.addEventListener('click', event => {
   if (el.dataset.session!==undefined) { state.sessionSelected=Number(el.dataset.session); state.pane=''; render(); return; }
   if (el.dataset.aux) { handleAuxAction(el.dataset.aux); return; }
   if (el.dataset.tab) {
-    // 调试标签按产物完成情况解锁，其余标签直接切换。
-    if (el.dataset.tab==='页面调试'||el.dataset.tab==='接口调试') { if (!openDebug(el.dataset.tab)) return; }
+    // 调试标签随时可进入，可选目标由面板内地址栏下拉控制；其余标签直接切换。
+    if (el.dataset.tab==='页面调试'||el.dataset.tab==='接口调试') openDebug(el.dataset.tab);
     else state.tab=el.dataset.tab;
     state.pane=''; state.previewStatus=false;
     if (state.phase===5&&!state.accepted) state.panelLayout=state.tab==='应用预览'?'full':'split';
@@ -402,7 +412,7 @@ document.addEventListener('submit', event => {
   event.preventDefault();
     if (event.target.id==='create-form') {
     const values=new FormData(event.target);
-    Object.assign(state,{name:document.querySelector('#name').value.trim(),description:document.querySelector('#description').value.trim(),projectPath:document.querySelector('#project-path').value.trim(),terminal:values.get('terminal'),layout:values.get('layout'),appIcon:values.get('app-icon'),useHeader:values.has('header'),useMenu:values.has('menu'),authEnabled:values.has('auth'),hasProject:true,isDemo:false,phase:0,reached:0,designStep:0,uiGenerated:false,uiSkipped:false,uiVariant:0,uiFeedback:'',requirementFeedback:'',planFeedback:'',revisionEditing:'',target:'',targetKind:'',selectedArtifact:'page',selectedFilePath:'docs/requirement-spec.md',buildStep:'',completed:[],mappingStep:'',mappingConfirmed:false,mappingSourceSelected:false,mappingDescription:'',fieldMappings:{},testStep:0,reviewStep:0,accepted:false,released:false,productivityMethod:'',previousEffort:'',studioEffort:'',productivityRecord:null,previewRunning:false,frontendServiceRunning:false,backendServiceRunning:false,serviceStarting:{frontend:false,backend:false},pageDebugUrl:'http://localhost:5173',debugServiceMenuOpen:false,debugLogOpen:false,serviceLogs:{frontend:[],backend:[]},serviceLogFollowing:{frontend:true,backend:true},serviceRepairStep:'',serviceFailure:'',acceptancePreflightStatus:'idle',acceptancePreflightOriginPhase:null,acceptancePreflightServices:{frontend:'idle',backend:'idle'},acceptancePreflightError:'',acceptancePreflightRun:0,apiCalled:false,apiDebugUrl:'http://localhost:8000/api/news',apiDebugParams:{dimension:'行情聚焦',current:'1',pageSize:'10'},panelLayout:'split',previewStatus:false,tab:'需求文档',section:'概览',pane:'',modal:''});
+    Object.assign(state,{name:document.querySelector('#name').value.trim(),description:document.querySelector('#description').value.trim(),projectPath:document.querySelector('#project-path').value.trim(),terminal:values.get('terminal'),layout:values.get('layout'),appIcon:values.get('app-icon'),useHeader:values.has('header'),useMenu:values.has('menu'),authEnabled:values.has('auth'),hasProject:true,isDemo:false,phase:0,reached:0,designStep:0,uiGenerated:false,uiSkipped:false,uiVariant:0,uiFeedback:'',requirementFeedback:'',planFeedback:'',revisionEditing:'',target:'',targetKind:'',selectedArtifact:'page',selectedFilePath:'docs/requirement-spec.md',buildStep:'',completed:[],mappingStep:'',mappingConfirmed:false,mappingSourceSelected:false,mappingDescription:'',fieldMappings:{},mappingHints:{},mappingGenerating:false,testStep:0,reviewStep:0,accepted:false,released:false,productivityMethod:'',previousEffort:'',studioEffort:'',productivityRecord:null,previewRunning:false,frontendServiceRunning:false,backendServiceRunning:false,serviceStarting:{frontend:false,backend:false},pageDebugUrl:'http://localhost:5173',debugServiceMenuOpen:false,debugLogOpen:false,serviceLogs:{frontend:[],backend:[]},serviceLogFollowing:{frontend:true,backend:true},serviceRepairStep:'',serviceFailure:'',acceptancePreflightStatus:'idle',acceptancePreflightOriginPhase:null,acceptancePreflightServices:{frontend:'idle',backend:'idle'},acceptancePreflightError:'',acceptancePreflightRun:0,apiCalled:false,apiDebugUrl:'http://localhost:8000/api/news',apiDebugParams:{dimension:'行情聚焦',current:'1',pageSize:'10'},panelLayout:'split',previewStatus:false,tab:'需求文档',section:'概览',pane:'',modal:''});
     state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; state.apiLastRequestUrl=''; state.apiDebugMethod='GET'; state.apiDebugUrl='http://localhost:8000/api/news'; state.apiDebugParams={dimension:'行情聚焦',current:'1',pageSize:'10'}; state.apiDebugEnabledParams={dimension:true,current:true,pageSize:true}; state.apiDebugHeaders={Accept:'application/json'}; state.apiDebugHeaderEnabled={Accept:true}; state.apiDebugAuth='No Auth'; state.apiDebugBody=''; state.apiRequestTab='Params'; state.apiResponseTab='Body';
     state.databases=[]; state.database=''; state.databaseTables={}; state.databaseConfigs={};
     state.domains=['门户平台']; state.domain='门户平台'; state.domainApis={'门户平台':[]}; projectMemory.current=null;
@@ -447,7 +457,7 @@ document.addEventListener('change', event => {
   if (event.target.id==='api-debug-auth') { state.apiDebugAuth=event.target.value; state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; render(); return; }
   if (event.target.dataset.apiHeaderEnabled) { state.apiDebugHeaderEnabled[event.target.dataset.apiHeaderEnabled]=event.target.checked; state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; render(); return; }
   if (event.target.dataset.apiParamEnabled) { state.apiDebugEnabledParams[event.target.dataset.apiParamEnabled]=event.target.checked; state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; render(); return; }
-  if (event.target.name==='mapping-source-table') { state.mappingSourceSelected=event.target.value==='portal_news'; state.mappingConfirmed=false; state.mappingStep=''; state.fieldMappings={}; render(); return; }
+  if (event.target.name==='mapping-source-table') { state.mappingSourceSelected=event.target.value==='portal_news'; state.mappingConfirmed=false; state.mappingStep=''; state.fieldMappings={}; state.mappingHints={}; render(); return; }
   if (event.target.name==='mapping-field') { const position=document.querySelector('.mapping-content')?.scrollTop||0; state.fieldMappings[event.target.dataset.field]=event.target.value; render(); const panel=document.querySelector('.mapping-content'); if (panel) panel.scrollTop=position; return; }
   if (event.target.name!=='mode' || !event.target.closest('#aux-form')) return;
   document.querySelectorAll('[data-connection]').forEach(section=>{ const inactive=section.dataset.connection!==event.target.value; section.hidden=inactive; section.querySelectorAll('input').forEach(input=>{ input.disabled=inactive; }); });
@@ -485,6 +495,34 @@ document.addEventListener('input', event => {
 document.addEventListener('change',event=>{
   if (event.target.id==='productivity-method') state.productivityMethod=event.target.value;
 });
+// AI 提示气泡：用固定定位的现代 tooltip 展示异常字段的分析与建议，替代原生 title 的迟滞体验。
+let aiTipTimer=null;
+function ensureAiTip() { let tip=document.querySelector('.ai-tip'); if (!tip) { tip=document.createElement('div'); tip.className='ai-tip'; tip.setAttribute('role','tooltip'); document.body.appendChild(tip); } return tip; }
+document.addEventListener('mouseover', event => {
+  const hint=event.target.closest?.('.mapping-ai-hint');
+  if (!hint || !hint.dataset.tip) return;
+  clearTimeout(aiTipTimer);
+  aiTipTimer=setTimeout(()=>{
+    const tip=ensureAiTip();
+    tip.textContent=hint.dataset.tip;
+    tip.classList.remove('show');
+    const rect=hint.getBoundingClientRect();
+    const size=tip.getBoundingClientRect();
+    let top=rect.top-size.height-8;
+    // 图标贴近顶部时翻转到下方，横向夹在视口内。
+    if (top<8) top=rect.bottom+8;
+    tip.style.top=`${Math.round(top)}px`;
+    tip.style.left=`${Math.round(Math.max(8,Math.min(rect.left+rect.width/2-size.width/2,window.innerWidth-size.width-8)))}px`;
+    tip.classList.add('show');
+  },120);
+});
+document.addEventListener('mouseout', event => {
+  const hint=event.target.closest?.('.mapping-ai-hint');
+  if (!hint || hint.contains(event.relatedTarget)) return;
+  clearTimeout(aiTipTimer);
+  document.querySelector('.ai-tip')?.classList.remove('show');
+});
+document.addEventListener('scroll', ()=>{ clearTimeout(aiTipTimer); document.querySelector('.ai-tip')?.classList.remove('show'); }, true);
 window.addEventListener('hashchange',()=>{ const canvas=document.querySelector('.prototype-canvas'); canvas.scrollLeft=0; canvas.scrollTop=0; render(); });
 window.addEventListener('resize',()=>updateAnnotations(currentRoute()));
 document.addEventListener('scroll',()=>updateAnnotations(currentRoute()),true);
