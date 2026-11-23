@@ -328,6 +328,85 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(snapshot.values["technical_plan_candidate"], {})
             self.assertFalse(technical_plan_draft_json_path({"workspace": str(harness.workspace)}).exists())
 
+    async def test_valid_card_revision_updates_draft_and_document_artifact_markers(self) -> None:
+        """待确认卡修改经真实 Graph、AG-UI 和文档引用传递新内容及修改、删除、未变更标识。"""
+
+        harness = self.harness
+        from app.workspace.plan_documents import technical_plan_draft_json_path
+        from app.workspace.content_artifacts import read_artifact
+        seed = deepcopy(harness.candidate)
+        seed_contract = seed["api_contracts"][0]
+        first_endpoint = seed_contract["endpoints"][0]
+        seed_contract["endpoints"].extend([
+            {**deepcopy(first_endpoint), "id": first_endpoint["id"] + ".removed", "path": first_endpoint["path"] + "/removed"},
+            {**deepcopy(first_endpoint), "id": first_endpoint["id"] + ".kept", "path": first_endpoint["path"] + "/kept"},
+        ])
+        with patch("app.config.Settings.from_env", side_effect=harness.current_settings):
+            await harness.initialize_graph()
+            with patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(seed, [], None)):
+                await harness.run_initial()
+            config = {"configurable": {"thread_id": harness.thread_id}}
+            before = await harness.graph.aget_state(config)
+            baseline = drop_generated_fields(before.values["technical_plan"])
+            contract = baseline["api_contracts"][0]
+            change, removed, kept = contract["endpoints"][:3]
+            request = (
+                f"{change['method']} {change['path']} 接口修改说明；"
+                f"删除 {removed['method']} {removed['path']} 接口"
+            )
+            candidate = deepcopy(baseline)
+            proposed = candidate["api_contracts"][0]
+            proposed["endpoints"][0]["summary"] = "用户本次修改的接口说明"
+            proposed["endpoints"] = [item for item in proposed["endpoints"] if item["id"] != removed["id"]]
+            proposed["endpoints"][1]["summary"] = "模型顺手改写但必须丢弃"
+            pending = before.tasks[0].interrupts[0].value
+            with patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(candidate, [], None)) as model:
+                frames = [frame async for frame in build_workflow_ag_ui_stream(
+                    graph=harness.graph,
+                    payload={
+                        "threadId": harness.thread_id, "runId": "technical-plan-valid-card-revision",
+                        "message": request,
+                        "forwardedProps": {
+                            "workspaceRoot": str(harness.workspace), "workflowScope": "application_planning",
+                            "applicationPlanningInteraction": {
+                                "gateId": pending["gateId"], "artifact": pending["artifact"],
+                                "artifactRevision": pending["artifactRevision"], "action": "revise", "request": request,
+                            },
+                        },
+                    },
+                )]
+            model.assert_called_once()
+            after = await harness.graph.aget_state(config)
+            self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_confirmation")
+            self.assertEqual(after.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
+            endpoints = {item["id"]: item for item in after.values["technical_plan"]["api_contracts"][0]["endpoints"]}
+            self.assertEqual(endpoints[change["id"]]["summary"], "用户本次修改的接口说明")
+            self.assertEqual(endpoints[change["id"]]["_change_status"], "modified")
+            self.assertEqual(endpoints[removed["id"]]["_change_status"], "deleted")
+            self.assertEqual(endpoints[kept["id"]]["_change_status"], "unchanged")
+            self.assertEqual(endpoints[kept["id"]]["summary"], kept["summary"])
+            path = technical_plan_draft_json_path({"workspace": str(harness.workspace)})
+            persisted = json.loads(path.read_text())
+            self.assertIn("用户本次修改的接口说明", path.read_text())
+            self.assertNotIn("模型顺手改写", path.read_text())
+            self.assertEqual(persisted["confirmation_status"], "pending_user_confirmation")
+            # 右侧实际读取技术规划及审阅基线的不可变引用，而不是内部 candidate/diff 字段。
+            references = []
+            for frame in frames:
+                for line in frame.splitlines():
+                    if not line.startswith("data: "):
+                        continue
+                    event = json.loads(line[6:])
+                    view = event.get("snapshot") or (event.get("value") or {}).get("state") or {}
+                    ref = (view.get("artifactRefs") or {}).get("technical_plan")
+                    if ref:
+                        references.append(ref)
+            self.assertTrue(references)
+            doc = read_artifact(str(harness.workspace), references[-1])
+            self.assertIn("用户本次修改的接口说明", str(doc))
+            self.assertIn("modified", str(doc))
+            self.assertIn("deleted", str(doc))
+
     async def test_unmatched_revision_preserves_draft_and_emits_error_review(self) -> None:
         """待确认卡的错误路径经真实 AG-UI 挂错误门，零模型调用且不覆盖当前草稿。"""
 

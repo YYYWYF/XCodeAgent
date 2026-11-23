@@ -161,6 +161,30 @@ class DirectEndpointRevisionTests(unittest.TestCase):
         )
         self.assertIn("冲突", errors[0])
 
+    def test_delete_authorization_is_not_inferred_from_negative_or_response_fields(self) -> None:
+        """不要删除接口与删除响应字段都只允许修改，不授予删除接口权限。"""
+
+        base = _base_plan()
+        for request in (
+            "不要删除 GET /api/greetings/morning 接口，只改说明",
+            "GET /api/greetings/morning 接口删除响应里的分页字段",
+        ):
+            with self.subTest(request=request):
+                self.assertFalse(self._targets(request, base)[_ENDPOINT_ID]["deleted"])
+        self.assertTrue(self._targets("/api/greetings/morning 接口删除", base)[_ENDPOINT_ID]["deleted"])
+
+    def test_only_unrequested_edits_cannot_become_successful_unchanged_candidate(self) -> None:
+        """只改错对象后全部回退必须报告未落实，显式无变更复核仍保持原语义。"""
+
+        base = _base_plan()
+        targets = self._targets("/api/greetings/morning 接口改说明", base)
+        candidate = json.loads(json.dumps(base))
+        _endpoint(candidate, _OTHER_ENDPOINT_ID)["summary"] = "模型改错接口"
+        with self.assertRaisesRegex(ValueError, "未产生有效变更"):
+            merge_direct_endpoint_revision(base, candidate, targets)
+        merged = merge_direct_endpoint_revision(base, base, targets)
+        self.assertEqual(strip_change_status(merged), base)
+
     def test_schema_response_change_is_adopted_without_other_rewrites(self) -> None:
         """修改独占响应类型时接口标修改，无关类型、页面、外壳及新增接口不采纳。"""
 
