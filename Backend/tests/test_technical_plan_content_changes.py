@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 import unittest
 
-from app.services.technical_plan_merger import merge_technical_plan, relevant_object_ids
+from app.services.technical_plan_content_changes import direct_endpoint_revision_targets
+from app.services.technical_plan_merger import (
+    merge_direct_endpoint_revision, merge_technical_plan, relevant_object_ids,
+    strip_change_status, technical_plan_revision_diff,
+)
 
 
 _ENDPOINT_ID = "greeting_contract.get_morning_greeting"
@@ -113,6 +117,128 @@ def _endpoint(plan: dict, endpoint_id: str = _ENDPOINT_ID) -> dict:
     """按 ID 读取合并结果中的接口。"""
 
     return next(item for item in _contract(plan)["endpoints"] if item["id"] == endpoint_id)
+
+
+class DirectEndpointRevisionTests(unittest.TestCase):
+    """直接技术修订只允许精确点名的接口和独占类型发生变化。"""
+
+    def _targets(self, request: str, base: dict) -> dict:
+        """解析测试目标并断言没有匹配失败。"""
+
+        targets, errors = direct_endpoint_revision_targets(request, base)
+        self.assertEqual(errors, [])
+        return targets
+
+    def test_similar_path_is_not_an_alias_and_missing_target_stops(self) -> None:
+        """不同英文路径不自动匹配，即使另一项可以匹配也要报告全部错误。"""
+
+        targets, errors = direct_endpoint_revision_targets(
+            "1、/api/greetings/morning 接口改响应 2、删除 /api/greeting/other 接口", _base_plan(),
+        )
+        self.assertEqual(set(targets), {_ENDPOINT_ID})
+        self.assertIn("未匹配", errors[0])
+        self.assertIn("/api/greeting/other", errors[0])
+
+    def test_same_path_requires_method_and_does_not_match_children(self) -> None:
+        """同路径多个方法不能猜测，明确 POST 后也不会授权 GET 或子路径。"""
+
+        base = _base_plan()
+        post = {**_endpoint(base), "id": "greeting_contract.post", "method": "POST"}
+        _contract(base)["endpoints"].append(post)
+        _, errors = direct_endpoint_revision_targets("/api/greetings/morning 接口改响应", base)
+        self.assertIn("歧义", errors[0])
+        self.assertIn("GET、POST", errors[0])
+        targets = self._targets("POST `/api/greetings/morning` 接口改响应", base)
+        self.assertEqual(set(targets), {post["id"]})
+
+    def test_missing_method_and_conflicting_deletion_are_reported(self) -> None:
+        """方法不匹配和同一接口同时修改删除均不能交给模型自行选择。"""
+
+        _, errors = direct_endpoint_revision_targets("POST /api/greetings/morning 接口改响应", _base_plan())
+        self.assertIn("未匹配", errors[0])
+        _, errors = direct_endpoint_revision_targets(
+            "/api/greetings/morning 接口改响应；删除 /api/greetings/morning 接口", _base_plan(),
+        )
+        self.assertIn("冲突", errors[0])
+
+    def test_schema_response_change_is_adopted_without_other_rewrites(self) -> None:
+        """修改独占响应类型时接口标修改，无关类型、页面、外壳及新增接口不采纳。"""
+
+        base = _base_plan()
+        candidate = json.loads(json.dumps(base))
+        _contract(candidate)["schemas"]["MorningGreetingResponse"]["properties"] = {"status": {"type": "boolean"}}
+        _contract(candidate)["schemas"]["OtherResponse"]["description"] = "未授权润色"
+        _contract(candidate)["name"] = "模型更名"
+        _endpoint(candidate, _OTHER_ENDPOINT_ID)["summary"] = "未授权润色"
+        _contract(candidate)["endpoints"].append({**_endpoint(candidate), "id": "unrequested", "path": "/api/new"})
+        candidate["pages"][0]["references"]["endpoint_dependencies"] = []
+        merged = merge_direct_endpoint_revision(base, candidate, self._targets("/api/greetings/morning 接口响应只留状态", base))
+        self.assertEqual(_endpoint(merged)["_change_status"], "modified")
+        self.assertEqual(_endpoint(merged, _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
+        clean = strip_change_status(merged)
+        self.assertEqual(clean["pages"], base["pages"])
+        self.assertEqual(_contract(clean)["name"], _contract(base)["name"])
+        self.assertEqual(len(_contract(clean)["endpoints"]), 2)
+        self.assertEqual(_contract(clean)["schemas"]["OtherResponse"], _contract(base)["schemas"]["OtherResponse"])
+        self.assertEqual(_contract(clean)["schemas"]["MorningGreetingResponse"]["properties"], {"status": {"type": "boolean"}})
+
+    def test_explicit_deletion_survives_model_omission_and_preserves_other_endpoint(self) -> None:
+        """仅删除点名接口，模型省略其它接口或整个分组也不能扩大删除范围。"""
+
+        base = _base_plan()
+        targets = self._targets("删除 GET /api/greetings/morning 接口", base)
+        merged = merge_direct_endpoint_revision(base, {**base, "api_contracts": []}, targets)
+        self.assertEqual(_endpoint(merged)["_change_status"], "deleted")
+        self.assertEqual(_endpoint(merged, _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
+        self.assertEqual(_contract(merged)["schemas"], _contract(base)["schemas"])
+        self.assertEqual(_endpoint(strip_change_status(merged))["_change_status"], "deleted")
+
+    def test_non_target_interface_identity_is_protected(self) -> None:
+        """目标方法或路径被改写、或修改目标被模型省略时必须报告未完成。"""
+
+        base = _base_plan()
+        targets = self._targets("/api/greetings/morning 接口改响应", base)
+        for change in ({"path": "/api/greetings/other"}, {"method": "POST"}):
+            with self.subTest(change=change):
+                candidate = json.loads(json.dumps(base))
+                _endpoint(candidate).update(change)
+                with self.assertRaisesRegex(ValueError, "身份被改写"):
+                    merge_direct_endpoint_revision(base, candidate, targets)
+        with self.assertRaisesRegex(ValueError, "未完成修改"):
+            merge_direct_endpoint_revision(base, {**base, "api_contracts": []}, targets)
+
+    def test_shared_nested_schema_cannot_change_unrequested_endpoint(self) -> None:
+        """间接共享类型也受保护；目标改用独立类型后可受控采纳。"""
+
+        base = _base_plan()
+        schemas = _contract(base)["schemas"]
+        schemas["SharedStatus"] = {"type": "string"}
+        schemas["MorningGreetingResponse"]["properties"] = {"status": {"$ref": "SharedStatus"}}
+        schemas["OtherResponse"]["properties"] = {"status": {"$ref": "SharedStatus"}}
+        candidate = json.loads(json.dumps(base))
+        _contract(candidate)["schemas"]["SharedStatus"] = {"type": "boolean"}
+        targets = self._targets("/api/greetings/morning 接口改响应", base)
+        with self.assertRaisesRegex(ValueError, "共享类型"):
+            merge_direct_endpoint_revision(base, candidate, targets)
+        _contract(candidate)["schemas"]["OwnStatus"] = {"type": "boolean"}
+        _contract(candidate)["schemas"]["MorningGreetingResponse"]["properties"]["status"] = {"$ref": "OwnStatus"}
+        merged = merge_direct_endpoint_revision(base, candidate, targets)
+        self.assertEqual(_contract(merged)["schemas"]["SharedStatus"], {"type": "string"})
+        self.assertEqual(_contract(merged)["schemas"]["OwnStatus"], {"type": "boolean"})
+        self.assertEqual(_endpoint(merged, _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
+
+    def test_review_baseline_does_not_revert_prior_revision(self) -> None:
+        """连续修订沿当前事务基线保存前次内容，展示仍相对迭代初始版本。"""
+
+        original = _base_plan()
+        current = json.loads(json.dumps(original))
+        _endpoint(current, _OTHER_ENDPOINT_ID)["summary"] = "前次已确认修改"
+        candidate = json.loads(json.dumps(current))
+        _endpoint(candidate)["summary"] = "本次修改"
+        controlled = merge_direct_endpoint_revision(current, candidate, self._targets("/api/greetings/morning 接口改说明", current))
+        display = technical_plan_revision_diff(original, controlled)
+        self.assertEqual(_endpoint(display, _OTHER_ENDPOINT_ID)["summary"], "前次已确认修改")
+        self.assertEqual(_endpoint(display, _OTHER_ENDPOINT_ID)["_change_status"], "modified")
 
 
 class ConfirmedContentChangeTests(unittest.TestCase):

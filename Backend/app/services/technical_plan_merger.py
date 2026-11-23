@@ -267,6 +267,132 @@ def _relevant_endpoint_ids(
     return relevant
 
 
+def _schema_dependency_names(schemas: Any, roots: set[str]) -> set[str]:
+    """递归收集本契约内的类型依赖，避免共享嵌套类型被局部修改连带改写。"""
+
+    definitions = schemas if isinstance(schemas, dict) else {}
+    names: set[str] = set()
+
+    def visit(value: Any) -> None:
+        """遍历类型中的本地引用，循环引用通过已访问集合终止。"""
+
+        if isinstance(value, dict):
+            reference = value.get("$ref")
+            if isinstance(reference, str):
+                add(reference.strip().split("/")[-1])
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    def add(name: str) -> None:
+        """记录类型并展开其间接引用。"""
+
+        if name and name not in names:
+            names.add(name)
+            visit(definitions.get(name))
+
+    for name in roots:
+        add(name)
+    return names
+
+
+def merge_direct_endpoint_revision(
+    base_plan: dict[str, Any], new_plan: dict[str, Any],
+    targets: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """只采纳用户精确点名接口及其独占类型的修订，其他对象严格继承当前基线。"""
+
+    base = strip_change_status(base_plan)
+    candidate = strip_change_status(new_plan)
+    scoped = deepcopy(base)
+    contracts = {_item_id(item, "id"): item for item in _items(candidate.get("api_contracts"))}
+    found: set[str] = set()
+    for contract in _items(scoped.get("api_contracts")):
+        contract_id = _item_id(contract, "id")
+        selected = {key: target for key, target in targets.items() if target["contract_id"] == contract_id}
+        if not selected:
+            continue
+        proposed = contracts.get(contract_id, {})
+        endpoints = {_item_id(item, "id"): item for item in _items(proposed.get(ENDPOINTS_FIELD))}
+        base_schemas = contract.get(SCHEMAS_FIELD) or {}
+        new_schemas = proposed.get(SCHEMAS_FIELD) or {}
+        # 非目标接口和仅要求删除的接口仍引用基线类型，不能被共享类型的改写波及。
+        protected = _schema_dependency_names(base_schemas, _referenced_schema_names([
+            item for item in _items(contract.get(ENDPOINTS_FIELD))
+            if _item_id(item, "id") not in selected or selected[_item_id(item, "id")]["deleted"]
+        ]))
+        updates: list[dict[str, Any]] = []
+        for endpoint in _items(contract.get(ENDPOINTS_FIELD)):
+            endpoint_id = _item_id(endpoint, "id")
+            target = selected.get(endpoint_id)
+            if target is None:
+                updates.append(endpoint)
+                continue
+            found.add(endpoint_id)
+            if target["deleted"]:
+                updates.append({**endpoint, CHANGE_STATUS_FIELD: "deleted"})
+                continue
+            changed = endpoints.get(endpoint_id)
+            if changed is None or changed.get(CHANGE_STATUS_FIELD) == "deleted":
+                raise ValueError(f"点名接口未完成修改：{target['method']} {target['path']}。模型省略接口不构成删除授权。")
+            if (str(changed.get("method") or "").upper() != target["method"]
+                    or str(changed.get("path") or "").strip().rstrip("/") != target["path"]):
+                raise ValueError(f"点名接口身份被改写：{target['method']} {target['path']}。本次未授权修改方法或路径。")
+            needed = _schema_dependency_names(new_schemas, _referenced_schema_names([changed]))
+            for name in needed:
+                if name not in new_schemas:
+                    raise ValueError(f"点名接口引用缺失类型：{contract_id}.{name}。")
+                if name in protected and _canonical(base_schemas.get(name)) != _canonical(new_schemas[name]):
+                    raise ValueError(f"点名接口修改影响未授权的共享类型：{contract_id}.{name}。请为目标接口拆分独立类型，保留其他接口基线。")
+                contract.setdefault(SCHEMAS_FIELD, {})[name] = deepcopy(new_schemas[name])
+            updates.append(deepcopy(changed))
+        contract[ENDPOINTS_FIELD] = updates
+    if found != set(targets):
+        raise ValueError("点名接口与当前修订基线不一致，拒绝采用候选。")
+    if _canonical(base) == _canonical(scoped) and any(
+        _canonical(base.get(field)) != _canonical(candidate.get(field))
+        for field in ("architecture", "entities", "api_contracts", "pages")
+    ):
+        raise ValueError("点名接口未产生有效变更：模型只改写了未授权对象，未将本次修订作为成功候选。")
+    return technical_plan_revision_diff(base, scoped)
+
+
+def technical_plan_revision_diff(
+    base_plan: dict[str, Any] | None, candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """仅给已受控采纳的内容重算审阅标记，不再用审阅基线覆盖事务修订。"""
+
+    display = deepcopy(strip_change_status(candidate))
+    base = strip_change_status(base_plan or {})
+    for field, id_key in _LIST_FIELDS.items():
+        previous = {_item_id(item, id_key): item for item in _items(base.get(field))}
+        for item in _items(display.get(field)):
+            old = previous.get(_item_id(item, id_key))
+            if _is_deleted_item(item):
+                continue
+            item[CHANGE_STATUS_FIELD] = (
+                "added" if old is None else "unchanged" if _canonical(old) == _canonical(item) else "modified"
+            )
+            if field != "api_contracts":
+                continue
+            old_endpoints = {_item_id(endpoint, "id"): endpoint for endpoint in _items((old or {}).get(ENDPOINTS_FIELD))}
+            for endpoint in _items(item.get(ENDPOINTS_FIELD)):
+                if _is_deleted_item(endpoint):
+                    continue
+                prior = old_endpoints.get(_item_id(endpoint, "id"))
+                roots = _referenced_schema_names([endpoint])
+                old_schemas = (old or {}).get(SCHEMAS_FIELD) or {}
+                schemas = item.get(SCHEMAS_FIELD) or {}
+                names = _schema_dependency_names(old_schemas, roots) | _schema_dependency_names(schemas, roots)
+                schema_changed = any(_canonical(old_schemas.get(name)) != _canonical(schemas.get(name)) for name in names)
+                endpoint[CHANGE_STATUS_FIELD] = (
+                    "added" if prior is None else "modified" if _canonical(prior) != _canonical(endpoint) or schema_changed else "unchanged"
+                )
+    return display
+
+
 def merge_technical_plan(
     base_plan: dict[str, Any] | None,
     new_plan: dict[str, Any],

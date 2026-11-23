@@ -19,7 +19,9 @@ from app.domain.execution_recovery import (
     RecoveryPlan,
 )
 from app.graph.application_planning_interrupts import _technical_input_boundary
-from app.graph.nodes.application_technical_planning import technical_planning_begin
+from app.graph.nodes.application_technical_planning import (
+    technical_planning_begin, technical_planning_generate,
+)
 from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.services.application_lifecycle import load_application_lifecycle
@@ -325,6 +327,119 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(pending["clarification"]["mode"], "technical_plan_generation_error")
             self.assertEqual(snapshot.values["technical_plan_candidate"], {})
             self.assertFalse(technical_plan_draft_json_path({"workspace": str(harness.workspace)}).exists())
+
+    async def test_unmatched_revision_preserves_draft_and_emits_error_review(self) -> None:
+        """待确认卡的错误路径经真实 AG-UI 挂错误门，零模型调用且不覆盖当前草稿。"""
+
+        harness = self.harness
+        from app.workspace.plan_documents import technical_plan_draft_json_path
+        with patch("app.config.Settings.from_env", side_effect=harness.current_settings):
+            await harness.initialize_graph()
+            with (
+                patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(deepcopy(harness.candidate), [], None)),
+                patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+            ):
+                await harness.run_initial()
+            config = {"configurable": {"thread_id": harness.thread_id}}
+            before = await harness.graph.aget_state(config)
+            pending = before.tasks[0].interrupts[0].value
+            path = technical_plan_draft_json_path({"workspace": str(harness.workspace)})
+            prior_bytes = path.read_bytes()
+            request = "删除 /api/canteen-evaluations/canteens 接口"
+            with patch("app.graph.nodes.planning._generate_valid_technical_plan") as model:
+                frames = [frame async for frame in build_workflow_ag_ui_stream(
+                    graph=harness.graph,
+                    payload={
+                        "threadId": harness.thread_id, "runId": "technical-plan-unmatched-revision",
+                        "message": request,
+                        "forwardedProps": {
+                            "workspaceRoot": str(harness.workspace), "workflowScope": "application_planning",
+                            "applicationPlanningInteraction": {
+                                "gateId": pending["gateId"], "artifact": pending["artifact"],
+                                "artifactRevision": pending["artifactRevision"], "action": "revise", "request": request,
+                            },
+                        },
+                    },
+                )]
+            model.assert_not_called()
+            after = await harness.graph.aget_state(config)
+            self.assertEqual(tuple(after.next), ("technical_planning_review",))
+            self.assertEqual(after.values["technical_plan_candidate"], {})
+            self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_generation_error")
+            self.assertIn("未匹配", " ".join(after.values["technical_plan_repair_errors"]))
+            self.assertEqual(path.read_bytes(), prior_bytes)
+            self.assertEqual(
+                drop_generated_fields(after.values["technical_plan"]),
+                drop_generated_fields(before.values["technical_plan"]),
+            )
+            stream = "".join(frames)
+            self.assertIn("未匹配", stream)
+            self.assertIn('"type":"RUN_FINISHED"', stream)
+            self.assertNotIn('"type":"RUN_ERROR"', stream)
+
+    def test_generation_scope_uses_transaction_baseline_and_survives_repair(self) -> None:
+        """当前草稿的精确接口在修订和重试均可修改，初始基线只用于差异展示。"""
+
+        from tests.test_technical_plan_content_changes import _base_plan, _endpoint, _OTHER_ENDPOINT_ID
+        original = _base_plan()
+        current = deepcopy(original)
+        _endpoint(current, _OTHER_ENDPOINT_ID)["summary"] = "前次修订"
+        candidate = deepcopy(current)
+        _endpoint(candidate)["summary"] = "本次修订"
+        _endpoint(candidate, _OTHER_ENDPOINT_ID)["summary"] = "未授权改写"
+        for operation in (ApplicationPlanningOperation.REVISE, ApplicationPlanningOperation.REPAIR):
+            with self.subTest(operation=operation):
+                request = "GET /api/greetings/morning 接口改说明"
+                state = {
+                    "request": request, "technical_plan": current,
+                    "requirement_spec": self.harness.requirement_spec,
+                    "application_planning_recovery_boundary": application_planning_boundary_payload(
+                        operation_id="direct-revision-test", operation=operation,
+                        boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+                        request=request, baseline=current,
+                    ),
+                }
+                with (
+                    patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=original),
+                    patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={}),
+                    patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(candidate, [], None)) as model,
+                    patch("app.graph.nodes.planning._attach_technical_plan_contracts", side_effect=lambda _state, plan: plan),
+                    patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+                ):
+                    result = technical_planning_generate(state)
+                model.assert_called_once()
+                self.assertEqual(_endpoint(result["technical_plan_candidate"])["summary"], "本次修订")
+                self.assertEqual(_endpoint(result["technical_plan_candidate"], _OTHER_ENDPOINT_ID)["summary"], "前次修订")
+                self.assertEqual(_endpoint(result["technical_plan_diff"], _OTHER_ENDPOINT_ID)["_change_status"], "modified")
+                self.assertEqual(result["application_planning_recovery_boundary"]["boundary"], "candidate_committed")
+
+    def test_ambiguous_and_unmatched_paths_stop_before_generation(self) -> None:
+        """当前事务路径匹配失败或 HTTP 方法歧义，均在调用模型之前结束。"""
+
+        from tests.test_technical_plan_content_changes import _base_plan, _contract, _endpoint
+        base = _base_plan()
+        _contract(base)["endpoints"].append({**_endpoint(base), "id": "other.post", "method": "POST"})
+        for request, expected in (("/api/greetings/morning 接口改响应", "歧义"), ("/api/greeting/morning 接口改响应", "未匹配")):
+            with self.subTest(request=request):
+                state = {
+                    "request": request, "technical_plan": base,
+                    "requirement_spec": self.harness.requirement_spec,
+                    "application_planning_recovery_boundary": application_planning_boundary_payload(
+                        operation_id="direct-match-test", operation=ApplicationPlanningOperation.REVISE,
+                        boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+                        request=request, baseline=base,
+                    ),
+                }
+                with (
+                    patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=base),
+                    patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={}),
+                    patch("app.graph.nodes.planning._generate_valid_technical_plan") as model,
+                ):
+                    result = technical_planning_generate(state)
+                model.assert_not_called()
+                self.assertEqual(result["technical_plan_candidate"], {})
+                self.assertIn(expected, " ".join(result["clarification"]["errors"]))
+                self.assertEqual(result["application_planning_recovery_boundary"]["boundary"], "review_ready")
 
     async def test_confirm_failure_stops_without_generating_another_confirmation(self) -> None:
         """已有草稿确认失败后，真实 AG-UI/SQLite 挂起错误门，不再调用模型或改写草稿。"""

@@ -11,6 +11,70 @@ import re
 from typing import Any
 
 
+_DIRECT_ENDPOINT_PATTERN = re.compile(
+    r"(?:(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+[`\"“']?)?"
+    r"(/api/[A-Za-z0-9_\-/{}.:]+)", re.IGNORECASE,
+)
+
+
+def direct_endpoint_revision_targets(
+    request: str, base_plan: dict[str, Any],
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """按当前基线精确解析直接技术修订的接口目标，不猜测别名或 HTTP 方法。"""
+
+    endpoints = [
+        (contract, endpoint)
+        for contract in _items(base_plan.get("api_contracts"))
+        for endpoint in _items(contract.get("endpoints"))
+        if endpoint.get("_change_status") != "deleted"
+    ]
+    targets: dict[str, dict[str, Any]] = {}
+    errors: list[str] = []
+    # 编号和句号只分隔修改项；分页、响应字段中的“删除”不能被当成删除接口。
+    clauses = re.split(r"[。；;\n]+|(?:^|\s)\d+[、)]", request)
+    for clause in clauses:
+        previous_end = 0
+        for match in _DIRECT_ENDPOINT_PATTERN.finditer(clause):
+            method = str(match.group(1) or "").upper()
+            path = match.group(2).rstrip("/.")
+            prefix = clause[previous_end:match.start()]
+            previous_end = match.end()
+            deleted = bool(re.search(r"(?:删除|移除|去掉)\s*(?:接口\s*)?[`\"“'\s]*$", prefix))
+            # 否定表达不构成删除授权；接口之后的明确删除也支持，但删除响应字段不算。
+            negated = bool(re.search(r"(?:不要|不应|不允许|不能|禁止|无需|不必|不得|别|不)\s*(?:删除|移除|去掉)", prefix))
+            following = clause[match.end():]
+            suffix_deleted = bool(re.match(r"[`\"”'\s]*(?:接口\s*)?(?:删除|移除|去掉)(?:\s|$|[，,])", following))
+            deleted = (deleted and not negated) or suffix_deleted
+            matches = [
+                (contract, endpoint) for contract, endpoint in endpoints
+                if str(endpoint.get("path") or "").strip().rstrip("/") == path
+                and (not method or str(endpoint.get("method") or "").upper() == method)
+            ]
+            label = f"{method} {path}".strip()
+            if not matches:
+                errors.append(f"点名接口未匹配：{label}。当前技术规划中不存在该接口，未自动替换为相近路径。")
+                continue
+            if len(matches) != 1:
+                methods = "、".join(sorted({str(endpoint.get("method") or "") for _, endpoint in matches}))
+                errors.append(f"点名接口存在歧义：{label}，匹配方法为 {methods}。请明确 HTTP 方法及唯一接口。")
+                continue
+            contract, endpoint = matches[0]
+            endpoint_id = str(endpoint.get("id") or "").strip()
+            target = {
+                "contract_id": str(contract.get("id") or "").strip(),
+                "method": str(endpoint.get("method") or "").upper(),
+                "path": path,
+                "deleted": deleted,
+            }
+            if not endpoint_id or not target["contract_id"]:
+                errors.append(f"点名接口缺少稳定标识：{label}。")
+            elif endpoint_id in targets and targets[endpoint_id] != target:
+                errors.append(f"点名接口的修改与删除要求冲突：{label}。请拆分并明确最终操作。")
+            else:
+                targets[endpoint_id] = target
+    return targets, list(dict.fromkeys(errors))
+
+
 TextReplacement = tuple[str, str]
 ENDPOINTS_FIELD = "endpoints"
 _TEXT_FIELDS = {"description", "summary", "title"}

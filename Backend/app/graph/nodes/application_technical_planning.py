@@ -29,10 +29,13 @@ from app.services.technical_plan_carryover import (
     drop_generated_fields,
     read_technical_plan_carryover,
 )
+from app.services.technical_plan_content_changes import direct_endpoint_revision_targets
 from app.services.technical_plan_merger import (
+    merge_direct_endpoint_revision,
     merge_technical_plan,
     relevant_object_ids,
     strip_change_status,
+    technical_plan_revision_diff,
 )
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
@@ -381,6 +384,17 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
     workspace = workspace_from_state(state)
     baseline = _technical_plan_review_baseline(state, workspace) or None
     generation_fragments = {}
+    # 直接修订及其失败重试使用当前计划匹配目标，不把设计派生或首轮需求当成接口授权。
+    direct_revision = existing_plan is not None and boundary.operation in {
+        ApplicationPlanningOperation.REVISE, ApplicationPlanningOperation.REPAIR,
+    }
+    targets, target_errors = (
+        direct_endpoint_revision_targets(request, existing_plan)
+        if direct_revision else ({}, [])
+    )
+    if target_errors:
+        # 生成前即挂既有 AG-UI 错误审阅门；不调用模型、不覆盖旧草稿、不进入确认成功。
+        return _technical_generation_failure(state, target_errors, generation_fragments)
     plan, errors, failed_candidate = _generate_valid_technical_plan(
         state,
         technical_requirement,
@@ -413,20 +427,26 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
     # 合并产出两份：
     # - candidate：剥离 _change_status 的干净版，走原有校验 / 写盘 / 入库全流程；
     # - technical_plan_diff：带标记的展示版，仅存 state 供前端分区显示，不落盘。
-    merged_with_status = merge_technical_plan(
-        baseline,
-        plan,
-        relevant=relevant_object_ids(
-            requirement_spec,
-            state.get("product_plan"),
+    if targets:
+        try:
+            # 当前事务基线决定可修改内容；迭代初始基线仅重算展示，不能回退已采纳修订。
+            controlled = merge_direct_endpoint_revision(existing_plan, plan, targets)
+            merged_with_status = technical_plan_revision_diff(baseline, controlled)
+        except (TypeError, ValueError) as exc:
+            return _technical_generation_failure(state, [str(exc)], generation_fragments)
+    else:
+        merged_with_status = merge_technical_plan(
             baseline,
-            # 上一轮的需求文档：用来判断"本轮需求里这个对象到底改没改"。
-            # 只看"本轮有没有这个对象"不够——上一轮的页面当然还会出现在本轮需求里。
-            read_requirement_spec_carryover(workspace) if workspace else None,
-        ),
-        # 本轮删除的页面：删除要级联到只被它使用的接口 / 实体 / 类型定义。
-        deleted_page_ids=_deleted_page_ids(state),
-    )
+            plan,
+            relevant=relevant_object_ids(
+                requirement_spec,
+                state.get("product_plan"),
+                baseline,
+                # 上一轮的需求文档用于证明本轮对象变化，不以模型候选反证用户意图。
+                read_requirement_spec_carryover(workspace) if workspace else None,
+            ),
+            deleted_page_ids=_deleted_page_ids(state),
+        )
     candidate = deepcopy(strip_change_status(merged_with_status))
     # 模型候选通过校验不代表增量合并后仍有效：必须复用完整确认校验链，
     # 不合格的合并结果只进入错误审阅，不能写草稿后再让用户反复点击确认。
@@ -474,6 +494,31 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         "technical_plan_repair_errors": [],
         "technical_plan_generation_input_sha256": generation_fragments.get("input_sha256", ""),
         "technical_plan_repair_source_run_id": "",
+        "timeline": ["technical_planning_generate"],
+    }
+
+
+def _technical_generation_failure(
+    state: ProjectState, errors: list[str], fragments: dict[str, Any],
+) -> dict[str, Any]:
+    """将目标匹配或受控合并失败接回原错误审阅门，保留现有计划和磁盘草稿。"""
+
+    clarification = _technical_generation_error_payload(errors)
+    clarification["message"] = "技术修订未完成，请核对点名接口及修改范围。"
+    return {
+        "phase": "technical_planning_generate",
+        "status": "requires_user_input",
+        "technical_plan_repair_candidate": {},
+        "technical_plan_repair_errors": errors[:12],
+        "technical_plan_generation_input_sha256": fragments.get("input_sha256", ""),
+        "technical_plan_repair_source_run_id": "",
+        "application_planning_recovery_boundary": _boundary_payload_for_state(
+            state, boundary=ApplicationPlanningRecoveryBoundary.REVIEW_READY,
+        ),
+        "technical_plan_candidate": {},
+        "technical_plan_candidate_sha256": "",
+        "technical_plan_candidate_diff": {},
+        "clarification": clarification,
         "timeline": ["technical_planning_generate"],
     }
 
