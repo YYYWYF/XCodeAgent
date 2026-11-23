@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createElement } from 'react'
+import { createElement, Fragment } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { requestMappingAssist } from '../src/renderer/src/service/endpointDesigns'
 import { assistResultIsCurrent, assistInputKey } from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/mappingAssistModel'
 import MappingAssistPanel from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/MappingAssistPanel'
+import MappingAssistResult from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/MappingAssistResult'
 import MappingAssistReview, { MappingReviewContext } from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/MappingAssistReview'
 import type { MappingAssistState } from '../src/renderer/src/components/AiChatPanel/components/FieldMapping/useMappingAssist'
 import type { MappingAssistProgress } from '../src/renderer/src/typings/endpointDesignAssist'
@@ -101,52 +102,51 @@ test('mapping assist aborts pending runs and suppresses stale endpoint results',
   })
 })
 
-/** 完整预览使用必填需求生成，替换操作不展示差异复选框。 */
-test('full mapping preview replaces the entire draft and exposes pending fields', () => {
+/** 待明确卡片独立呈现，用户选择采纳后才回填草稿。 */
+test('mapping review exposes pending fields and adopt or discard actions without tabs', () => {
   /** 只读渲染不发出网络请求。 */
   const noop = (): void => {}
-  const assist = { open: true, preview: true, instruction: '查询商品列表', clarification: '', answers: {}, requirementsLength: 6, requirementsChanged: false, phase: 'idle', error: '', stale: false, canApply: true,
+  const assist = { open: true, instruction: '查询商品列表', clarification: '', answers: {}, requirementsLength: 6, requirementsChanged: false, phase: 'idle', error: '', stale: false, canApply: true,
     result: { baseline: { draftHash: '', metadataHash: '' }, operation: 'read', operationReason: '接口返回商品列表', mapping: { databaseOperation: 'read', databaseQuery: null, databaseWrites: [], implementationDescription: '', fieldMappings: [
       { mappingType: 'unconfigured', endpointField: { side: 'response', location: 'response_body', path: 'categoryName', type: 'string', required: true } }
-    ] }, questions: ['分类名称如何返回？'], reviews: [{ area: 'return', key: 'response:response_body:price', reason: '用户要求金额转为分', needsReview: true }] },
-    close: noop, cancel: noop, setInstruction: noop, setClarification: noop, setAnswer: noop, setPreview: noop, generate: noop, apply: noop } as unknown as MappingAssistState
-  const markup = renderToStaticMarkup(createElement(MappingAssistPanel, { assist, disabled: false }))
-  for (const label of ['替换草稿', 'categoryName', '不保留原有取值', '映射结果分区', '补充并重新生成', 'AI 映射已生成']) assert.ok(markup.includes(label))
-  assert.ok(!markup.includes('checkbox'))
+    ] }, questions: [{ target: 'response:response_body:categoryName', text: '分类名称如何返回？' }], reviews: [{ area: 'return', key: 'response:response_body:price', reason: '用户要求金额转为分', needsReview: true }] },
+    close: noop, cancel: noop, setInstruction: noop, setClarification: noop, setAnswer: noop, generate: noop, apply: noop } as unknown as MappingAssistState
+  const markup = renderToStaticMarkup(createElement(Fragment, null,
+    createElement(MappingAssistPanel, { assist, disabled: false, onShowReview: noop }),
+    createElement(MappingAssistResult, { assist, disabled: false, result: assist.result! })))
+  for (const label of ['采纳 AI 映射', '不采纳', 'categoryName', '会置为未配置', '待明确问题', '补充并重新生成', 'AI 映射预览']) assert.ok(markup.includes(label))
+  assert.doesNotMatch(markup, /checkbox|映射结果分区|查看当前草稿|补充规则/)
   const locked = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, phase: 'applying' }, disabled: true }))
   assert.match(locked, /disabled/)
-  const hidden = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, preview: false }, disabled: false }))
-  assert.ok(!hidden.includes('mapping-review-content'))
-  assert.ok(!hidden.includes('替换草稿'))
+  const hidden = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, open: false }, disabled: false }))
+  assert.equal(hidden, '')
   const changed = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, requirementsChanged: true, canApply: false }, disabled: false }))
-  assert.ok(changed.includes('需求说明或补充内容尚未用于生成'))
+  assert.ok(changed.includes('补充信息已变更'))
   const review = renderToStaticMarkup(createElement(MappingReviewContext.Provider, { value: assist.result!.reviews },
     createElement(MappingAssistReview, { area: 'return', target: 'response:response_body:price' })))
   assert.ok(review.includes('用户要求金额转为分'))
   assert.match(changed, /disabled/)
   const ambiguous = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, canApply: false,
-    result: { ...assist.result!, operation: null, operationReason: '删除方式不明', mapping: null, questions: ['物理删除还是软删除？'] } }, disabled: false }))
+    result: { ...assist.result!, operation: null, operationReason: '删除方式不明', mapping: null, questions: [{ target: null, text: '物理删除还是软删除？' }] } }, disabled: false }))
   assert.ok(ambiguous.includes('操作待明确'))
   assert.ok(ambiguous.includes('物理删除还是软删除'))
-  assert.ok(!ambiguous.includes('替换草稿'))
+  assert.ok(!ambiguous.includes('采纳 AI 映射'))
 })
 
-/** 初始界面明确区分必填需求与后续补充，空白主需求时无法点击生成。 */
-test('生成入口标记需求说明必填，填写后才允许生成', () => {
+/** 补充信息留空也可以直接生成映射。 */
+test('生成入口将补充信息标记为选填', () => {
   const assist = { open: true, phase: 'idle', instruction: '', clarification: '', answers: {}, requirementsLength: 0,
     requirementsChanged: false, close: () => {}, setInstruction: () => {}, generate: async () => {} } as unknown as MappingAssistState
   for (const instruction of ['', ' \n ', '查询商品列表']) {
     const markup = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, instruction }, disabled: false }))
-    assert.ok(markup.includes('需求说明'))
-    assert.ok(markup.includes('（必填）'))
-    assert.ok(!markup.includes('补充要求'))
+    assert.ok(markup.includes('补充信息'))
+    assert.ok(markup.includes('（选填）'))
     const textarea = markup.match(/<textarea\b[^>]*>/)?.[0] || ''
-    assert.ok(textarea.includes('aria-label="AI 映射需求说明"'))
-    assert.match(textarea, /\srequired=""/)
-    assert.ok(textarea.includes('aria-required="true"'))
+    assert.ok(textarea.includes('aria-label="AI 映射补充信息"'))
+    assert.doesNotMatch(textarea, /\srequired=""|aria-required="true"/)
     const button = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].find(([value]) => value.includes('生成映射'))?.[0] || ''
     assert.ok(button)
-    assert.equal(/\sdisabled[=\s>]/.test(button), !instruction.trim())
+    assert.doesNotMatch(button, /\sdisabled[=\s>]/)
   }
 })
 

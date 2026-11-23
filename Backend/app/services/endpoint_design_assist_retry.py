@@ -7,7 +7,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from uuid import uuid4
 
-from app.domain.endpoint_design_assist import GenerateMappingRequest, MappingCandidate
+from app.domain.endpoint_design_assist import GenerateMappingRequest, MappingCandidate, MappingQuestion
 from app.domain.endpoint_design_assist_steps import OperationStepResult
 from app.services.endpoint_design_assist_validation import digest
 
@@ -23,7 +23,7 @@ class GenerationCheckpoint:
     identity: str
     step_index: int
     candidates: list[MappingCandidate]
-    questions: list[str]
+    questions: list[MappingQuestion]
     created_at: float
     operation: OperationStepResult | None
 
@@ -55,7 +55,7 @@ def _prune() -> None:
         _checkpoints.popitem(last=False)
 
 
-def save_checkpoint(identity: str, index: int, candidates: list[MappingCandidate], questions: list[str],
+def save_checkpoint(identity: str, index: int, candidates: list[MappingCandidate], questions: list[MappingQuestion],
                     operation: OperationStepResult | None = None) -> str:
     """失败时缓存前序结果；不缓存失败步骤输出，也不写工作区。"""
     with _lock:

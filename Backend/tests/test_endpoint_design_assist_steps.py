@@ -7,7 +7,7 @@ from app.agents.endpoint_design_assist_prompts import build_assist_messages
 from app.domain.endpoint_design_assist_steps import ASSIST_STEP_MODELS, StepValue
 from app.services.endpoint_design_assist_steps import expand_step_result, generated_summary, generation_steps, step_model_result, mapping_reviews
 from app.services.endpoint_design_assist_validation import complete_mapping, validate_generated_mapping
-from app.domain.endpoint_design_assist import GeneratedMapping, GenerateMappingRequest
+from app.domain.endpoint_design_assist import GeneratedMapping, GenerateMappingRequest, MappingQuestion
 from tests.test_endpoint_design_assist import fixture
 
 
@@ -43,7 +43,7 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
         raw = {"returns": [{"field": "response:response_body:price", "inputs": ["column:price"], "rule": "乘以 100"}]}
         unsupported = step_model_result(ASSIST_STEP_MODELS["return"].model_validate(raw), context)
         self.assertEqual(unsupported.candidates, [])
-        self.assertIn("依据", unsupported.questions[0])
+        self.assertIn("补充", unsupported.questions[0].text)
         raw["returns"][0]["basis"] = "用户要求金额转为分"
         supported = step_model_result(ASSIST_STEP_MODELS["return"].model_validate(raw), context)
         review = mapping_reviews(supported.candidates)[0]
@@ -62,7 +62,7 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
         context["columns"][1].update(nullable=False, primaryKey=True, autoIncrement=True, defaultValue=None)
         mapping = complete_mapping(candidates("query", {"query": {"items": [
             {"column": "id", "op": "eq", "inputs": ["request:path:id"]}]}}, context), context)
-        context["generatedSummary"] = generated_summary(mapping, ["待明确写入规则"], completed=["query"])
+        context["generatedSummary"] = generated_summary(mapping, [MappingQuestion(text="待明确写入规则")], completed=["query"])
         human = build_assist_messages(context, "write")[1].content
         for expected in ("id eq", "待明确写入规则", "PRIMARY KEY (`id`)", "AUTO_INCREMENT", "NOT NULL", "默认值：无非空默认值", "主键：未知"):
             self.assertIn(expected, human)
@@ -176,19 +176,21 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
             complete_mapping(candidates("query", {"query": {"items": [{"column": "id", "op": "eq", "value": 1}]}}, context), context)
 
     def test_unknown_returns_remain_unconfigured_and_summary_is_current(self):
-        """未知项清空，说明步骤只接收本轮配置与问题的可读摘要。"""
+        """未知项保持未配置，说明步骤的输入只包含本轮配置摘要。"""
         context = context_fixture()
         context["draft"]["implementationDescription"] = "OLD_DESCRIPTION"
         context["draft"]["databaseWrites"] = [{"column": "OLD_COLUMN"}]
         mapping = complete_mapping([], context)
         self.assertEqual(mapping["fieldMappings"][0]["mappingType"], "unconfigured")
-        summary = generated_summary(mapping, ["请明确售价单位"])
+        summary = generated_summary(mapping, [MappingQuestion(text="请明确售价单位")])
         self.assertIn("未配置", summary)
         self.assertIn("请明确售价单位", summary)
         self.assertNotIn("OLD_", summary)
-        context["generatedSummary"] = summary
-        human = build_assist_messages(context, "description")[1].content
-        self.assertIn(summary, human)
+        context["generatedSummary"] = generated_summary(mapping, [])
+        system, human = [message.content for message in build_assist_messages(context, "description")]
+        self.assertIn(context["generatedSummary"], human)
+        self.assertNotIn("请明确售价单位", human)
+        self.assertNotIn('"questions"', system)
         self.assertNotIn("OLD_", human)
 
     def test_prompts_are_short_readable_and_scoped_without_json_schemas(self):
@@ -266,32 +268,32 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
                     {"operation": "read", "reason": " "}, {"operation": "read", "reason": "查询", "draft": {}}):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 ASSIST_STEP_MODELS["operation"].model_validate(raw)
-        decision = ASSIST_STEP_MODELS["operation"].model_validate({"operation": "delete", "reason": "删除方式不明", "questions": ["物理删除还是软删除？"]})
+        decision = ASSIST_STEP_MODELS["operation"].model_validate({"operation": "delete", "reason": "删除方式不明", "questions": [{"target": None, "text": "物理删除还是软删除？"}]})
         self.assertIsNone(decision.operation)
 
-    def test_operation_input_only_needs_summary_and_separate_requirements(self):
-        """操作提示不读取字段清单，后续映射仍接收真实字段和已填补充。"""
+    def test_operation_input_uses_plan_summary_and_optional_supplement(self):
+        """只凭规划说明也能构造操作提示，后续映射仍接收真实字段和已填补充。"""
         context = context_fixture()
-        context["clarification"] = '返回字段 categoryName：固定值 "test"'
-        minimal = {key: context[key] for key in ("endpoint", "selection", "instruction", "clarification")}
+        minimal = {key: context[key] for key in ("endpoint", "selection")}
         human = build_assist_messages(minimal, "operation")[1].content
-        for label in ("接口名称：", "HTTP 方法：", "接口路径：", "接口说明：", "数据表：", "【需求说明】", "【补充说明】"):
+        for label in ("接口名称：", "HTTP 方法：", "接口路径：", '接口说明："查询指定商品的售价。"', "数据表："):
             self.assertIn(label, human)
-        for field_list in ("请求参数（", "返回字段（", "表字段（", "request:path:id", "column:price"):
+        for field_list in ("请求参数（", "返回字段（", "表字段（", "request:path:id", "column:price", "【补充信息】"):
             self.assertNotIn(field_list, human)
+        context["clarification"] = '返回字段 categoryName：固定值 "test"'
         mapped = build_assist_messages(context, "return")[1].content
         self.assertIn("request:path:id", mapped)
         self.assertIn("column:price", mapped)
-        self.assertIn("【补充说明】", mapped)
+        self.assertIn(f"【补充信息】\n{context['instruction']}\n\n{context['clarification']}", mapped)
 
-    def test_generation_requires_main_instruction_and_bounds_combined_input(self):
-        """缺省、空白或只有补充均不能生成，分别传入的两段文本受同一上限约束。"""
+    def test_generation_accepts_optional_supplement_and_bounds_combined_input(self):
+        """初始补充可缺省或留空，后续回答也可单独提交。"""
         request, _, _ = fixture("E:/test")
-        with self.assertRaises(ValueError):
-            GenerateMappingRequest(**request)
+        self.assertEqual(GenerateMappingRequest(**request).instruction, "")
         for instruction in ("", " \n\t "):
-            with self.subTest(instruction=instruction), self.assertRaises(ValueError):
-                GenerateMappingRequest(**request, instruction=instruction, clarification="补充不能替代主需求")
+            with self.subTest(instruction=instruction):
+                value = GenerateMappingRequest(**request, instruction=instruction, clarification="返回匹配总数")
+                self.assertEqual((value.instruction, value.clarification), ("", "返回匹配总数"))
         valid = GenerateMappingRequest(**request, instruction=" 查询商品 ", clarification=" 返回匹配总数 ")
         self.assertEqual(valid.instruction, "查询商品")
         self.assertEqual(valid.clarification, "返回匹配总数")

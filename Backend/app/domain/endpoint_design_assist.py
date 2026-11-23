@@ -1,8 +1,8 @@
 """数据库字段映射 AI 辅助的当前请求与受限建议契约。"""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, StringConstraints, model_validator
 
 from app.domain.api_design import DatabaseBinding
 from app.domain.api_design_fields import ApiDesignModel
@@ -27,11 +27,19 @@ class MappingCandidate(ApiDesignModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class MappingQuestion(ApiDesignModel):
+    """将显示给用户的问题和可选的完整字段引用分开保存。"""
+
+    model_config = ConfigDict(frozen=True)
+    target: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)] | None = None
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+
+
 class MappingModelResult(ApiDesignModel):
     """单步骤转换后的内部候选与问题，不作为模型提示中的输出格式。"""
 
     candidates: list[MappingCandidate] = Field(default_factory=list, max_length=300)
-    questions: list[str] = Field(default_factory=list, max_length=50)
+    questions: list[MappingQuestion] = Field(default_factory=list, max_length=50)
 
 
 class GeneratedMapping(ApiDesignModel):
@@ -57,21 +65,19 @@ class AssistRequest(ApiDesignModel):
 
 
 class GenerateMappingRequest(AssistRequest):
-    """必填需求说明与后续补充分开传递，基于当前契约生成全部映射。"""
+    """基于当前契约生成全部映射，可附带用户补充信息和后续回答。"""
 
-    instruction: str = Field(min_length=1, max_length=4000)
+    instruction: str = Field(default="", max_length=4000)
     clarification: str = Field(default="", max_length=4000)
     retry_token: str | None = Field(default=None, alias="retryToken", pattern=r"^[0-9a-f]{32}$")
 
     @model_validator(mode="after")
     def validate_requirements(self):
-        """补充内容不能代替主需求，两类输入共同遵守总长度上限。"""
+        """清理两段可选文本，并限制用户补充信息的总长度。"""
         self.instruction = self.instruction.strip()
         self.clarification = self.clarification.strip()
-        if not self.instruction:
-            raise ValueError("请先填写需求说明。")
         if len(self.instruction) + len(self.clarification) > 4000:
-            raise ValueError("需求说明与补充内容合计不能超过 4000 字。")
+            raise ValueError("补充信息合计不能超过 4000 字。")
         return self
 
 

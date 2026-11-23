@@ -6,7 +6,7 @@ from pydantic import TypeAdapter
 
 from app.domain.api_design import DraftFieldMapping, SourceMapping, UnconfiguredFieldMapping, ValueFieldMapping
 from app.domain.api_design_static import StaticSourceField, static_fields
-from app.domain.endpoint_design_assist import MappingCandidate, MappingModelResult
+from app.domain.endpoint_design_assist import MappingCandidate, MappingModelResult, MappingQuestion
 from app.domain.endpoint_design_assist_steps import ReturnStepResult, StepReturn
 from app.domain.endpoint_design_static_assist import StaticGeneratedMapping
 from app.services.api_design import _endpoint_field_snapshot, _validate_field_mappings
@@ -85,7 +85,7 @@ def expand_static_step(result: ReturnStepResult, context: dict) -> MappingModelR
             reason=item.basis.strip() or f"直接引用 {'、'.join(item.inputs)}，请核对业务含义。")
         candidate.value = validate_static_candidate(candidate, context)
         if ("value" in item.model_fields_set or item.rule.strip()) and not item.basis.strip():
-            questions.append(f"{item.field} 缺少契约或需求依据，请补充取值规则。")
+            questions.append(MappingQuestion(target=item.field, text="这个字段应如何取值？请补充明确的取值或业务规则。"))
         else:
             candidates.append(candidate)
     return MappingModelResult(candidates=candidates, questions=list(dict.fromkeys(questions))[:50])

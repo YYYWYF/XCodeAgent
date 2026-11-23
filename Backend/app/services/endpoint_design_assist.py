@@ -87,7 +87,7 @@ async def generate_mapping(request: GenerateMappingRequest, report: ProgressRepo
     if decision.operation is None:
         # 操作有歧义时正常结束本次生成，只交付问题，不能生成或应用半套配置。
         return {"baseline": context["baseline"], "mapping": None, "operation": None,
-                "operationReason": decision.reason, "questions": decision.questions, "reviews": []}
+                "operationReason": decision.reason, "questions": [question.model_dump() for question in decision.questions], "reviews": []}
     operation = decision.operation
     context = {**context, "databaseOperation": operation}
     model_context["databaseOperation"] = operation
@@ -101,8 +101,10 @@ async def generate_mapping(request: GenerateMappingRequest, report: ProgressRepo
         await report(AgUiActionProgress(step, f"正在生成{labels[step]}（{index + 2}/{len(steps) + 1}）", 30 + index * 60 // len(steps)))
         step_context = dict(model_context)
         if index > 0:
-            # 后续阶段只读取本轮已通过校验的前序摘要，不能把旧草稿或未决问题当作事实。
-            step_context["generatedSummary"] = generated_summary(mapping, questions, completed=steps[:index])
+            # 映射说明只读取配置摘要，前序问题由服务保留用于最终审阅。
+            step_context["generatedSummary"] = generated_summary(
+                mapping, [] if step == "description" else questions, completed=steps[:index],
+            )
         try:
             raw = await invoke_mapping_assistant(step_context, step=step, thread_id=thread_id)
             model = MappingModelResult.model_validate(raw)
@@ -120,7 +122,8 @@ async def generate_mapping(request: GenerateMappingRequest, report: ProgressRepo
     await report(AgUiActionProgress("validating", "正在核对完整映射", 95))
     questions = list(dict.fromkeys([*questions, *incomplete_mapping_questions(mapping, operation)]))
     return {"baseline": context["baseline"], "mapping": mapping, "operation": operation,
-            "operationReason": decision.reason, "questions": questions, "reviews": mapping_reviews(candidates)}
+            "operationReason": decision.reason, "questions": [question.model_dump() for question in questions],
+            "reviews": mapping_reviews(candidates)}
 
 
 def replace_mapping(request: ReplaceMappingRequest) -> dict[str, Any]:

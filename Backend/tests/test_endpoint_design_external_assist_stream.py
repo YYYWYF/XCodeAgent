@@ -36,7 +36,7 @@ class ExternalAssistStreamTests(unittest.IsolatedAsyncioTestCase):
         model = SimpleNamespace(ainvoke=AsyncMock(side_effect=[
             SimpleNamespace(content='{"requests":[{"field":"external:query:keyword","inputs":["request:query:keyword"]}],"questions":[]}'),
             SimpleNamespace(content='{"returns":[{"field":"response:response_body:name","inputs":["external:response_body:name"]}],"questions":[]}'),
-            SimpleNamespace(content='{"description":"按关键词调用供应商商品查询，直接返回商品名称。","questions":[]}'),
+            SimpleNamespace(content='{"description":"按关键词调用供应商商品查询，直接返回商品名称。"}'),
         ]))
         p1, p2 = patches(preparation, metadata)
         with p1, p2, patch("app.agents.endpoint_design_assist.Settings.from_env", return_value=object()), patch(
@@ -150,7 +150,7 @@ class ExternalAssistStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(endpoint_designs_capabilities()["externalMappingGenerationSteps"], ["request", "return", "description"])
 
     async def test_business_failure_finishes_lifecycle(self):
-        """非法请求与分步模型失败均完整结束，并保留明确的失败阶段。"""
+        """有无补充都进入外部生成，模型失败时保留失败阶段和完整生命周期。"""
         request, preparation, metadata = fixture()
         for instruction in ("", "查询商品"):
             p1, p2 = patches(preparation, metadata)
@@ -159,5 +159,4 @@ class ExternalAssistStreamTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(frames[-1]["type"], "RUN_FINISHED")
             result = frames[-1]["result"]["endpointDesigns"]
             self.assertEqual(result["status"], "failed")
-            if instruction:
-                self.assertEqual(result["assistFailure"]["failedStage"], "request")
+            self.assertEqual(result["assistFailure"]["failedStage"], "request")

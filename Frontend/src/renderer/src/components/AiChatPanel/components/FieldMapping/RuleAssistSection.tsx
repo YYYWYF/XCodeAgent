@@ -2,6 +2,7 @@ import { Alert, Button, Space, Spin } from 'antd'
 import { BulbOutlined } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import type { RuleAssistTarget } from '../../../../typings/endpointDesignAssist'
+import { readableMappingQuestion } from './mappingAssistReviewModel'
 import { useRuleAssist } from './useRuleAssist'
 import './MappingAssist.less'
 
@@ -18,7 +19,7 @@ export default function RuleAssistSection({ target, dependencies, description, d
     {error && <Alert type="error" message={error} showIcon />}
     {candidate && <div className="rule-assist-candidate"><strong>建议规则</strong><span className="mapping-assist-secondary">输入字段与缺值策略保持原值</span>
       {candidate.description && <><p>{candidate.description}</p><Button disabled={disabled} onClick={adopt}>采用到编辑框</Button></>}
-      {candidate.questions.length > 0 && <Alert type="warning" message="需要你明确" description={<ul>{candidate.questions.map((text, index) => <li key={index}>{text}</li>)}</ul>} />}
+      {candidate.questions.length > 0 && <Alert type="warning" message="需要你明确" description={<ul>{candidate.questions.map((text, index) => <li key={index}>{readableMappingQuestion(text)}</li>)}</ul>} />}
     </div>}
   </div>
 }

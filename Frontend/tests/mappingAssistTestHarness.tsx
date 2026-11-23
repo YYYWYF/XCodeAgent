@@ -73,7 +73,7 @@ function response(input: Input, threadId: string, runId: string, failed: boolean
   const value = { schemaVersion: 1, threadId, runId, action: input.action, status: failed ? 'failed' : 'completed',
     error: failed ? { message: '返回步骤生成失败' } : undefined,
     assistFailure: failed ? { retryToken: 'c'.repeat(32), failedStage: 'return', completedStages: ['operation', 'query'] } : undefined,
-    assistance: { baseline: { draftHash: 'a'.repeat(64), metadataHash: 'b'.repeat(64) }, mapping, operation: external ? null : operation, operationReason: external ? '使用已绑定外部 API' : '根据契约识别操作', questions: ['请核对业务规则'], reviews: [] },
+    assistance: { baseline: { draftHash: 'a'.repeat(64), metadataHash: 'b'.repeat(64) }, mapping, operation: external ? null : operation, operationReason: external ? '使用已绑定外部 API' : '根据契约识别操作', questions: [{ target: null, text: '请核对业务规则' }], reviews: [] },
     applied: { draft, areas: ['return', 'description'], targets: [] },
     refinedRule: { description: '按用户要求保留两位小数', questions: [] } }
   const events = [{ type: 'RUN_STARTED', threadId, runId },

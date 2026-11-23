@@ -10,6 +10,7 @@ import { apiDesignFieldKey } from '../WorkflowRunCard/apiDesignSerialization'
 import { mappingCandidates } from './model'
 import { externalTargetEnabled } from './externalRequestTargets'
 import ValueRuleEditor from './ValueRuleEditor'
+import MappingAssistReview from './MappingAssistReview'
 import ResponseFieldMapping, { ResponseFieldMappingHeader } from './ResponseFieldMapping'
 import './ExternalMapping.less'
 
@@ -105,7 +106,8 @@ export default function ExternalMapping({ fields, metadata, selection, draft, ed
             const error = errors[`__externalApiBinding:${fieldKey(target)}`]
             return <div className="external-request-grid external-request-row" key={fieldKey(target)}>
               <span className="external-request-location">{SECTION_LABELS[target.section]}</span>
-              <div className="external-request-field"><code title={target.path}>{target.path}</code><span className="field-response-type">{target.type}</span>{target.required ? <span className="external-request-required" aria-label="必填">*</span> : null}</div>
+              <div className="external-request-field"><code title={target.path}>{target.path}</code><span className="field-response-type">{target.type}</span>{target.required ? <span className="external-request-required" aria-label="必填">*</span> : null}
+                {readOnly && <MappingAssistReview area="request" target={`external:${fieldKey(target)}`} />}</div>
               <ValueRuleEditor title={target.path} right={binding?.right} fields={fields} type={target.type} readOnly={readOnly} disabled={disabled} ruleTarget={{ area: 'request', key: `external:${fieldKey(target)}` }} onChange={(right) => update(target, right)} />
               {!readOnly ? <Button className="external-request-remove" type="text" icon={<DeleteOutlined />} disabled={disabled || target.required} aria-label={target.required ? `${target.path} 是必填参数，不可移除` : `删除可选参数 ${target.path}`} onClick={() => remove(target)} /> : null}
               {error ? <small className="field-rule-error">{error}</small> : null}

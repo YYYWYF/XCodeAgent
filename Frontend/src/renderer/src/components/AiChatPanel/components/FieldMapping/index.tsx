@@ -1,7 +1,7 @@
 import { confirmWorkspaceAction } from '../../../workspaceDialogs'
 import { ApiOutlined, BulbOutlined, CaretDownOutlined, DownOutlined, EditOutlined, FolderOpenOutlined, NodeIndexOutlined, UpOutlined } from '@ant-design/icons'
 import { Alert, Button, Empty, Radio, Select, Space, Spin, Tag, Tooltip } from 'antd'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { DevelopmentPlanningApiContract, DevelopmentPlanningEntityOption, EndpointDesignSaveResult, WorkflowApiDesignDraft } from '../../../../typings'
 import type { BindingSelection } from '../../../../typings/endpointDesign'
@@ -20,6 +20,8 @@ import './index.less'
 import { endpointRecoveryScope, useEndpointDesignRecovery } from '../../hooks/useEndpointDesignRecovery'
 import { RuleAssistContext, useMappingAssist } from './useMappingAssist'
 import MappingAssistPanel from './MappingAssistPanel'
+import MappingAssistResult from './MappingAssistResult'
+import { MappingReviewContext } from './MappingAssistReview'
 import type { MappingAssistRequest } from '../../../../typings/endpointDesignAssist'
 import { staticFields } from './staticData'
 import { useMockDataAssist } from './useMockDataAssist'
@@ -93,12 +95,20 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   } : undefined
   const assistRequest = assistAvailable ? baseAssistRequest : undefined
   const assist = useMappingAssist(assistRequest, selection?.sourceType === 'static' ? staticSources : metadata, state.edit)
-  const previewing = Boolean(assist.open && assist.preview && assist.result?.mapping)
+  const mappingReview = useRef<HTMLElement>(null)
+  // 候选只覆盖原映射区域的显示，保存、校验和撤销始终使用实际草稿。
+  const previewDraft = assist.open ? assist.previewDraft : undefined
+  const previewing = Boolean(previewDraft)
+  const displayedDraft = previewDraft ?? entry?.value.draft
+  const displayedReadOnly = previewing || Boolean(entry?.readOnly)
+  const displayedErrors = previewing ? {} : errors
+  const appliedMapping = !previewing && assist.receipt ? { ...assist.receipt.value, serial: assist.receipt.serial } : undefined
   const mockDisabled = workspaceBusy || editingRules > 0 || assist.phase !== 'idle' || previewing || !editable || sourceChanging
   const mock = useMockDataAssist(selection?.sourceType === 'static' ? baseAssistRequest : undefined, mockDisabled,
     (draft) => { assist.invalidate(); state.edit(draft) })
   const busy = workspaceBusy || assist.phase === 'applying' || mock.phase === 'applying'
-  const assistDisabled = !assistAvailable || workspaceBusy || editingRules > 0 || assist.phase !== 'idle' || mock.blocking
+  const reviewDisabled = !assistAvailable || workspaceBusy || editingRules > 0 || mock.blocking
+  const assistDisabled = reviewDisabled || assist.phase !== 'idle'
   const ruleContext = assistRequest && (selection?.sourceType !== 'database' || entry?.value.draft.databaseOperation) ? { request: assistRequest, fields,
     sources: selection?.sourceType === 'static' ? staticSources : metadata ? fields.filter((field) => field.side === 'response').slice(0, 1).flatMap((field) => mappingCandidates(field, assistRequest.selection, metadata)) : [] } : undefined
   /** 用户编辑使 AI 建议与撤销权限失效，再交给原有草稿逻辑。 */
@@ -196,6 +206,11 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
 
   const pendingSelectionChanged = Boolean(sourceChanging && pendingSelection && selectionKey(pendingSelection) !== selectionKey(selection))
   const displayedSelection = sourceChanging ? pendingSelection : selection
+  /** 从预览状态直接定位下方采纳选项，保留当前工作台导航。 */
+  const showMappingReview = (): void => {
+    mappingReview.current?.focus({ preventScroll: true })
+    mappingReview.current?.scrollIntoView({ block: 'start' })
+  }
 
   return <RuleEditingContext.Provider value={trackRuleEditing}><RuleAssistContext.Provider value={ruleContext}><div className="binding-workspace">
     <nav className="binding-directory" aria-label="应用 API"><h4>应用 API</h4>{contracts.map((contract) => <section className="binding-contract" key={contract.id}>
@@ -208,13 +223,13 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
     <main className="binding-editor">
       {!target ? <Empty description="请选择应用 API" /> : loading && !entry ? <Spin tip="正在读取 API 契约…" /> : null}
       {(recovery.issue || error) ? <Alert type="error" showIcon message={recovery.issue ? (recovery.issue.reason instanceof Error ? recovery.issue.reason.message : String(recovery.issue.reason)) : error} action={<Space><Button loading={recovery.retrying} disabled={busy} onClick={() => { if (recovery.issue) void recovery.retry(); else state.refreshSources() }}>同步状态</Button>{entry && <Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃草稿并重新加载？', content: '未确认的修改将被清除，正式映射不变。', okText: '放弃并加载', cancelText: '继续编辑', onOk: state.discard })}>重新加载</Button>}</Space>} /> : null}
-      {entry && <>
+      {entry && displayedDraft && <>
         <header className="binding-heading"><div className="binding-heading-copy"><span className="binding-heading-contract">{activeContractName}</span><strong className="binding-heading-name">{activeEndpointName}</strong><div className="binding-heading-endpoint"><Tag>{String(entry.preparation.payload.endpoint.method || 'API')}</Tag><code>{activeEndpointPath}</code></div></div><Space className="binding-heading-actions">{entry.readOnly ? <Button className="binding-edit-button" icon={<EditOutlined />} onClick={() => state.update({ ...entry, readOnly: false })}>修改映射</Button> : !entry.complex ? <>
-          {selection && <Button className="binding-stash-button" icon={<BulbOutlined />} disabled={assistDisabled} title={selection.sourceType === 'static' && !staticSources.length ? '请先应用静态数据，或在数据内容中生成 Mock 数据。' : undefined} onClick={() => assist.show()}>AI 生成映射</Button>}
+          {selection && <Button className="binding-stash-button" icon={<BulbOutlined />} disabled={assistDisabled || assist.open} title={selection.sourceType === 'static' && !staticSources.length ? '请先应用静态数据，或在数据内容中生成 Mock 数据。' : undefined} onClick={() => assist.show()}>AI 生成映射</Button>}
           <Button className="binding-stash-button" loading={busy} disabled={previewing || mock.blocking || mock.phase !== 'idle' || entry.conflict || sourceChanging || editingRules > 0 || assist.phase !== 'idle'} onClick={() => saveMapping(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
-        <MappingAssistPanel assist={assist} disabled={!assistAvailable || workspaceBusy || editingRules > 0 || mock.blocking}
+        <MappingAssistPanel assist={assist} disabled={reviewDisabled} onShowReview={showMappingReview}
           context={{ endpointName: activeEndpointName, endpointPath: activeEndpointPath, table: databaseSelection?.table || sourceLabel, details: <div className="mapping-assist-secondary"><p>请求参数：{fields.filter((field) => field.side === 'request').map((field) => field.path).join('、') || '无'}</p><p>返回字段：{fields.filter((field) => field.side === 'response').map((field) => field.path).join('、') || '无'}</p><p>{selection?.sourceType === 'static' ? '静态字段' : selection?.sourceType === 'external_api' ? '外部字段' : '表字段'}：{selection?.sourceType === 'static' ? staticSources.map((field) => field.sourceType === 'static' ? field.path : '').join('、') : metadata && 'columns' in metadata ? metadata.columns?.map((column) => column.name).join('、') : metadata && 'fields' in metadata ? metadata.fields?.map((field) => `${field.section}.${field.path}`).join('、') : ''}</p></div> }} />
-        {assist.receipt && <div className="mapping-assist-receipt" aria-live="polite"><div><strong>已替换到草稿 · 尚未保存</strong><p className="mapping-assist-secondary">请审阅并补全未配置项，再保存并确认。继续编辑、暂存、确认或切换接口后，撤销失效。</p></div>{assist.canUndo && <Button disabled={busy} onClick={assist.undoApply}>撤销本次替换</Button>}</div>}
+        {!previewing && assist.receipt && <div className="mapping-assist-receipt" aria-live="polite"><div><strong>已采纳到草稿 · 尚未保存</strong><p className="mapping-assist-secondary">请审阅并补全未配置项，再保存并确认。继续编辑、暂存、确认或切换接口后，撤销失效。</p></div>{assist.canUndo && <Button disabled={busy || assist.phase !== 'idle'} onClick={assist.undoApply}>撤销本次采纳</Button>}</div>}
         {entry.conflict ? <Alert type="warning" message="草稿基于的契约或正式映射已变化，当前草稿已保留。" description="请核对当前内容后，明确放弃旧草稿并重新加载。" action={<Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃旧草稿并重新加载？', okText: '放弃并加载', cancelText: '保留草稿', onOk: state.discard })}>重新加载</Button>} /> : null}
         {entry.complex ? <Alert type="info" message="当前接口包含复杂映射，继续使用原有编辑能力。" action={<Button onClick={() => setAdvanced(true)}>打开完整编辑器</Button>} /> : <>
           {entry.readOnly && selection && <section className="binding-section database-source-section">
@@ -231,7 +246,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
             {!sourceCollapsed ? <div className="database-section-content">
               {selection && !sourceChanging ? <div className="database-source-summary">
                 <div><Tag>{selection.sourceType === 'database' ? '数据表' : selection.sourceType === 'static' ? '静态数据' : '外部 API'}</Tag><strong>{sourceLabel}</strong></div>
-                <Button disabled={busy || entry.conflict || editingRules > 0} onClick={beginSourceChange}>更换数据源</Button>
+                <Button disabled={busy || previewing || entry.conflict || editingRules > 0} onClick={beginSourceChange}>更换数据源</Button>
               </div> : <>
                 <Radio.Group disabled={busy || entry.conflict} value={kind} onChange={(event) => stageSourceKind(event.target.value)}>
                   <Radio.Button value="database">数据表</Radio.Button>
@@ -252,19 +267,24 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
                 </div>}
               </>}
               {unavailableTable ? <Alert type="warning" message="所选表已不在当前应用的可用表清单中，请刷新数据源并重新选择。" /> : null}
-              {missingFields ? <Alert type="warning" message="映射引用的数据库字段已发生变化，请重新配置并确认 API 映射。" /> : null}
-              {missingQueryColumns ? <Alert type="warning" message="查询条件中的数据库列已失效，请重新选择当前数据表中的列。" /> : null}
-              {missingWriteColumns ? <Alert type="warning" message="写入字段已发生变化，请重新配置并确认 API 映射。" /> : null}
+              {!previewing && missingFields ? <Alert type="warning" message="映射引用的数据库字段已发生变化，请重新配置并确认 API 映射。" /> : null}
+              {!previewing && missingQueryColumns ? <Alert type="warning" message="查询条件中的数据库列已失效，请重新选择当前数据表中的列。" /> : null}
+              {!previewing && missingWriteColumns ? <Alert type="warning" message="写入字段已发生变化，请重新配置并确认 API 映射。" /> : null}
             </div> : null}
           </section>}
           {/* 更换来源时隐藏旧表单但保持挂载，取消后恢复未应用的 JSON 和映射输入。 */}
-          <div hidden={sourceChanging || previewing}>
-          {selection?.sourceType === 'static' && <StaticDataCard key={`data:${state.key}`} draft={entry.value.draft} readOnly={entry.readOnly} disabled={!editable || busy || sourceChanging} errors={errors} onChange={editMapping} mock={mock} mockDisabled={mockDisabled} />}
-          {selection?.sourceType === 'static' && <StaticMapping key={state.key} draft={entry.value.draft} fields={fields} readOnly={entry.readOnly} disabled={!editable || busy} previewDisabled={editingRules > 0 || mock.blocking} errors={errors} onChange={editMapping} applied={assist.receipt && { ...assist.receipt.value, serial: assist.receipt.serial }} />}
-          {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping key={`${state.key}:${selectionKey(selection)}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata} onChange={editMapping} selection={selection} applied={assist.receipt && { ...assist.receipt.value, serial: assist.receipt.serial }} /> : databaseSelection && (entry.readOnly || metadata && 'columns' in metadata) ? <DatabaseMapping key={`${state.key}:${selectionKey(selection)}:${entry.value.draft.databaseOperation}`} busy={busy} draft={entry.value.draft} editable={editable} readOnly={entry.readOnly} errors={errors} fields={fields} metadata={metadata && 'columns' in metadata ? metadata : undefined} operation={entry.value.draft.databaseOperation} selection={databaseSelection}
-            applied={assist.receipt && { ...assist.receipt.value, serial: assist.receipt.serial }}
+          <div hidden={sourceChanging}>
+          {selection?.sourceType === 'static' && <StaticDataCard key={`data:${state.key}`} draft={entry.value.draft} readOnly={entry.readOnly} disabled={!editable || busy || sourceChanging || previewing} errors={errors} onChange={editMapping} mock={mock} mockDisabled={mockDisabled} />}
+          <MappingReviewContext.Provider value={previewing ? assist.result?.reviews || [] : []}>
+          {selection?.sourceType === 'static' && <StaticMapping key={state.key} draft={displayedDraft} fields={fields} readOnly={displayedReadOnly} disabled={!editable || busy || previewing} previewDisabled={editingRules > 0 || mock.blocking || previewing} errors={displayedErrors} onChange={editMapping} applied={appliedMapping} />}
+          {selection && <Spin spinning={metadataLoading}>{selection.sourceType === 'external_api' && metadata && 'fields' in metadata ? <ExternalMapping key={`${state.key}:${selectionKey(selection)}`} busy={busy} draft={displayedDraft} editable={editable && !previewing} readOnly={displayedReadOnly} errors={displayedErrors} fields={fields} metadata={metadata} onChange={editMapping} selection={selection} applied={appliedMapping} /> : databaseSelection && (entry.readOnly || metadata && 'columns' in metadata) ? <DatabaseMapping key={`${state.key}:${selectionKey(selection)}:${entry.value.draft.databaseOperation}`} busy={busy} draft={displayedDraft} editable={editable && !previewing} readOnly={displayedReadOnly} errors={displayedErrors} fields={fields} metadata={metadata && 'columns' in metadata ? metadata : undefined} operation={displayedDraft.databaseOperation} selection={databaseSelection}
+            applied={appliedMapping}
             onChange={editMapping} onOperationChange={(operation) => confirmWorkspaceAction({ title: '切换数据库操作？', content: '切到新增会清空查询条件；切到查询或删除会清除写入映射。', okText: '切换并更新', cancelText: '取消', onOk: () => editMapping(resetDraftForDatabaseOperation(entry.value.draft, operation)) })} /> : null}</Spin>}
+          </MappingReviewContext.Provider>
           </div>
+          {previewing && assist.result && <section className="mapping-assist-panel mapping-assist-decision" ref={mappingReview} tabIndex={-1} aria-label="AI 映射采纳选项">
+            <MappingAssistResult assist={assist} result={assist.result} disabled={reviewDisabled} />
+          </section>}
           {entry.readOnly && <p className="binding-readonly"><NodeIndexOutlined /> 映射已确认</p>}
         </>}
       </>}

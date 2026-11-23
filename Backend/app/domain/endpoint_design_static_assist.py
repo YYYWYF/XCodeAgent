@@ -7,7 +7,6 @@ from pydantic import Field, model_validator
 from app.domain.api_design_fields import ApiDesignModel
 from app.domain.api_design_static import StaticBinding
 from app.domain.endpoint_design_assist import AssistBaseline, AssistRequest, GenerateMappingRequest, RefineRuleRequest
-from app.domain.endpoint_design_assist_steps import StepQuestions
 
 
 class StaticAssistRequest(AssistRequest):
@@ -17,7 +16,7 @@ class StaticAssistRequest(AssistRequest):
 
 
 class StaticGenerateRequest(GenerateMappingRequest):
-    """基于已应用的静态结构和必填需求生成返回映射。"""
+    """基于已应用的静态结构和接口契约生成返回映射。"""
 
     selection: StaticBinding
 
@@ -53,14 +52,23 @@ class StaticRefineRequest(RefineRuleRequest):
 class GenerateMockRequest(StaticGenerateRequest):
     """Mock 以返回契约和用户需求为依据，每组列表生成有限条样例。"""
 
+    instruction: str = Field(min_length=1, max_length=4000)
     row_count: int = Field(default=3, alias="rowCount", strict=True, ge=1, le=20)
     retry_token: None = Field(default=None, alias="retryToken")
 
+    @model_validator(mode="after")
+    def validate_mock_instruction(self):
+        """独立 Mock 数据生成仍需填写实际的样例需求。"""
+        if not self.instruction.strip():
+            raise ValueError("请填写 Mock 数据需求说明。")
+        return self
 
-class MockStepResult(StepQuestions):
+
+class MockStepResult(ApiDesignModel):
     """模型只生成样例数据，不生成映射；无法构造时返回明确问题。"""
 
     data: dict[str, Any] | list[dict[str, Any]] | None = None
+    questions: list[str] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def validate_result(self):

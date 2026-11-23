@@ -6,7 +6,7 @@ from pydantic import Field, model_validator
 
 from app.domain.api_design_database import DatabaseConditionOperator
 from app.domain.api_design_fields import ApiDesignModel
-from app.domain.endpoint_design_assist import AssistDatabaseOperation, RefinedRule
+from app.domain.endpoint_design_assist import AssistDatabaseOperation, MappingQuestion, RefinedRule
 
 AssistStep = Literal["operation", "query", "write", "request", "return", "description", "rule", "mock"]
 
@@ -76,9 +76,9 @@ class StepReturn(StepValue):
 
 
 class StepQuestions(ApiDesignModel):
-    """每个步骤独立收集未明确事实，不臆造配置。"""
+    """允许提问的步骤独立收集未明确事实，不臆造配置。"""
 
-    questions: list[str] = Field(default_factory=list, max_length=50)
+    questions: list[MappingQuestion] = Field(default_factory=list, max_length=50)
 
 
 class QueryStepResult(StepQuestions):
@@ -97,7 +97,6 @@ class OperationStepResult(StepQuestions):
     def validate_operation(self):
         """未知操作必须提问，避免默认沿用草稿或仅按 HTTP 方法猜测。"""
         self.reason = self.reason.strip()
-        self.questions = [question.strip() for question in self.questions if question.strip()]
         if not self.reason or (self.operation is None and not self.questions):
             raise ValueError("无法确定数据库操作时必须提供原因和待明确问题。")
         # 有待明确问题的判断不能进入后续映射生成。
@@ -118,7 +117,7 @@ class ReturnStepResult(StepQuestions):
     returns: list[StepReturn] = Field(default_factory=list, max_length=300)
 
 
-class DescriptionStepResult(StepQuestions):
+class DescriptionStepResult(ApiDesignModel):
     """说明步骤只输出可读实现说明。"""
 
     description: str = Field(default="", max_length=4000)

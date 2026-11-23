@@ -78,30 +78,32 @@ class EndpointDesignAssistStreamTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("error", result)
             self.assertEqual(frames[-1]["type"], "RUN_FINISHED")
 
-    async def test_empty_main_instruction_fails_before_generation_with_complete_lifecycle(self):
-        """只有后续补充不能替代必填需求，失败仍交付结果、快照和完整结束帧。"""
+    async def test_empty_supplement_reaches_generation_with_complete_lifecycle(self):
+        """缺省和空白补充都能发起生成，并保留完整事件和状态快照。"""
         for instruction in (None, "", " \n\t "):
             input_data = payload("generate_mapping")
             values = input_data["forwardedProps"]["endpointDesigns"]
+            values.pop("clarification")
             if instruction is None:
                 values.pop("instruction")
             else:
                 values["instruction"] = instruction
-            with patch("app.protocols.endpoint_designs.generate_mapping", new=AsyncMock()) as model:
+            with patch("app.protocols.endpoint_designs.generate_mapping", new=AsyncMock(return_value={"marker": "generated"})) as model:
                 frames = await collect(input_data)
-                model.assert_not_awaited()
+                model.assert_awaited_once()
+                self.assertEqual(model.await_args.args[0].instruction, "")
             self.assertEqual(frames[0]["type"], "RUN_STARTED")
             self.assertEqual(frames[-1]["type"], "RUN_FINISHED")
             result = frames[-1]["result"]["endpointDesigns"]
-            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["status"], "completed")
             self.assertEqual(result["action"], "generate_mapping")
-            self.assertIn("error", result)
+            self.assertEqual(result["assistance"]["marker"], "generated")
             for event in ("TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END", "CUSTOM", "STATE_SNAPSHOT"):
                 self.assertIn(event, [frame["type"] for frame in frames])
 
     async def test_operation_ambiguity_finishes_with_questions(self):
         """待明确操作通过正常生命周期交付问题，不冒充完整映射或失败重试。"""
-        result = {"mapping": None, "operation": None, "operationReason": "删除方式不明", "questions": ["是否软删除？"], "reviews": []}
+        result = {"mapping": None, "operation": None, "operationReason": "删除方式不明", "questions": [{"target": None, "text": "是否软删除？"}], "reviews": []}
         with patch("app.protocols.endpoint_designs.generate_mapping", new=AsyncMock(return_value=result)):
             frames = await collect(payload("generate_mapping"))
         value = frames[-1]["result"]["endpointDesigns"]

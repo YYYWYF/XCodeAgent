@@ -4,7 +4,7 @@ import asyncio
 from typing import Any
 
 from app.agents.endpoint_design_assist import invoke_mapping_assistant
-from app.domain.endpoint_design_assist import MappingModelResult, RefinedRule
+from app.domain.endpoint_design_assist import MappingModelResult, MappingQuestion, RefinedRule
 from app.domain.endpoint_design_external_assist import ExternalGenerateRequest, ExternalReplaceMappingRequest, ExternalRefineRequest
 from app.protocols.ag_ui_action_stream import AgUiActionProgress, ProgressReporter
 from app.services.api_design import load_external_operation, _endpoint_field_snapshot
@@ -43,7 +43,7 @@ def load_external_assist_context(request: Any) -> dict:
             "baseline": {"draftHash": digest(draft), "metadataHash": digest(identity)}}
 
 
-def external_summary(mapping: dict, questions: list[str], completed: list[str]) -> str:
+def external_summary(mapping: dict, questions: list[MappingQuestion], completed: list[str]) -> str:
     """向后续步骤投影本轮已校验配置，避免传递旧草稿或连接信息。"""
     lines = []
     if "request" in completed:
@@ -61,7 +61,7 @@ def external_summary(mapping: dict, questions: list[str], completed: list[str]) 
             elif item.get("right"):
                 value = value_rule_summary(item["right"])
             lines.append(f"返回 {field_key(item['endpointField'])} ← {value}")
-    lines.extend(f"待明确（不是已知事实）：{question}" for question in questions)
+    lines.extend(f"待明确 {question.target or '通用'}（不是已知事实）：{question.text}" for question in questions)
     return "\n".join(lines)
 
 
@@ -83,7 +83,10 @@ async def generate_external_mapping(request: ExternalGenerateRequest, report: Pr
         if index < start:
             continue
         await report(AgUiActionProgress(step, f"正在生成{labels[step]}（{index + 1}/3）", 25 + index * 25))
-        step_context = {**model_context, "generatedSummary": external_summary(mapping, questions, steps[:index])}
+        # 映射说明只读取配置摘要，前序问题由服务保留用于最终审阅。
+        step_context = {**model_context, "generatedSummary": external_summary(
+            mapping, [] if step == "description" else questions, steps[:index],
+        )}
         try:
             raw = await invoke_mapping_assistant(step_context, step=step, thread_id=thread_id)
             result = MappingModelResult.model_validate(raw)
@@ -98,12 +101,8 @@ async def generate_external_mapping(request: ExternalGenerateRequest, report: Pr
         candidates, mapping = next_candidates, next_mapping
         questions.extend(result.questions)
     await report(AgUiActionProgress("validating", "正在核对完整外部 API 映射", 95))
-    questions.extend(f"外部入参 {external_key(item['externalField'])} 尚未配置，请补充取值或按需移除可选参数。"
-                     for item in mapping["externalApiBindings"] if not item.get("right"))
-    questions.extend(f"返回字段 {item['endpointField']['path']} 尚未配置，请补充其取值规则。"
-                     for item in mapping["fieldMappings"] if item["mappingType"] == "unconfigured" and item["endpointField"]["side"] == "response")
     return {"baseline": context["baseline"], "mapping": mapping, "operation": None, "operationReason": "使用当前绑定的外部 API。",
-            "questions": list(dict.fromkeys(questions)), "reviews": mapping_reviews(candidates)}
+            "questions": [question.model_dump() for question in dict.fromkeys(questions)], "reviews": mapping_reviews(candidates)}
 
 
 def replace_external_mapping(request: ExternalReplaceMappingRequest) -> dict:

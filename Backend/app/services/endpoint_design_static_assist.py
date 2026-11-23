@@ -58,10 +58,8 @@ async def generate_static_mapping(request: StaticGenerateRequest, report: Progre
         token = save_checkpoint(identity, 0, [], [])
         raise MappingGenerationFailure(f"静态返回映射生成失败：{str(exc)[:2000]}", token=token, stage="return", completed=[]) from exc
     await report(AgUiActionProgress("validating", "正在核对静态字段和返回契约", 90))
-    questions = [*result.questions, *(f"返回字段 {item['endpointField']['path']} 尚未配置，请补充其取值规则。"
-        for item in mapping["fieldMappings"] if item["mappingType"] == "unconfigured" and item["endpointField"]["side"] == "response")]
     return {"baseline": context["baseline"], "mapping": mapping, "operation": None, "operationReason": "使用当前已应用的静态数据。",
-            "questions": list(dict.fromkeys(questions)), "reviews": mapping_reviews(result.candidates)}
+            "questions": [question.model_dump() for question in dict.fromkeys(result.questions)], "reviews": mapping_reviews(result.candidates)}
 
 
 def replace_static_mapping(request: StaticReplaceRequest) -> dict:

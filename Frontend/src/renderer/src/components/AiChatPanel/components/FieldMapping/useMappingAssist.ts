@@ -22,7 +22,6 @@ export function useMappingAssist(request: MappingAssistRequest | undefined, meta
   const [error, setError] = useState('')
   const [result, setResult] = useState<{ inputKey: string; requirementsKey: string; value: MappingAssistance }>()
   const [failure, setFailure] = useState<{ inputKey: string; requirementsKey: string; value: MappingAssistFailure }>()
-  const [preview, setPreview] = useState(true)
   const [clarification, updateClarification] = useState('')
   const [answers, updateAnswers] = useState<MappingAssistAnswers>({})
   const [receipt, setReceipt] = useState<{ inputKey: string; value: MappingApplied; serial: number }>()
@@ -79,23 +78,22 @@ export function useMappingAssist(request: MappingAssistRequest | undefined, meta
   /** 打开完整映射生成入口，保留用户已输入的要求。 */
   const show = (): void => {
     if (locked.current || !request) return
-    setOpen(true); setPreview(true)
+    setOpen(true)
   }
 
-  /** 关闭建议区同时取消生成，不触发保存或自动重试。 */
-  const close = (): void => { cancel(); setOpen(false) }
+  /** 放弃预览或收起面板时清掉候选，保留草稿和已填写的补充说明。 */
+  const close = (): void => { cancel(); setResult(undefined); setOpen(false) }
 
   /** 生成过程允许编辑；用户变更会使本次输入基线失效。 */
   const generate = async (resume = false): Promise<void> => {
     const input = { ...current.current }
     if (!input.request || locked.current) return
     const values = mappingRequirementsInput(input.instruction, input.clarification, input.answers)
-    if (!values.instruction) { setError('请先填写需求说明。'); return }
-    if (values.instruction.length + values.clarification.length > MAPPING_REQUIREMENTS_LIMIT) { setError('需求说明与补充内容合计不能超过 4000 字，请精简后重新生成。'); return }
+    if (values.instruction.length + values.clarification.length > MAPPING_REQUIREMENTS_LIMIT) { setError('补充信息合计不能超过 4000 字，请精简后重新生成。'); return }
     const retry = failure?.inputKey === input.key && failure.requirementsKey === input.requirementsKey ? failure.value : undefined
     if (resume && !retry) return
     const run = new AbortController(); controller.current = run; locked.current = true
-    setPhase('generating'); setError(''); setResult(undefined); setFailure(undefined); setProgress(undefined); setProgressSteps([]); setPreview(true)
+    setPhase('generating'); setError(''); setResult(undefined); setFailure(undefined); setProgress(undefined); setProgressSteps([])
     try {
       const response = await requestMappingAssist('generate_mapping', input.request, { ...values, ...(resume && retry ? { retryToken: retry.retryToken } : {}) },
         { signal: run.signal, onProgress: (value) => {
@@ -145,7 +143,7 @@ export function useMappingAssist(request: MappingAssistRequest | undefined, meta
   return { open, instruction, setInstruction, clarification, setClarification, answers, setAnswer,
     isExternal: request?.selection.sourceType === 'external_api',
     isStatic: request?.selection.sourceType === 'static',
-    requirementsLength: requirements.instruction.length + requirements.clarification.length, preview, setPreview, phase, progress, progressSteps, error,
+    requirementsLength: requirements.instruction.length + requirements.clarification.length, phase, progress, progressSteps, error,
     currentOperation: request?.draft.databaseOperation,
     requirementsChanged: Boolean(result && result.requirementsKey !== requirementsKey),
     failure: failure?.inputKey === currentKey && failure.requirementsKey === requirementsKey ? failure.value : undefined,

@@ -3,6 +3,7 @@ import { BulbOutlined } from '@ant-design/icons'
 import type { ReactElement } from 'react'
 import type { MockDataAssistState } from './useMockDataAssist'
 import { MAPPING_REQUIREMENTS_LIMIT } from './mappingAssistModel'
+import { readableMappingQuestion } from './mappingAssistReviewModel'
 import './MappingAssist.less'
 import './StaticMockDataPanel.less'
 
@@ -28,7 +29,7 @@ export default function StaticMockDataPanel({ assist, disabled }: { assist: Mock
       {assist.stale && <Alert type="warning" showIcon message="草稿或契约已变化，请重新生成 Mock 数据。" />}
       {assist.requirementsChanged && <Alert type="warning" showIcon message="当前需求或条数尚未用于生成，请重新生成后应用。" />}
       {result && <div className="static-mock-result">
-        {result.questions.length > 0 && <Alert type="warning" showIcon message="以下信息需要明确" description={<ul>{result.questions.map((question) => <li key={question}>{question}</li>)}</ul>} />}
+        {result.questions.length > 0 && <Alert type="warning" showIcon message="以下信息需要明确" description={<ul>{result.questions.map((question) => <li key={question}>{readableMappingQuestion(question)}</li>)}</ul>} />}
         {result.data != null && <><div className="mapping-assist-toolbar"><strong>Mock 预览 <Tag>尚未应用</Tag></strong><span className="mapping-assist-secondary">{result.fields.length} 个字段</span></div>
           <pre aria-label="生成的 Mock 数据预览">{JSON.stringify(result.data, null, 2)}</pre>
           {result.warnings.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} />)}

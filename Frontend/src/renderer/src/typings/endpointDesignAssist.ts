@@ -21,8 +21,10 @@ export type GeneratedMapping = Pick<WorkflowApiDesignDraft, 'fieldMappings'> & (
   databaseOperation?: never; databaseQuery?: never; databaseWrites?: never
   externalApiBindings?: never; implementationDescription?: never
 })
+export type MappingQuestion = { target: string | null; text: string }
+
 export type MappingAssistance = {
-  baseline: MappingAssistBaseline; mapping: GeneratedMapping | null; questions: string[]
+  baseline: MappingAssistBaseline; mapping: GeneratedMapping | null; questions: MappingQuestion[]
   operation: WorkflowApiDatabaseOperation | null; operationReason: string
   reviews: Array<{ area: MappingAssistArea; key: string; reason: string; needsReview: boolean }>
 }

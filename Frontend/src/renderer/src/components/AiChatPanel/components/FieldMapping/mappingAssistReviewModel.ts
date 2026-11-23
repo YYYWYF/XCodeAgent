@@ -1,76 +1,53 @@
-import type { MappingAssistance, MappingAssistArea } from '../../../../typings/endpointDesignAssist'
+import type { MappingAssistance } from '../../../../typings/endpointDesignAssist'
 import { apiDesignFieldKey } from '../WorkflowRunCard/apiDesignSerialization'
 
 export type MappingAssistIssue = {
-  key: string; label: string; path?: string; unconfigured: boolean; questions: string[]
-}
-export type MappingAssistSection = { key: MappingAssistArea; label: string; count?: number }
-
-/** 按完整字段词匹配，避免 total 命中 subtotal 或父路径误认子字段。 */
-function mentionsField(text: string, path: string): boolean {
-  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`(?<![\\w$.\\[\\]])${escaped}(?![\\w$\\[\\]]|\\.(?=[\\w$\\[]))`).test(text)
+  key: string; group: string; label: string; path?: string; unconfigured: boolean; questions: string[]
 }
 
-/** 同一返回字段的问题合并展示；无法唯一关联的问题原样保留，不能猜测目标。 */
+const TECHNICAL_FIELD_REFERENCE = /(?<![\w$])(?:response:response_body:|(?:request|external):(?:path|query|header|request_body|response_body):|(?:column|static):)([\w$-]+(?:\[\])*(?:\.[\w$-]+(?:\[\])*)*)/g
+
+/** 展示问题时优先使用字段说明，缺少说明时保留可读的字段路径。 */
+export function readableMappingQuestion(text: string, fieldNames?: ReadonlyMap<string, string>): string {
+  return text.replace(TECHNICAL_FIELD_REFERENCE, (reference, path: string) => fieldNames?.get(reference) || path)
+}
+
+const TARGET_LABELS: Record<string, string> = {
+  request: '接口入参', response: '返回字段', column: '数据表字段', external: '外部入参', static: '静态字段'
+}
+
+/** 直接按后端核验过的完整字段身份归组，问题正文仅用于展示。 */
 export function mappingAssistIssues(result: MappingAssistance): MappingAssistIssue[] {
   const fields = result.mapping?.fieldMappings.filter((item) => item.endpointField.side === 'response') || []
   const issues = new Map<string, MappingAssistIssue>()
   const requests = result.mapping?.externalApiBindings || []
-  for (const item of requests) if (!item.right) {
-    const key = `external:${item.externalField.section}:${item.externalField.path}`
-    issues.set(key, { key, path: `${item.externalField.section}.${item.externalField.path}`, label: `外部入参 ${key}`, unconfigured: true, questions: [] })
-  }
-  const leafCounts = new Map<string, number>()
-  for (const item of fields) {
-    const leaf = item.endpointField.path.split('.').pop()!
-    leafCounts.set(leaf, (leafCounts.get(leaf) || 0) + 1)
-  }
-  /** 为真实契约字段建立唯一审阅目标，不影响配置本身。 */
-  const fieldIssue = (item: typeof fields[number]): MappingAssistIssue => {
-    const key = apiDesignFieldKey(item.endpointField)
-    if (!issues.has(key)) issues.set(key, { key, path: item.endpointField.path,
-      label: `返回字段 ${item.endpointField.path}`, unconfigured: item.mappingType === 'unconfigured', questions: [] })
-    return issues.get(key)!
-  }
-  for (const item of fields) if (item.mappingType === 'unconfigured') fieldIssue(item)
-  for (const text of new Set(result.questions.map((question) => question.trim()).filter(Boolean))) {
-    // 外部入参只按完整标识关联，避免与应用返回的同名字段混淆。
-    const requestMatches = requests.filter((item) => mentionsField(text, `external:${item.externalField.section}:${item.externalField.path}`))
-    if (requestMatches.length) {
-      for (const item of requestMatches) {
-        const key = `external:${item.externalField.section}:${item.externalField.path}`
-        if (!issues.has(key)) issues.set(key, { key, path: `${item.externalField.section}.${item.externalField.path}`, label: `外部入参 ${key}`, unconfigured: !item.right, questions: [] })
-        issues.get(key)!.questions.push(text)
-      }
-      continue
-    }
-    // 模型可能省略 list[]. 等前缀；只有当前契约中叶名称唯一时才关联。
-    const matches = fields.filter((item) => {
-      const leaf = item.endpointField.path.split('.').pop()!
-      return mentionsField(text, item.endpointField.path) || leafCounts.get(leaf) === 1 && mentionsField(text, leaf)
-    })
-    if (matches.length) for (const item of matches) fieldIssue(item).questions.push(text)
-    else issues.set(`question:${text}`, { key: `question:${text}`, label: result.mapping ? '其他待明确信息' : '数据库操作待明确', unconfigured: false, questions: [text] })
-  }
-  return [...issues.values()].map((issue) => {
-    // 后端统一追加的“未配置”提醒与模型具体问题共用一项，保留所有具体业务问题。
-    const generic = issue.key.startsWith('external:') ? `外部入参 ${issue.key} 尚未配置，请补充取值或按需移除可选参数。` : `返回字段 ${issue.path} 尚未配置，请补充其取值规则。`
-    const questions = issue.questions.length > 1 ? issue.questions.filter((text) => text !== generic) : issue.questions
-    return { ...issue, questions: questions.length ? questions : ['取值尚未配置，请补充真实的取值或业务规则。'] }
-  })
-}
+  const fieldNames = new Map<string, string>()
+  const targets = new Map<string, MappingAssistIssue>()
 
-/** 按本轮识别出的操作生成审阅页签，仅显示可配置的区域。 */
-export function mappingAssistSections(result: MappingAssistance): MappingAssistSection[] {
-  const mapping = result.mapping
-  if (!mapping) return []
-  const sections: MappingAssistSection[] = []
-  if (mapping.externalApiBindings) sections.push({ key: 'request', label: '外部入参', count: mapping.externalApiBindings.length })
-  if (mapping.databaseOperation && mapping.databaseOperation !== 'create') sections.push({ key: 'query', label: '查询条件',
-    count: mapping.databaseQuery?.items.reduce((count, item) => count + (item.kind === 'group' ? item.items.length : 1), 0) || 0 })
-  if (mapping.databaseOperation === 'create' || mapping.databaseOperation === 'update') sections.push({ key: 'write', label: '写入字段', count: mapping.databaseWrites?.length || 0 })
-  sections.push({ key: 'return', label: '返回字段', count: mapping.fieldMappings.filter((item) => item.endpointField.side === 'response').length })
-  if (mapping.staticData === undefined) sections.push({ key: 'description', label: '映射说明' })
-  return sections
+  /** 建立已知字段的标题和取值状态，未配置的字段始终可见。 */
+  function registerTarget(key: string, path: string, description: string | undefined, group: string, unconfigured: boolean): void {
+    const issue: MappingAssistIssue = { key, path, group, label: `${group} ${path}`, unconfigured, questions: [] }
+    targets.set(key, issue)
+    fieldNames.set(key, description?.trim() || path)
+    if (unconfigured) issues.set(key, issue)
+  }
+
+  for (const { externalField: { section, path, description }, right } of requests) {
+    registerTarget(`external:${section}:${path}`, `${section}.${path}`, description, '外部入参', !right)
+  }
+  for (const { endpointField, mappingType } of fields) {
+    registerTarget(apiDesignFieldKey(endpointField), endpointField.path, endpointField.description, '返回字段', mappingType === 'unconfigured')
+  }
+  for (const { target, text } of result.questions) {
+    const key = target ?? `question:${text}`
+    const path = target?.replace(/^(?:response:response_body:|column:|static:)/, '').replace(/^(?:request|external):([^:]+):/, '$1.')
+    const group = !target ? '通用问题' : target.startsWith('external:response_body:') ? '外部响应字段' : TARGET_LABELS[target.split(':', 1)[0]] || '字段'
+    const label = path ? `${group} ${path}` : group
+    const issue: MappingAssistIssue = issues.get(key) ?? targets.get(key) ?? { key, group, label, path, unconfigured: false, questions: [] }
+    const readable = readableMappingQuestion(text, fieldNames)
+    if (!issue.questions.includes(readable)) issue.questions.push(readable)
+    issues.set(key, issue)
+  }
+  return [...issues.values()].map((issue) => issue.questions.length ? issue
+    : { ...issue, questions: ['请补充这个字段的取值或业务规则。'] })
 }

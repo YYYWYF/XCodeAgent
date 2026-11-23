@@ -8,7 +8,7 @@ from app.domain.api_design import (
     DraftFieldMapping, ExternalApiBinding, ExternalApiBindingDraft, ExternalSourceField,
     SourceMapping, UnconfiguredFieldMapping, ValueFieldMapping,
 )
-from app.domain.endpoint_design_assist import MappingCandidate, MappingModelResult
+from app.domain.endpoint_design_assist import MappingCandidate, MappingModelResult, MappingQuestion
 from app.domain.endpoint_design_assist_steps import DescriptionStepResult, ReturnStepResult, StepReturn
 from app.domain.endpoint_design_external_assist import ExternalGeneratedMapping, ExternalRequestStepResult
 from app.services.api_design import _endpoint_field_snapshot, _validate_external_api_bindings, _validate_field_mappings
@@ -93,7 +93,7 @@ def expand_external_step(result: Any, context: dict) -> MappingModelResult:
     """转换短引用并校验；缺少业务依据的固定值和规则保留未配置。"""
     if isinstance(result, DescriptionStepResult):
         return MappingModelResult(candidates=[MappingCandidate(area="description", key="implementationDescription",
-            value=result.description, reason="概括本轮已生成映射")], questions=result.questions)
+            value=result.description, reason="概括本轮已生成映射")])
     request_step = isinstance(result, ExternalRequestStepResult)
     if not request_step and not isinstance(result, ReturnStepResult):
         raise ValueError("外部映射步骤输出无效。")
@@ -107,7 +107,7 @@ def expand_external_step(result: Any, context: dict) -> MappingModelResult:
             reason=item.basis.strip() or f"直接引用 {'、'.join(item.inputs)}，请核对业务含义。")
         candidate.value = validate_external_candidate(candidate, context)
         if ("value" in item.model_fields_set or item.rule.strip()) and not item.basis.strip():
-            questions.append(f"{item.field} 的取值缺少契约或需求依据，请补充规则。")
+            questions.append(MappingQuestion(target=item.field, text="这个字段应如何取值？请补充明确的取值或业务规则。"))
         else:
             candidates.append(candidate)
     return MappingModelResult(candidates=candidates, questions=list(dict.fromkeys(questions))[:50])

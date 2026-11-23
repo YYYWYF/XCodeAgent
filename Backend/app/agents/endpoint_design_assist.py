@@ -7,13 +7,27 @@ from app.agents.endpoint_design_assist_prompts import build_assist_messages
 from app.agents.messages import _coerce_content_text
 from app.agents.model_factory import create_chat_model
 from app.config import Settings
-from app.domain.endpoint_design_assist_steps import ASSIST_STEP_MODELS, AssistStep
+from app.domain.endpoint_design_assist import MappingQuestion
+from app.domain.endpoint_design_assist_steps import ASSIST_STEP_MODELS, AssistStep, StepQuestions
 from app.services.endpoint_design_assist_steps import step_model_result
+from app.services.endpoint_design_assist_validation import field_key
 from app.domain.endpoint_design_external_assist import ExternalRequestStepResult
-from app.services.endpoint_design_external_assist_validation import expand_external_step
+from app.services.endpoint_design_external_assist_validation import expand_external_step, external_key
 from app.domain.endpoint_design_static_assist import MockStepResult
 from app.services.endpoint_design_static_assist_validation import expand_static_step
 from app.utils.model_output import extract_json_object
+
+
+def _verified_questions(questions: list[MappingQuestion], context: dict[str, Any]) -> list[MappingQuestion]:
+    """仅接受本轮真实字段的完整身份，其他问题保留正文并取消字段关联。"""
+    if not any(question.target is not None for question in questions):
+        return questions
+    targets = {field_key(item) for item in context.get("endpointFields", [])}
+    targets.update(f"column:{item['name']}" for item in context.get("columns", []))
+    targets.update(external_key(item) for item in context.get("externalFields", []))
+    targets.update(f"static:{item['path']}" for item in context.get("staticFields", []))
+    return [question if question.target is None or question.target in targets
+            else question.model_copy(update={"target": None}) for question in questions]
 
 
 async def invoke_mapping_assistant(
@@ -30,6 +44,8 @@ async def invoke_mapping_assistant(
     parsed = extract_json_object(_coerce_content_text(response.content))
     result_type = MockStepResult if step == "mock" else ExternalRequestStepResult if step == "request" else ASSIST_STEP_MODELS[step]
     result = result_type.model_validate(parsed)
+    if isinstance(result, StepQuestions):
+        result = result.model_copy(update={"questions": _verified_questions(result.questions, context)})
     if step in {"rule", "operation", "mock"}:
         return result.model_dump(mode="json", by_alias=True)
     if context.get("selection", {}).get("sourceType") == "static":

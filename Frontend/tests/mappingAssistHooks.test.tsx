@@ -4,22 +4,22 @@ import { act } from 'react-test-renderer'
 import { withMappingHarness } from './mappingAssistTestHarness'
 import { assistRequest } from './mappingAssistModel.test'
 
-/** 首次需求不能由字段回答代替，空白校验在真实 hook 发送请求前执行。 */
-test('需求说明必填，后续补充与主需求分开发送', async () => {
+/** 首次补充可以留空，后续回答仍按原结构独立发送。 */
+test('没有补充信息也可生成，后续回答可以独立提交', async () => {
   await withMappingHarness(async (h, server) => {
+    await act(async () => { await h.state().generate() })
+    assert.equal(server.requests[0].input.instruction, '')
+    assert.equal(server.requests[0].input.clarification, '')
     await act(async () => {
+      h.state().setInstruction(' \n\t ')
       h.state().setClarification('查询按名称排序')
       h.state().setAnswer('response:response_body:total', '返回字段 total', '按筛选条件统计')
+      await h.state().generate()
     })
-    for (const value of ['', ' \n\t ']) {
-      await act(async () => { h.state().setInstruction(value); await h.state().generate() })
-      assert.equal(server.requests.length, 0)
-      assert.match(h.state().error, /请先填写需求说明/)
-      assert.equal(h.state().phase, 'idle')
-    }
+    assert.equal(server.requests[1].input.instruction, '')
+    assert.equal(server.requests[1].input.clarification, '查询按名称排序\n返回字段 total：按筛选条件统计')
     await act(async () => { h.state().setInstruction(' 查询商品列表 '); await h.state().generate() })
-    assert.equal(server.requests[0].input.instruction, '查询商品列表')
-    assert.equal(server.requests[0].input.clarification, '查询按名称排序\n返回字段 total：按筛选条件统计')
+    assert.equal(server.requests[2].input.instruction, '查询商品列表')
   })
 })
 
@@ -181,7 +181,15 @@ test('真实 hook 支持未选操作生成、歧义阻断和操作整体替换�
     await act(async () => { await h.state().apply() })
     assert.equal(h.edits.length, 0)
     server.operation = 'create'
-    await act(async () => { h.state().setClarification('新增商品'); await h.state().generate() })
+    await act(async () => { h.state().show(); h.state().setClarification('新增商品'); await h.state().generate() })
+    assert.equal(h.state().previewDraft?.databaseOperation, 'create')
+    await act(async () => h.state().close())
+    assert.equal(h.state().previewDraft, undefined)
+    assert.equal(h.edits.length, 0)
+    await act(async () => h.state().show())
+    assert.equal(h.state().result, undefined)
+    assert.equal(h.state().clarification, '新增商品')
+    await act(async () => { await h.state().generate() })
     assert.equal(h.state().previewDraft?.databaseOperation, 'create')
     assert.equal(h.state().canApply, true)
     await act(async () => { await h.state().apply() })

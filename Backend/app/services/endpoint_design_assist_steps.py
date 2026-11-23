@@ -2,10 +2,10 @@
 
 from typing import Any
 
-from app.domain.endpoint_design_assist import MappingCandidate, MappingModelResult
+from app.domain.endpoint_design_assist import MappingCandidate, MappingModelResult, MappingQuestion
 from app.domain.endpoint_design_assist_steps import (
     AssistStep, DescriptionStepResult, QueryStepResult, ReturnStepResult, StepCondition,
-    StepQueryGroup, StepReturn, StepValue, WriteStepResult,
+    StepQueryGroup, StepQuestions, StepReturn, StepValue, WriteStepResult,
 )
 from app.services.api_design import _endpoint_field_snapshot
 from app.services.api_design_values import value_rule_summary
@@ -123,7 +123,7 @@ def step_model_result(result: Any, context: dict[str, Any]) -> MappingModelResul
     # 模型转换只依赖权威字段与本轮操作；这里不需要、也不接收旧草稿。
     merge_candidates({"databaseOperation": context["databaseOperation"], "databaseWrites": [], "fieldMappings": []},
                      expand_step_result(result, context), context)
-    questions = list(result.questions)
+    questions = list(result.questions) if isinstance(result, StepQuestions) else []
 
     def unsupported(item: StepValue) -> bool:
         """识别需要明确依据的取值或自增列写入，不把数据库默认值当业务输入。"""
@@ -134,19 +134,19 @@ def step_model_result(result: Any, context: dict[str, Any]) -> MappingModelResul
     if isinstance(result, QueryStepResult) and result.query:
         rows = [child for item in result.query.items for child in (item.items if isinstance(item, StepQueryGroup) else [item])]
         if any(unsupported(item) for item in rows):
-            questions.append("查询条件包含没有契约或用户要求依据的固定值或业务处理，请明确完整条件；本组尚未配置。")
+            questions.append(MappingQuestion(text="查询条件包含没有契约或用户要求依据的固定值或业务处理，请明确完整条件。"))
             result = result.model_copy(update={"query": None})
     elif isinstance(result, (WriteStepResult, ReturnStepResult)):
         name = "writes" if isinstance(result, WriteStepResult) else "returns"
         rows = getattr(result, name)
         for item in rows:
             if unsupported(item):
-                target = item.column if name == "writes" else item.field
-                questions.append(f"{target} 的取值缺少契约或用户要求中的明确依据，尚未配置；请补充规则。")
+                target = f"column:{item.column}" if name == "writes" else item.field
+                questions.append(MappingQuestion(target=target, text="这个字段应如何取值？请补充明确的取值或业务规则。"))
         result = result.model_copy(update={name: [item for item in rows if not unsupported(item)]})
     questions = list(dict.fromkeys(questions))
     if len(questions) > 50:
-        questions = [*questions[:49], f"另有 {len(questions) - 49} 项需要明确依据，请核对完整预览中的未配置字段。"]
+        questions = [*questions[:49], MappingQuestion(text=f"另有 {len(questions) - 49} 项需要明确依据，请核对完整预览中的未配置字段。")]
     return MappingModelResult(candidates=expand_step_result(result, context), questions=questions)
 
 
@@ -175,7 +175,7 @@ def _query_summary(query: dict[str, Any]) -> str:
     return f" {query['join'].upper()} ".join(parts)
 
 
-def generated_summary(mapping: dict[str, Any], questions: list[str], *, completed: list[str] | None = None) -> str:
+def generated_summary(mapping: dict[str, Any], questions: list[MappingQuestion], *, completed: list[str] | None = None) -> str:
     """向后续步骤提供本轮已完成区域的可读摘要，避免再传完整 JSON。"""
     areas = completed if completed is not None else ["query", "write", "return"]
     lines = ["查询条件：" + (_query_summary(mapping["databaseQuery"]) if mapping.get("databaseQuery") else "未设置")] if "query" in areas else []
@@ -194,5 +194,5 @@ def generated_summary(mapping: dict[str, Any], questions: list[str], *, complete
             lines.append(f"返回 {target} ← {', '.join(sources)}；{rule}")
         else:
             lines.append(f"返回 {target} ← " + (value_rule_summary(item["right"]) if item.get("right") else "未配置"))
-    lines.extend(f"待明确：{question}" for question in questions)
+    lines.extend(f"待明确 {question.target or '通用'}：{question.text}" for question in questions)
     return "\n".join(lines)

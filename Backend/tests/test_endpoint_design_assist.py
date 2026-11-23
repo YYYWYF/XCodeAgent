@@ -21,14 +21,15 @@ def fixture(workspace: str) -> tuple[dict, dict, dict]:
     request = {"workspaceRoot": workspace, "apiContractId": "products", "endpointId": "detail",
                "technicalPlanHash": "a" * 64, "selection": selection, "draft": draft}
     preparation = {"technicalPlanHash": "a" * 64, "artifactRevision": None,
-                   "payload": {"endpoint": {"method": "GET", "path": "/product/{id}"}, "endpointFields": [parameter, response]}}
+                   "payload": {"endpoint": {"method": "GET", "path": "/product/{id}", "summary": "查询指定商品的售价。"},
+                               "endpointFields": [parameter, response]}}
     metadata = {"schema": "shop", "columns": [{"name": "price", "type": "decimal", "description": "售价"},
                                                  {"name": "id", "type": "int", "description": "商品 ID"}]}
     return request, preparation, metadata
 
 
 def generation_request(request: dict, **values) -> GenerateMappingRequest:
-    """为生成用例显式提供主需求，不把生成输入混入替换或规则请求。"""
+    """为需要的生成用例提供补充信息，不把生成输入混入替换或规则请求。"""
     return GenerateMappingRequest(**{**request, "instruction": "按接口约定处理当前商品", **values})
 
 
@@ -48,7 +49,7 @@ def price_candidate(request: dict, preparation: dict) -> dict:
                       "sourceFields": [{**request["selection"], "column": "price", "type": "decimal", "usage": "read", "description": "售价"}], "processingType": "direct"}}
 
 
-def step_model(candidates: list[dict] | None = None, questions: list[str] | None = None, *, operation: str = "read") -> AsyncMock:
+def step_model(candidates: list[dict] | None = None, questions: list[dict] | None = None, *, operation: str = "read") -> AsyncMock:
     """模拟分步调用已完成转换的结果，各步骤只返回自身区域。"""
     def result(_context, *, step, **_kwargs):
         """按步骤返回候选，保留服务层范围与组合校验。"""
@@ -68,7 +69,7 @@ class EndpointDesignAssistTests(unittest.IsolatedAsyncioTestCase):
         p1, p2, p3 = patches(preparation, metadata)
         with p1, p2, p3, patch("app.services.endpoint_design_assist.invoke_mapping_assistant", new=AsyncMock(side_effect=[
             {"operation": "read", "reason": "查询商品", "questions": []},
-            {"candidates": [], "questions": ["请核对查询范围"]}, ValueError("返回步骤失败")])) as model:
+            {"candidates": [], "questions": [{"target": None, "text": "请核对查询范围"}]}, ValueError("返回步骤失败")])) as model:
             with self.assertRaises(MappingGenerationFailure) as caught:
                 await generate_mapping(generation_request(request), AsyncMock())
             failure = caught.exception.failure
@@ -80,7 +81,8 @@ class EndpointDesignAssistTests(unittest.IsolatedAsyncioTestCase):
             result = await generate_mapping(generation_request(request, retryToken=failure["retryToken"]), AsyncMock())
             self.assertEqual([call.kwargs["step"] for call in model.await_args_list], ["return", "description"])
             self.assertIn("请核对查询范围", model.await_args_list[0].args[0]["generatedSummary"])
-            self.assertIn("请核对查询范围", result["questions"])
+            self.assertNotIn("请核对查询范围", model.await_args_list[1].args[0]["generatedSummary"])
+            self.assertEqual(result["questions"], [{"target": None, "text": "请核对查询范围"}])
             self.assertEqual(len(result["reviews"]), 1)
             with self.assertRaisesRegex(ValueError, "过期"):
                 await generate_mapping(generation_request(request, retryToken=failure["retryToken"]), AsyncMock())
@@ -129,10 +131,11 @@ class EndpointDesignAssistTests(unittest.IsolatedAsyncioTestCase):
             request, preparation, metadata = fixture(workspace)
             request["draft"]["fieldMappings"] = [price_candidate(request, preparation)["value"]]
             p1, p2, p3 = patches(preparation, metadata)
-            with p1, p2, p3, patch("app.services.endpoint_design_assist.invoke_mapping_assistant", new=step_model(questions=["请明确价格单位"])):
+            question = {"target": "response:response_body:price", "text": "请明确价格单位"}
+            with p1, p2, p3, patch("app.services.endpoint_design_assist.invoke_mapping_assistant", new=step_model(questions=[question])):
                 result = await generate_mapping(generation_request(request), AsyncMock())
                 self.assertEqual(result["mapping"]["fieldMappings"][0]["mappingType"], "unconfigured")
-                self.assertTrue(any("price" in question for question in result["questions"]))
+                self.assertEqual(result["questions"], [question])
                 applied = replace_mapping(ReplaceMappingRequest(**request, baseline=result["baseline"], mapping=result["mapping"]))
                 self.assertEqual(applied["draft"]["fieldMappings"][0]["mappingType"], "unconfigured")
 
@@ -234,8 +237,8 @@ class EndpointDesignAssistTests(unittest.IsolatedAsyncioTestCase):
             p1, p2, p3 = patches(preparation, metadata)
             with p1, p2, p3, patch("app.services.endpoint_design_assist.invoke_mapping_assistant", new=step_model(operation="update")):
                 result = await generate_mapping(generation_request(request), AsyncMock())
-                self.assertTrue(any("查询条件" in q for q in result["questions"]))
-                self.assertTrue(any("写入" in q for q in result["questions"]))
+                self.assertTrue(any("查询条件" in q["text"] for q in result["questions"]))
+                self.assertTrue(any("写入" in q["text"] for q in result["questions"]))
                 applied = replace_mapping(ReplaceMappingRequest(**request, baseline=result["baseline"], mapping=result["mapping"]))
                 self.assertEqual(applied["draft"]["databaseWrites"], [])
 
@@ -257,14 +260,17 @@ class EndpointDesignAssistTests(unittest.IsolatedAsyncioTestCase):
                     await refine_rule(RefineRuleRequest(**args), AsyncMock())
 
     async def test_model_uses_small_step_output_without_schemas(self):
-        """实际调用只要求当前步骤的简洁输出，规则输出拒绝额外依赖。"""
+        """实际调用只要求当前步骤的简洁输出，映射说明拒绝问题，规则拒绝额外依赖。"""
         from types import SimpleNamespace
         from app.agents.endpoint_design_assist import invoke_mapping_assistant
         request, preparation, metadata = fixture("E:/test")
         context = {"endpoint": preparation["payload"]["endpoint"], "endpointFields": preparation["payload"]["endpointFields"],
                    "columns": metadata["columns"], "selection": request["selection"], "databaseOperation": "read",
                    "tableDdl": None, "instruction": "根据商品 ID 查询售价"}
-        model = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content='{"returns":[{"field":"response:response_body:price","inputs":["column:price"]}],"questions":[]}')))
+        model = SimpleNamespace(ainvoke=AsyncMock(return_value=SimpleNamespace(content=(
+            '{"returns":[{"field":"response:response_body:price","inputs":["column:price"]}],'
+            '"questions":[{"target":"response:response_body:price","text":"售价的单位是什么？"},'
+            '{"target":"response:response_body:missing","text":"需要提供其他信息吗？"}]}'))))
         with patch("app.agents.endpoint_design_assist.Settings.from_env", return_value=object()), patch("app.agents.endpoint_design_assist.create_chat_model", return_value=model):
             result = await invoke_mapping_assistant(context, step="return", thread_id="assist-thread")
             prompt = model.ainvoke.call_args.args[0][0].content
@@ -272,6 +278,15 @@ class EndpointDesignAssistTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("sourceFields", prompt)
             self.assertIn('"returns"', prompt)
             self.assertEqual(result["candidates"][0]["value"]["sourceFields"][0]["type"], "decimal")
+            self.assertEqual(result["questions"], [{"target": "response:response_body:price", "text": "售价的单位是什么？"},
+                                                   {"target": None, "text": "需要提供其他信息吗？"}])
+            model.ainvoke.return_value.content = '{"description":"查询商品售价。"}'
+            description = await invoke_mapping_assistant(context, step="description")
+            self.assertEqual(description["candidates"][0]["value"], "查询商品售价。")
+            self.assertEqual(description["questions"], [])
+            model.ainvoke.return_value.content = '{"description":"查询商品售价。","questions":[]}'
+            with self.assertRaisesRegex(ValueError, "questions"):
+                await invoke_mapping_assistant(context, step="description")
             model.ainvoke.return_value.content = '{"description":"规则","dependencies":[]}'
             with self.assertRaises(ValueError):
                 await invoke_mapping_assistant({"target": {"area": "return", "key": "price"}, "dependencies": [], "description": "价格"}, step="rule")

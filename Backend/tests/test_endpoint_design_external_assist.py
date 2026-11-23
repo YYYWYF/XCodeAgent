@@ -19,7 +19,7 @@ def fixture(workspace="E:/external-test"):
     fields = [dict(side="request", location="query", path="keyword", type="string", required=False, description="关键词"),
               dict(side="response", location="response_body", path="name", type="string", required=True, description="商品名")]
     preparation = dict(technicalPlanHash="a" * 64, artifactRevision=None,
-                       payload=dict(endpoint=dict(name="商品查询", method="GET", path="/products"), endpointFields=fields))
+                       payload=dict(endpoint=dict(name="商品查询", method="GET", path="/products", summary="查询商品列表。"), endpointFields=fields))
     metadata = dict(operation=dict(name="供应商商品", method="GET", path="/search", description="搜索商品", requestSample="SAMPLE_SECRET"),
                     fields=[dict(section="query", path="keyword", type="string", required=True, description="关键词"),
                             dict(section="response_body", path="name", type="string", required=True, description="名称")],
@@ -115,7 +115,8 @@ class ExternalAssistTests(unittest.TestCase):
             text = messages[1].content
             for secret in ("CONNECTION_SECRET", "SAMPLE_SECRET", "OLD_DRAFT_SECRET"):
                 self.assertNotIn(secret, str(messages))
-            self.assertIn("【补充说明】\n名称直接返回", text)
+            self.assertIn('接口说明："查询商品列表。"', text)
+            self.assertIn("【补充信息】\n查询商品\n按关键词匹配\n\n名称直接返回", text)
             self.assertNotIn("数据库操作", text)
             if step == "description":
                 self.assertNotIn("【可用输入】", text)
@@ -146,11 +147,11 @@ class ExternalAssistTests(unittest.TestCase):
                     replace_external_mapping(replacement)
 
     def test_strict_request_boundaries(self):
-        """空需求、未知参数、来源切换和数据库结果不能混入外部动作。"""
+        """外部映射允许空补充，仍拒绝未知参数、来源切换和数据库结果。"""
         request, preparation, metadata = fixture()
-        for extra in (dict(instruction=" "), dict(instruction="查询", unexpected=True)):
-            with self.assertRaises(ValueError):
-                ExternalGenerateRequest(**request, **extra)
+        self.assertEqual(ExternalGenerateRequest(**request, instruction=" ").instruction, "")
+        with self.assertRaises(ValueError):
+            ExternalGenerateRequest(**request, unexpected=True)
         p1, p2 = patches(preparation, metadata)
         with p1, p2:
             request["draft"]["databaseOperation"] = "read"

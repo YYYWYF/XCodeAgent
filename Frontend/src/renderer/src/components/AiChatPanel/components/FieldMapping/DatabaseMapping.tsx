@@ -12,6 +12,7 @@ import { mappingCandidates } from './model'
 import { DATABASE_OPERATION_LABELS } from './model'
 import DatabaseQueryEditor from './DatabaseQueryEditor'
 import DatabaseWriteEditor from './DatabaseWriteEditor'
+import MappingAssistReview from './MappingAssistReview'
 import type { MappingAssistArea } from '../../../../typings/endpointDesignAssist'
 
 const CRUD_OPTIONS = Object.entries(DATABASE_OPERATION_LABELS).map(([value, label]) => ({ value, label }))
@@ -78,7 +79,8 @@ export default function DatabaseMapping({ fields, selection, metadata, draft, op
       expandSignal={applied?.areas.includes('description') ? applied.serial : undefined} />
     {operation && operation !== 'create' ? <section className={`binding-section database-query-section${collapsed.query ? ' is-collapsed' : ''}`}>{heading('query', '查询条件')}
       {!collapsed.query ? <div className="database-section-content"><DatabaseQueryEditor selection={selection} columns={columns} fields={fields} query={draft.databaseQuery}
-        editable={editable} readOnly={readOnly} busy={busy} error={errors.__databaseQuery} onChange={(databaseQuery) => onChange({ ...draft, databaseQuery })} /></div> : null}</section> : null}
+        editable={editable} readOnly={readOnly} busy={busy} error={errors.__databaseQuery} onChange={(databaseQuery) => onChange({ ...draft, databaseQuery })} />
+        {readOnly && <MappingAssistReview area="query" target="databaseQuery" />}</div> : null}</section> : null}
     {operation === 'create' || operation === 'update' ? <section className={`binding-section database-write-section${collapsed.write ? ' is-collapsed' : ''}`}>{heading('write', '写入字段')}
       {!collapsed.write ? <div className="database-section-content"><DatabaseWriteEditor selection={selection} columns={columns} fields={fields}
         writes={draft.databaseWrites || []} editable={editable} readOnly={readOnly} busy={busy} errors={errors}

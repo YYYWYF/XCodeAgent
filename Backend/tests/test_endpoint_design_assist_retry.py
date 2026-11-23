@@ -4,7 +4,7 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from app.domain.endpoint_design_assist import MappingCandidate
+from app.domain.endpoint_design_assist import MappingCandidate, MappingQuestion
 from app.domain.endpoint_design_assist_steps import OperationStepResult
 from app.services.endpoint_design_assist import load_assist_context, replace_mapping
 from app.services.endpoint_design_assist_retry import generation_identity, save_checkpoint, take_checkpoint
@@ -27,7 +27,8 @@ class EndpointDesignAssistRetryTests(unittest.TestCase):
         """后续候选变动不污染缓存；同一凭据不能重复启动。"""
         request, preparation, _ = fixture("E:/test")
         items = [MappingCandidate(**price_candidate(request, preparation))]
-        questions = ["请核对金额单位"]
+        question = MappingQuestion(target="response:response_body:price", text="请核对金额单位")
+        questions = [question]
         decision = OperationStepResult(operation="update", reason="按契约修改商品")
         token = save_checkpoint("identity", 2, items, questions, decision)
         decision.operation = "delete"
@@ -36,7 +37,7 @@ class EndpointDesignAssistRetryTests(unittest.TestCase):
         cached = take_checkpoint(token, "identity")
         self.assertEqual(cached.step_index, 2)
         self.assertEqual(cached.candidates[0].value["sourceFields"][0]["column"], "price")
-        self.assertEqual(cached.questions, ["请核对金额单位"])
+        self.assertEqual(cached.questions, [question])
         self.assertEqual(cached.operation.operation, "update")
         with self.assertRaisesRegex(ValueError, "过期"):
             take_checkpoint(token, "identity")

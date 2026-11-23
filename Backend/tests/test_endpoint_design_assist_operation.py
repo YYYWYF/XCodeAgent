@@ -55,7 +55,7 @@ class EndpointDesignAssistOperationTests(unittest.IsolatedAsyncioTestCase):
         """软删除含义不明确时交付问题，不返回可应用的映射。"""
         request, preparation, metadata = fixture("E:/test")
         model = SimpleNamespace(ainvoke=AsyncMock(return_value=answer(
-            '{"operation":null,"reason":"未约定删除方式","questions":["物理删除还是软删除？"]}')))
+            '{"operation":null,"reason":"未约定删除方式","questions":[{"target":null,"text":"物理删除还是软删除？"}]}')))
         p1, p2, p3 = patches(preparation, metadata)
         with p1, p2, p3, patch("app.agents.endpoint_design_assist.Settings.from_env", return_value=object()), patch(
             "app.agents.endpoint_design_assist.create_chat_model", return_value=model,
@@ -64,7 +64,7 @@ class EndpointDesignAssistOperationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["mapping"])
         self.assertIsNone(result["operation"])
         self.assertEqual(model.ainvoke.await_count, 1)
-        self.assertEqual(result["questions"], ["物理删除还是软删除？"])
+        self.assertEqual(result["questions"], [{"target": None, "text": "物理删除还是软删除？"}])
 
     async def test_retry_reuses_verified_operation_and_query(self):
         """写入失败重试保留新识别操作，从失败步骤继续，不重用旧草稿操作。"""

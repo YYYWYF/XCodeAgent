@@ -159,8 +159,17 @@ async function runEndpointDesignAction(
 export async function requestMappingAssist(action: MappingAssistAction, request: MappingAssistRequest,
   extra: Record<string, unknown>, options: { signal?: AbortSignal; onProgress?: (progress: MappingAssistProgress) => void } = {}): Promise<EndpointDesignsPayload> {
   const { workspaceRoot, apiContractId, endpointId, ...input } = request
-  return runEndpointDesignAction(action, workspaceRoot, apiContractId, endpointId, { ...input, ...extra },
+  const result = await runEndpointDesignAction(action, workspaceRoot, apiContractId, endpointId, { ...input, ...extra },
     action === 'generate_mock_data' || action === 'apply_mock_data' ? '请求静态 Mock 数据辅助。' : '请求字段映射 AI 辅助。', options)
+  // 归组只依赖结构化字段关联，拒绝无法按当前协议展示的问题。
+  if (action === 'generate_mapping' && result.assistance) {
+    const { questions } = result.assistance
+    if (!Array.isArray(questions) || questions.some((question) => !question || typeof question.text !== 'string'
+      || !question.text.trim() || (question.target !== null && typeof question.target !== 'string'))) {
+      throw new Error('AI 映射返回的待明确问题格式无效，请重新生成。')
+    }
+  }
+  return result
 }
 
 /** 持久化未确认草稿，既不生成正式产物也不推进主工作流。 */

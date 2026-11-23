@@ -11,7 +11,7 @@ from app.domain.api_design import (
     BusinessDescriptionFieldMapping, DatabaseQuery, DatabaseWriteMapping,
     DraftFieldMapping, SourceMapping, UnconfiguredFieldMapping,
 )
-from app.domain.endpoint_design_assist import GeneratedMapping, MappingCandidate
+from app.domain.endpoint_design_assist import GeneratedMapping, MappingCandidate, MappingQuestion
 from app.services.api_design import (
     _endpoint_field_snapshot, _query_conditions, _validate_database_condition,
     _validate_database_writes, _validate_field_mappings, _validate_query_references,
@@ -199,12 +199,11 @@ def validate_generated_mapping(mapping: GeneratedMapping, context: dict[str, Any
     return complete_mapping(candidates, context)
 
 
-def incomplete_mapping_questions(mapping: dict[str, Any], operation: str) -> list[str]:
-    """对未配置内容补充可见提示，避免静默沿用旧配置。"""
-    questions = [f"返回字段 {item['endpointField']['path']} 尚未配置，请补充其取值规则。"
-                 for item in mapping["fieldMappings"] if item["mappingType"] == "unconfigured" and item["endpointField"]["side"] == "response"]
+def incomplete_mapping_questions(mapping: dict[str, Any], operation: str) -> list[MappingQuestion]:
+    """提示缺少的整段条件或写入配置，单字段状态由正式映射承载。"""
+    questions = []
     if operation in {"update", "delete"} and not (mapping.get("databaseQuery") or {}).get("items"):
-        questions.append("请明确修改或删除的查询条件；当前尚未配置，保存确认前必须补全。")
+        questions.append(MappingQuestion(text="请明确修改或删除的查询条件，保存确认前必须补全。"))
     if operation in {"create", "update"} and not mapping["databaseWrites"]:
-        questions.append("请明确写入字段及取值；当前尚未配置，保存确认前必须补全。")
+        questions.append(MappingQuestion(text="请明确写入字段及取值，保存确认前必须补全。"))
     return questions
