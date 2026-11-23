@@ -8,16 +8,20 @@ import './ServiceLogContent.less'
 type Props = {
   content: string
   label: string
+  emptyMessage?: string
+  searchLabel?: string
   following: boolean
   expanded: boolean
   onPauseFollowing: () => void
   onCopy: (text: string) => Promise<void>
 }
 
-/** 展示可选择的启动日志，并在右键菜单中复制选区或当前端的全部日志。 */
+/** 展示可选取的日志，并在右键菜单中复制选区或当前内容。 */
 export default function ServiceLogContent({
   content,
   label,
+  emptyMessage = '本次启动暂无日志',
+  searchLabel = '搜索启动日志',
   following,
   expanded,
   onPauseFollowing,
@@ -70,7 +74,7 @@ export default function ServiceLogContent({
           {search.query ? (matchCount ? `${matchCount} 处匹配` : '无匹配结果') : ''}
         </span>
         <Input.Search
-          aria-label="搜索启动日志"
+          aria-label={searchLabel}
           placeholder="搜索日志"
           size="small"
           allowClear
@@ -85,7 +89,7 @@ export default function ServiceLogContent({
       </div>
       {!content ? (
         <div className="preview-log-empty">
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本次启动暂无日志" />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyMessage} />
         </div>
       ) : (
         <Dropdown

@@ -103,6 +103,7 @@ import DocPanel from './components/DocPanel'
 import SourcePanel from './components/SourcePanel'
 import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
+import InternalApiDebugPanel from './components/InternalApiDebug'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import AgentErrorCard from '../AgentErrorCard'
@@ -1201,6 +1202,8 @@ export default function AiChatPanel({
   // 再带上 lifecycle iterationId（每次迭代都是新 randomUUID）才能区分"同一分支的不同轮"，
   // 否则新迭代会继承上一轮的"已进入开发"标记。
   const iterationToken = String(applicationLifecycle?.initialization?.iterationId || '')
+  const internalDebugAllowed = Boolean(application.workspaceRoot && !versionReadOnly &&
+    !isApplicationPlanningPhase && lifecycleReadyForWorkbench)
   const [enterDevConfirmed, setEnterDevConfirmed] = useState(() =>
     hasApplicationEnteredDevelopment(application.id, iterationScopeId, iterationToken)
   )
@@ -1270,6 +1273,14 @@ export default function AiChatPanel({
     setRightPanel,
     splitDragging
   } = useAssistantPreviewLayout()
+  const internalDebugVisible = internalDebugAllowed && rightPanel?.type === 'internal-api-debug' &&
+    rightPanelLayout !== 'hidden'
+  const internalDebugScope = JSON.stringify([application.workspaceRoot, iterationToken])
+  const [internalDebugLogsScope, setInternalDebugLogsScope] = useState<string>()
+  const internalDebugLogsOpen = internalDebugLogsScope === internalDebugScope
+  useEffect(() => {
+    if (!internalDebugAllowed && rightPanel?.type === 'internal-api-debug') setRightPanel({ type: 'outline' })
+  }, [internalDebugAllowed, rightPanel?.type, setRightPanel])
   /**
    * 需要展示右侧内容时确保它可见：隐藏态切回分栏；已是分栏/全宽则保持用户当前布局，
    * 不把用户特意选的「全宽」降级回分栏。
@@ -1752,6 +1763,8 @@ export default function AiChatPanel({
     workspace: application.workspaceRoot || '',
     activeSession,
     watchForAcceptance: activeWorkbenchPhase === 'acceptance' && !versionReadOnly,
+    watchForInternalDebug: internalDebugVisible,
+    includeInternalDebugLogs: internalDebugVisible && internalDebugLogsOpen,
     localBlocked:
       Object.values(sessionExecutions).some(
         (entry) => entry.identity.workspaceRoot === application.workspaceRoot
@@ -3941,6 +3954,7 @@ export default function AiChatPanel({
       }))
     : [
         { key: 'outline', label: '应用产物', available: true },
+        ...(internalDebugAllowed ? [{ key: 'internal-api-debug' as const, label: '接口调试', available: true }] : []),
         { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
         { key: 'source', label: '代码', available: Boolean(application.workspaceRoot) },
         { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
@@ -3965,17 +3979,19 @@ export default function AiChatPanel({
       designDocs?.find((doc) => doc.available)?.key ||
       designDocs?.[0]?.key ||
       'requirement-spec'
-    : rightPanel?.type === 'field-mapping'
-      ? 'field-mapping'
-      : rightPanel?.type === 'outline'
-        ? 'outline'
-        : rightPanel?.type === 'preview'
-          ? 'preview'
-          : rightPanel?.type === 'source'
-            ? 'source'
-            : rightPanel?.type === 'stage-output' && hasOwnedPendingPlan
-              ? 'stage-output'
-              : 'outline'
+    : rightPanel?.type === 'internal-api-debug' && internalDebugAllowed
+      ? 'internal-api-debug'
+      : rightPanel?.type === 'field-mapping'
+        ? 'field-mapping'
+        : rightPanel?.type === 'outline'
+          ? 'outline'
+          : rightPanel?.type === 'preview'
+            ? 'preview'
+            : rightPanel?.type === 'source'
+              ? 'source'
+              : rightPanel?.type === 'stage-output' && hasOwnedPendingPlan
+                ? 'stage-output'
+                : 'outline'
   const openWorkspaceTab = useCallback(
     (key: WorkspaceTabKey) => {
       if (isApplicationPlanningPhase) {
@@ -3987,6 +4003,8 @@ export default function AiChatPanel({
         setRightPanel({ type: 'field-mapping' })
       } else if (key === 'outline') {
         setRightPanel({ type: 'outline' })
+      } else if (key === 'internal-api-debug' && internalDebugAllowed) {
+        setRightPanel({ type: 'internal-api-debug' })
       } else if (key === 'preview') {
         setAcceptancePreviewRequest(undefined)
         setRightPanel({ type: 'preview' })
@@ -3994,7 +4012,7 @@ export default function AiChatPanel({
         setRightPanel({ type: 'source' })
       }
     },
-    [designDocs, generatingDesignDocKey, isApplicationPlanningPhase, setRightPanel]
+    [designDocs, generatingDesignDocKey, internalDebugAllowed, isApplicationPlanningPhase, setRightPanel]
   )
 
   // 离开开发会话后退出旧差异，避免切回分栏时重新出现其他会话的文件。
@@ -6086,6 +6104,26 @@ export default function AiChatPanel({
           </div>
         </div>
       ) : null}
+
+      {showRightPanel && internalDebugVisible && application.workspaceRoot && (
+        <div className={cx('embedded-preview-pane', 'workspace-pane')}>
+          <RightPanelTabs tabs={displayedWorkspaceTabs} active={displayedWorkspaceTab}
+            onChange={openDisplayedWorkspaceTab} onClose={() => {
+              setRightPanel(undefined)
+              setRightPanelLayout('hidden')
+            }} />
+          <div className={cx('workspace-content')}>
+            <InternalApiDebugPanel key={internalDebugScope}
+              workspaceRoot={application.workspaceRoot} iterationId={iterationToken}
+              contracts={developmentPlanningApiContracts} artifacts={applicationLifecycle?.developmentArtifacts}
+              catalogLoading={planningCatalogStatus?.loading}
+              catalogError={planningCatalogStatus?.error}
+              onCatalogRetry={onPlanningCatalogRetry}
+              control={previewRuntime.control} logsOpen={internalDebugLogsOpen}
+              onLogsOpenChange={(open) => setInternalDebugLogsScope(open ? internalDebugScope : undefined)} />
+          </div>
+        </div>
+      )}
 
       {showRightPanel && rightPanel?.type === 'outline' && (
         <div className={cx('embedded-preview-pane', 'workspace-pane')}>

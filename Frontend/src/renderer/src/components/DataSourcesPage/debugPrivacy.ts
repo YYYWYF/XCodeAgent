@@ -16,7 +16,7 @@ function containsCredential(value: string, credentials: readonly string[]): bool
 }
 
 /** 收集已知凭据，包括敏感字段中的值，避免回显到其他字段或正文时被保存。 */
-export function debugCredentials(draft: Draft, authValues: readonly string[] = [], response?: DebugResponse): string[] {
+export function debugCredentials(draft: Draft<string>, authValues: readonly string[] = [], response?: DebugResponse): string[] {
   const values = new Set(authValues.filter(Boolean))
   /** 也识别标准鉴权头中去掉方案前缀后的值。 */
   const remember = (name: string, value: string): void => {
@@ -96,7 +96,7 @@ export function publicDebugText(text: string, credentials: readonly string[]): s
 }
 
 /** 保存调试草稿时保留普通请求内容，鉴权、敏感值和未命名参数值不写入。 */
-export function publicDraft(draft: Draft, credentials: readonly string[] = debugCredentials(draft)): Draft {
+export function publicDraft<M extends string>(draft: Draft<M>, credentials: readonly string[] = debugCredentials(draft)): Draft<M> {
   /** 过滤各位置的参数值，仅写当前字段定义。 */
   const clean = (rows: Row[]): Row[] => rows.map(({ name, value, enabled, type }) => ({
     name: containsCredential(name, credentials) ? '' : name, enabled, type,

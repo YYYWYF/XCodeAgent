@@ -1,0 +1,209 @@
+.internal-api-debug {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  container-type: inline-size;
+
+  &__workspace {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+
+    &[hidden] { display: none; }
+  }
+
+  &__service-status {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin-inline-start: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    color: var(--wb-text-secondary);
+
+    &.is-accent { color: var(--wb-accent); }
+    &.is-running { color: var(--wb-code-add-text); }
+    &.is-danger { color: var(--wb-code-delete-text); }
+  }
+
+  &__scroll {
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 14px 16px;
+    scrollbar-gutter: stable;
+  }
+
+  &__request-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+    align-items: center;
+    margin: 0 0 8px;
+  }
+
+  &__endpoint {
+    display: flex;
+    flex: 1 1 200px;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 36px;
+    padding: 3px 8px 3px 4px;
+    border: 1px solid var(--wb-border);
+    border-radius: 7px;
+    background: var(--wb-surface-subtle);
+  }
+
+  &__selector.ant-select {
+    flex: 0 1 96px;
+    min-width: 72px;
+    border-inline-end: 1px solid var(--wb-border);
+    .ant-select-selector { background: transparent; color: var(--wb-text); border: 0; }
+    .ant-select-selection-item { color: var(--wb-text); }
+    .ant-select-selection-placeholder, .ant-select-arrow { color: var(--wb-text-secondary); }
+    &.ant-select-focused .ant-select-selector { box-shadow: inset 0 0 0 1px var(--wb-accent); }
+  }
+
+  &__method {
+    flex: none;
+    padding: 2px 6px;
+    border-radius: 5px;
+    color: var(--wb-accent);
+    background: var(--wb-accent-soft);
+    font-weight: 600;
+    font-size: 12px;
+    &[data-method='GET'] { color: var(--wb-code-add-text); background: var(--wb-code-add); }
+    &[data-method='DELETE'] { color: var(--wb-code-delete-text); background: var(--wb-code-delete); }
+  }
+
+  &__route {
+    overflow: hidden;
+    color: var(--wb-text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__request-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    margin-inline-start: auto;
+
+    > .ant-btn {
+      height: 36px;
+      padding-inline: 10px;
+      border-radius: 7px;
+    }
+  }
+
+  &__utility.ant-btn {
+    display: inline-flex;
+    align-items: center;
+    color: var(--wb-text);
+    border-color: var(--wb-border-strong);
+    background: var(--wb-surface-subtle);
+
+    &:hover, &:focus-visible, &[aria-expanded='true'] {
+      color: var(--wb-accent);
+      border-color: var(--wb-accent);
+      background: var(--wb-accent-soft);
+    }
+  }
+
+  &__send.ant-btn-primary {
+    min-width: 78px;
+
+    &:not(:disabled) {
+      color: var(--wb-canvas);
+      background: var(--wb-accent);
+      border-color: var(--wb-accent);
+      &:hover, &:focus-visible { background: var(--wb-accent-hover); border-color: var(--wb-accent-hover); }
+    }
+  }
+
+  &__availability { margin: 4px 0 8px; }
+  &__placeholder { padding: 20px 8px; text-align: center; color: var(--wb-text-secondary); }
+  &__exchange .ant-tabs-nav::before { border-color: var(--wb-border); }
+  &__exchange .ant-tabs-tab { color: var(--wb-text-secondary); }
+  &__exchange .ant-tabs-tab-active .ant-tabs-tab-btn { color: var(--wb-accent); }
+  &__exchange .ant-tabs-ink-bar { background: var(--wb-accent); }
+  &__exchange .debug-history-row { justify-content: flex-start; }
+
+  &__options.ant-select-dropdown,
+  &__service-popover .ant-popover-inner,
+  &__service-popover .ant-popover-arrow-content {
+    color: var(--wb-text);
+    background: var(--wb-surface);
+  }
+  &__options .ant-select-item { color: var(--wb-text); }
+  &__options .ant-select-item-option-active,
+  &__options .ant-select-item-option-selected { background: var(--wb-accent-soft); }
+  &__option {
+    display: grid;
+    gap: 2px;
+    strong, code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    code { color: var(--wb-text-secondary); font-size: 12px; }
+  }
+
+  &__service-content {
+    display: grid;
+    gap: 12px;
+    width: min(320px, calc(100vw - 48px));
+    max-height: 65vh;
+    overflow: auto;
+    color: var(--wb-text);
+    .preview-service-card:hover { transform: none; }
+    .preview-service-actions { padding: 10px 0 0; border: 0; border-top: 1px solid var(--wb-border); border-radius: 0; background: transparent; }
+  }
+
+  // 日志从底边占用面板空间，标题和操作常驻，日志正文单独滚动。
+  &__logs {
+    display: flex;
+    flex: 0 0 54%;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    border-top: 1px solid var(--wb-border);
+    background: var(--wb-surface);
+    animation: internal-api-log-rise 160ms ease-out;
+
+    &[data-expanded='true'] { flex: 1; }
+    .preview-log-panel { flex: 1; min-width: 0; min-height: 0; padding: 10px 14px 12px; border: 0; border-radius: 0; }
+    .preview-log-panel__header, .preview-log-toolbar, .preview-service-callout { flex: none; }
+    .preview-log-panel__summary { display: flex; align-items: center; gap: 8px; }
+    .preview-log-content { flex: 1; min-height: 70px; }
+    .preview-service-logs, .preview-log-empty { flex: 1; min-height: 0; height: auto; }
+    .preview-service-logs { overflow: auto; }
+  }
+}
+
+@keyframes internal-api-log-rise {
+  from { transform: translateY(8px); }
+  to { transform: translateY(0); }
+}
+
+@container (max-width: 380px) {
+  .internal-api-debug .internal-api-debug__scroll { padding-inline: 9px; }
+  .internal-api-debug__request-actions {
+    gap: 6px;
+    > .ant-btn { padding-inline: 8px; }
+  }
+  .internal-api-debug__exchange.external-api-debug .debug-row {
+    grid-template-columns: 18px minmax(38px, 1fr) minmax(60px, .85fr) minmax(50px, 1.3fr) 22px;
+    gap: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .internal-api-debug__logs { animation: none; }
+}

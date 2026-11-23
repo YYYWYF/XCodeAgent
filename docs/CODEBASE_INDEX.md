@@ -360,6 +360,10 @@ API 映射门禁的“确认并检测”使用原 Run 引用。工作台准入�
 
 `OperationTabLayout.tsx` 为调试和编辑共用滚动正文及固定底栏，两个页面的子页签共用主题样式。`debugDraft.ts` 按原接口键在客户端恢复普通请求草稿、最近一次脱敏响应及其请求快照和最近 20 条调用摘要。`debugPrivacy.ts` 自动过滤识别到的敏感字段、鉴权值及其回显，页面无需手动标为临时。`operationDebugSync.ts` 从请求快照同步字段名、类型和样例；请求方式或路径不同时，先保存基本信息再导入同一次调用，只导入完整成功的 JSON 响应样例。
 
+当前迭代进入开发后，工作台 `InternalApiDebug` 在「应用产物」与「预览」之间提供「接口调试」。`/internal-api-debug/run` 通过独立 AG-UI `describe/send` 只读获取当前生命周期和已确认 TechnicalPlan。发送前核对接口完成状态、方法路径及预览 `attemptId`，由 `internal_api_debug_http.py` 请求当前受管后端的回环端口。默认超时为 10 秒，支持本次输入的应用凭据和 Cookie。`useInternalApiDebugSession.ts` 按工作区、迭代及正式接口保存脱敏草稿、最近响应和二十条调用摘要。
+
+接口调试的请求栏按发送、服务状态、运行日志排列。`InternalApiServiceControls.tsx` 使用原有预览运行时执行启动、停止和诊断修复。`InternalApiLogs.tsx` 只展示后端构建、启动和运行日志，复用日志搜索、复制及滚动交互。原有预览抽屉保留自己的前后端启动日志页签。回归入口为 `tests.test_internal_api_debug`、`tests.test_external_api_debug`、`pnpm test:preview-runtime` 和 `pnpm test:service-logs`。
+
 ## Update Policy
 
 Update this index in the same change when a code change:

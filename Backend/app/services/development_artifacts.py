@@ -210,6 +210,11 @@ def _target_change_status(
     return "unchanged"
 
 
+def read_confirmed_technical_plan(workspace: str | Path) -> dict[str, Any]:
+    """供内部接口调试只读获取当前正式技术规划。"""
+    return _confirmed_plan(workspace, "technical-plan")
+
+
 def catalog_targets(workspace: str | Path) -> list[DevelopmentArtifactTarget]:
     """使用 ProductPlan 页面与 TechnicalPlan 接口、实体，与工作台目录保持一致。"""
 

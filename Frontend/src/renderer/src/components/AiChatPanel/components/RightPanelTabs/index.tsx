@@ -8,6 +8,7 @@ import './RightPanelTabs.less'
 /** 工作区 tab 键：预览/源码/文档/报告/过程/阶段产物 + 设计阶段的正式产物文档。 */
 export type WorkspaceTabKey =
   | 'field-mapping'
+  | 'internal-api-debug'
   | 'preview'
   | 'source'
   | 'doc'

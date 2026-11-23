@@ -44,8 +44,9 @@ function Rows({ rows, location, update }: {
 }
 
 /** 管理参数、请求体、鉴权与超时的编辑面板。 */
-export default function DebugRequestFields({ draft, auth, update, updateAuth }: {
-  draft: Draft; auth: DebugAuth; update: (draft: Draft) => void; updateAuth: (auth: DebugAuth) => void
+export default function DebugRequestFields<M extends string>({ draft, auth, update, updateAuth, allowCookie = false }: {
+  draft: Draft<M>; auth: DebugAuth; update: (draft: Draft<M>) => void; updateAuth: (auth: DebugAuth) => void
+  allowCookie?: boolean
 }) {
   return <Tabs className="debug-request source-operation-subtabs" size="small">
     <Tabs.TabPane tab="请求参数" key="params">
@@ -62,10 +63,10 @@ export default function DebugRequestFields({ draft, auth, update, updateAuth }: 
     <Tabs.TabPane tab="鉴权" key="auth">
       <div className="debug-auth-grid">
         <Select aria-label="鉴权方式" value={auth.mode} onChange={mode => updateAuth({mode, identity: '', credential: ''})}
-          options={['无', 'Bearer Token', 'Basic Auth', 'API Key'].map(value => ({value}))}/>
+          options={['无', 'Bearer Token', 'Basic Auth', 'API Key', ...(allowCookie ? ['Cookie'] : [])].map(value => ({value}))}/>
         {['Basic Auth', 'API Key'].includes(auth.mode) && <Input placeholder={auth.mode === 'Basic Auth' ? '用户名' : 'Header 名称'}
           value={auth.identity} onChange={event => updateAuth({...auth, identity: event.target.value})}/>}
-        {auth.mode !== '无' && <Input.Password placeholder="本次调试凭据" autoComplete="off"
+        {auth.mode !== '无' && <Input.Password placeholder={allowCookie && auth.mode === 'Cookie' ? 'Cookie，例如 SESSION=…' : '本次调试凭据'} autoComplete="off"
           value={auth.credential} onChange={event => updateAuth({...auth, credential: event.target.value})}/>}
       </div>
     </Tabs.TabPane>

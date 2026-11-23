@@ -4,8 +4,9 @@ import { JSON_FIELD_TYPES, PATH_FIELD_TYPES } from './jsonFieldTypes'
 
 // HTTP 输入仍以文本传输，字段类型用于与接口定义对齐。
 export type Row = { name: string; value: string; enabled: boolean; type: DataSourceFieldType }
-export type Draft = {
-  method: DataSourceOperation['method']
+type ExternalMethod = DataSourceOperation['method']
+export type Draft<M extends string = ExternalMethod> = {
+  method: M
   requestPath: string
   path: Row[]
   query: Row[]
@@ -13,11 +14,11 @@ export type Draft = {
   body: string
   timeout: number
 }
-export type Entry = { id: string; time: string; label: string; elapsed?: number; draft: Draft }
-export type DebugResult = { input: Draft; response: DebugResponse; redacted: boolean }
-export type DebugSession = { draft: Draft; history: Entry[]; result?: DebugResult; error: string }
+export type Entry<M extends string = ExternalMethod> = { id: string; time: string; label: string; elapsed?: number; draft: Draft<M> }
+export type DebugResult<M extends string = ExternalMethod> = { input: Draft<M>; response: DebugResponse; redacted: boolean }
+export type DebugSession<M extends string = ExternalMethod> = { draft: Draft<M>; history: Entry<M>[]; result?: DebugResult<M>; error: string }
 type StoredRow = Omit<Row, 'type'> & { type?: DataSourceFieldType }
-type StoredDraft = Omit<Draft, 'path' | 'query' | 'headers'> & { path: StoredRow[]; query: StoredRow[]; headers: StoredRow[] }
+type StoredDraft<M extends string> = Omit<Draft<M>, 'path' | 'query' | 'headers'> & { path: StoredRow[]; query: StoredRow[]; headers: StoredRow[] }
 
 /** 从接口定义读取本轮默认参数，尚未试填的可选参数默认关闭。 */
 export function initialDraft(source: ExternalApiDataSource, operation: DataSourceOperation): Draft {
@@ -60,7 +61,7 @@ export function values(rows: Row[]): Record<string, string> {
 }
 
 /** 比较请求内容，与对象属性顺序及缓存恢复过程无关。 */
-export function sameDebugDraft(left: Draft, right: Draft): boolean {
+export function sameDebugDraft(left: Draft<string>, right: Draft<string>): boolean {
   return left.method === right.method && left.requestPath.trim() === right.requestPath.trim() &&
     left.body === right.body && left.timeout === right.timeout &&
     (['path', 'query', 'headers'] as const).every((location) =>
@@ -77,9 +78,9 @@ export function debugStorageKey(workspace: string, source: ExternalApiDataSource
 }
 
 /** 校验本地草稿并读取当前字段，没有指定类型时使用接口定义。 */
-function readDraft(value: unknown, defaults: Draft): Draft | undefined {
-  const draft = value as Partial<StoredDraft> | null
-  if (!draft?.method || !['GET', 'POST', 'PUT', 'DELETE'].includes(draft.method) ||
+function readDraft<M extends string>(value: unknown, defaults: Draft<M>, fixedAddress: boolean): Draft<M> | undefined {
+  const draft = value as Partial<StoredDraft<M>> | null
+  if (!draft?.method || (fixedAddress ? draft.method !== defaults.method : !['GET', 'POST', 'PUT', 'DELETE'].includes(draft.method)) ||
       typeof draft.requestPath !== 'string' || typeof draft.body !== 'string' ||
       typeof draft.timeout !== 'number' || !Number.isFinite(draft.timeout)) return undefined
   /** Header 不区分大小写，Path 与 Query 使用请求中的实际名称。 */
@@ -98,7 +99,14 @@ function readDraft(value: unknown, defaults: Draft): Draft | undefined {
   const query = resolve('query', draft.query)
   const headers = resolve('headers', draft.headers)
   if (!path || !query || !headers) return undefined
-  return { method: draft.method, requestPath: draft.requestPath, path, query, headers, body: draft.body, timeout: draft.timeout }
+  const restoredPath = fixedAddress ? defaults.path.map((row) => {
+    const saved = path.find(({ name }) => name === row.name)
+    return saved ? { ...row, value: saved.value, type: saved.type } : row
+  }) : path
+  return {
+    method: draft.method, requestPath: fixedAddress ? defaults.requestPath : draft.requestPath,
+    path: restoredPath, query, headers, body: draft.body, timeout: draft.timeout
+  }
 }
 
 /** 检查可恢复的 HTTP 结果，缺失或损坏时仍能打开其他调试内容。 */
@@ -112,18 +120,18 @@ function isDebugResponse(value: unknown): value is DebugResponse {
 }
 
 /** 恢复当前接口的请求、最近响应及调用摘要。 */
-export function restoreDebug(key: string, fallback: Draft): DebugSession {
+export function restoreDebug<M extends string>(key: string, fallback: Draft<M>, fixedAddress = false): DebugSession<M> {
   try {
     const value = JSON.parse(localStorage.getItem(key) || 'null')
-    const draft = readDraft(value?.draft, fallback) ?? fallback
-    const history: Entry[] = Array.isArray(value?.history)
-      ? value.history.slice(0, 20).flatMap((entry: Partial<Entry> | null) => {
-        const stored = readDraft(entry?.draft, fallback)
+    const draft = readDraft(value?.draft, fallback, fixedAddress) ?? fallback
+    const history: Entry<M>[] = Array.isArray(value?.history)
+      ? value.history.slice(0, 20).flatMap((entry: Partial<Entry<M>> | null) => {
+        const stored = readDraft(entry?.draft, fallback, fixedAddress)
         if (!stored || typeof entry?.id !== 'string' || typeof entry.time !== 'string' || typeof entry.label !== 'string') return []
         return [{ id: entry.id, time: entry.time, label: entry.label,
           elapsed: typeof entry.elapsed === 'number' ? entry.elapsed : undefined, draft: stored }]
       }) : []
-    const input = readDraft(value?.result?.input, fallback)
+    const input = readDraft(value?.result?.input, fallback, fixedAddress)
     const result = input && isDebugResponse(value.result.response)
       ? { input, response: value.result.response, redacted: value.result.redacted === true } : undefined
     return { draft, history, result, error: typeof value?.error === 'string' ? value.error : '' }

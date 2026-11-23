@@ -64,6 +64,7 @@ from app.protocols.data_sources import data_sources_capabilities
 from app.protocols.endpoint_designs import endpoint_designs_capabilities
 from app.routes.data_sources import data_sources_router
 from app.routes.external_api_debug import router as external_api_debug_router
+from app.routes.internal_api_debug import router as internal_api_debug_router
 from app.routes.endpoint_designs import endpoint_designs_router
 from app.routes.workflow_artifacts import workflow_artifacts_router, artifact_capabilities
 from app.routes.page_artifacts import page_artifacts_router, page_artifacts_capabilities
@@ -178,6 +179,7 @@ app = FastAPI(
 app.include_router(data_sources_router)
 app.include_router(endpoint_designs_router)
 app.include_router(external_api_debug_router)
+app.include_router(internal_api_debug_router)
 app.include_router(workflow_artifacts_router)
 app.include_router(page_artifacts_router)
 app.include_router(entity_tables_router)
@@ -234,6 +236,7 @@ async def health() -> dict[str, object]:
             "data_sources": data_sources_capabilities(),
             "endpoint_designs": endpoint_designs_capabilities(),
             "external_api_debug": {"endpoint": "/external-api-debug/run", "transport": "ag-ui-sse", "customEventName": "external-api-debug", "stateSnapshotKey": "externalApiDebug"},
+            "internal_api_debug": {"endpoint": "/internal-api-debug/run", "transport": "ag-ui-sse", "customEventName": "internal-api-debug", "stateSnapshotKey": "internalApiDebug"},
             "entity_tables": entity_tables_capabilities(),
             "telemetry": telemetry_capabilities(),
             "app_update": app_update_capabilities(),

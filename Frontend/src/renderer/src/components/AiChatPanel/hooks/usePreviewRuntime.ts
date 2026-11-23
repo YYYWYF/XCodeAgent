@@ -16,6 +16,8 @@ type Options = {
   workspace: string
   activeSession?: SessionIdentity
   watchForAcceptance?: boolean
+  watchForInternalDebug?: boolean
+  includeInternalDebugLogs?: boolean
   localBlocked: boolean
   createSession: () => Promise<SessionIdentity>
   discardSession: (identity: SessionIdentity) => Promise<void>
@@ -156,9 +158,10 @@ export function usePreviewRuntime(options: Options): {
   const previewConnection = usePreviewRuntimeConnection(
     options.workspace,
     activeThread,
-    open,
+    open || options.includeInternalDebugLogs === true,
     receive,
     options.watchForAcceptance ||
+      options.watchForInternalDebug ||
       open ||
       busy ||
       repairRunning ||

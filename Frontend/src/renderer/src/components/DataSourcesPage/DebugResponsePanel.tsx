@@ -17,9 +17,10 @@ function formatBody(body: string, raw: boolean): string {
 }
 
 /** 显示实测响应与历史，结构视图只列出本次可以同步的 JSON 字段。 */
-export default function DebugResponsePanel({ busy, response, responseSample, stale, restoredRedacted, error, history, onLoad }: {
-  busy: boolean; response?: DebugResponse; responseSample?: string; stale: boolean; restoredRedacted: boolean; error: string; history: Entry[]
-  onLoad: (entry: Entry) => void
+export default function DebugResponsePanel<M extends string>({ busy, response, responseSample, stale, restoredRedacted, error, history, onLoad, structureLabel = '可同步的 JSON 字段' }: {
+  busy: boolean; response?: DebugResponse; responseSample?: string; stale: boolean; restoredRedacted: boolean; error: string; history: Entry<M>[]
+  onLoad: (entry: Entry<M>) => void
+  structureLabel?: string
 }) {
   const [view, setView] = useState<BodyView>('formatted')
   const structure = useMemo(() => parseJsonSampleText(responseSample ?? '').value, [responseSample])
@@ -51,7 +52,7 @@ export default function DebugResponsePanel({ busy, response, responseSample, sta
             {bodyView !== 'structure' && <Typography.Text copyable={{text: rendered}}>复制</Typography.Text>}
           </div>
           {bodyView === 'structure' ? <>
-            <p className="debug-muted">可同步的 JSON 字段</p>
+            <p className="debug-muted">{structureLabel}</p>
             <div className={cx('data-source-json-panel-content-only')}><JsonStructureViewer value={structure} /></div>
           </> : <pre className="debug-code">{rendered || '（空响应体）'}</pre>}
         </> : !error && <div className="debug-empty">{busy ? '请求已发送，正在等待服务器返回。' : '发送请求后在此查看响应体。'}</div>}

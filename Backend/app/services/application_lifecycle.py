@@ -245,6 +245,11 @@ def create_application_lifecycle(
     )
 
 
+def read_application_lifecycle_snapshot(workspace: str | Path) -> ApplicationLifecycle | None:
+    """供只读面板获取正式快照，不触发生命周期修订或清理。"""
+    return _read_application_lifecycle(application_lifecycle_path(workspace))
+
+
 def load_application_lifecycle(workspace: str | Path) -> ApplicationLifecycle | None:
     """只读取并校验当前生命周期，不扫描工作区或计算文件指纹。"""
 
