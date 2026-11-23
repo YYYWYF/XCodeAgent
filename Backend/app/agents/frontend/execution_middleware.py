@@ -13,6 +13,29 @@ from app.agents.frontend.execution_scope import FRONTEND_CORE_DOCS, FrontendTask
 from app.workspace.virtual_paths import is_host_workspace_virtual_path
 
 
+_READ_RANGE_HEADER = re.compile(
+    r"@@ lines (\d+)-(\d+) of (\d+)(?: \| ([^@\n]+))? @@"
+)
+
+
+def _complete_core_document_read(content: str, args: dict) -> bool:
+    """按当前读取状态头确认核心文档从首行到末行完整返回。"""
+    if (args.get("offset", 0) != 0 or "[Output was truncated" in content
+            or EMPTY_CONTENT_WARNING in content):
+        return False
+    # 工具最多在状态头前放置两条说明，不能让正文中的同形文本冒充状态头。
+    for row in content.split("\n", 2)[:3]:
+        match = _READ_RANGE_HEADER.fullmatch(row)
+        if match is None:
+            continue
+        start, end, total = (int(value) for value in match.group(1, 2, 3))
+        fields = match.group(4) or ""
+        limit = int(args.get("limit", DEFAULT_READ_LIMIT))
+        return (start == 1 and end == total and end <= limit
+                and "next offset" not in fields and "truncated" not in fields)
+    return False
+
+
 class FrontendExecutionMiddleware(AgentMiddleware):
     """覆盖 Agent 的所有工具入口并隔离步骤切换与普通调用。"""
 
@@ -93,14 +116,7 @@ class FrontendExecutionMiddleware(AgentMiddleware):
         if (name == "read_file" and isinstance(result, ToolMessage)
             and result.status == "success"):
             if path in FRONTEND_CORE_DOCS:
-                args = request.tool_call["args"]
-                # 当前工具用两个空格分隔行号与正文；长行续行标记仍属于同一源文件行。
-                content = result.content if isinstance(result.content, str) else ""
-                lines = re.findall(r"^ *(\d+)(?:\.\d+)?  ", content, re.MULTILINE)
-                # 不足一页且从首行开始才能确认已到末尾，真实截断仍拒绝登记。
-                if (args.get("offset", 0) != 0 or not lines
-                    or int(lines[-1]) >= args.get("limit", DEFAULT_READ_LIMIT)
-                    or "[Output was truncated" in content or EMPTY_CONTENT_WARNING in content):
+                if not _complete_core_document_read(result.content, request.tool_call["args"]):
                     return self._denied(request, "核心文档正文不完整或被截断，请报告任务失败；不得重试扩大读取范围或搜索替代文档", path)
                 self.scope.mark_core_doc_read(path)
             if isinstance(result.content, str):
