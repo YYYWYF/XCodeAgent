@@ -37,14 +37,7 @@ def _model_callbacks(settings: Settings):
 
 
 def thinking_disabled_kwargs() -> dict[str, Any]:
-    """按 MODEL_DISABLE_THINKING 开关返回关闭思考的 extra_model_kwargs。
-
-    CatPaw 网关（mao.maomao951024.asia）对 glm-5.3-flash 等模型未验证
-    "关闭思考控制"，收到 {"thinking": {"type": "disabled"}} 会 400 拒绝
-    （此 CatPaw 模型没有已验证的关闭思考控制）。因此默认不发送该参数；
-    切回旧网关推理模型（如 GLM-5.2，thinking 会挤占输出预算导致长 JSON
-    截断）时，在 .env 设 MODEL_DISABLE_THINKING=1 恢复关闭思考行为。
-    """
+    """按 MODEL_DISABLE_THINKING 开关返回关闭思考的 extra_model_kwargs。"""
 
     if os.getenv("MODEL_DISABLE_THINKING", "").strip().lower() in {"1", "true", "yes"}:
         return {"thinking": {"type": "disabled"}}

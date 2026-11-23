@@ -69,32 +69,6 @@ def launch_backend_project(
     pom_path = backend_root / "pom.xml"
     runtime_root = root / WORKSPACE_ARTIFACT_DIR / "runtime" / "launch"
 
-    # ============================================================================
-    # ⚠️⚠️⚠️  临 时 调 试 用 ，提 交 代 码 前 必 须 删 除  ⚠️⚠️⚠️
-    #
-    # 本地无 Java/Maven 环境，临时跳过验收阶段的"启动后端"步骤，让流程能继续往下走。
-    # 注意：返回的 server 信息（pid/port/preview_url 等）都是占位值，**仅用于让上层
-    # 流程通过，并不会真的有后端服务跑起来**。前端调用真实接口仍会失败。
-    #
-    # 【删除方式】直接删除下面这个 `if True:` 块（含本注释）。
-    # 【搜 索 锚 点】DEVAGENTSTUDIO_LOCAL_DEBUG_SKIP_BACKEND
-    # 【影 响 风 险】这个绕道会让"启动后端"在用户机器上变成永远成功，**严禁合入主干**。
-    # ============================================================================
-    if True:  # DEVAGENTSTUDIO_LOCAL_DEBUG_SKIP_BACKEND
-        return {
-            **_base_backend_launch_payload(
-                root=root,
-                backend_root=backend_root,
-                pom_path=pom_path,
-                runtime_root=runtime_root,
-            ),
-            "status": "skipped",
-            "message": "本地调试模式：跳过后端启动（无 Java 环境）。",
-            "failed_stage": None,
-            "server": None,
-            "diagnostics": [],
-        }
-
     if not pom_path.is_file():
         return _failed_backend_launch(
             "未找到后端 Maven 工程：backend/pom.xml。",

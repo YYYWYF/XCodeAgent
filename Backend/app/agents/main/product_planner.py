@@ -313,15 +313,7 @@ def _invoke_product_planner(
     on_token: Callable[[str], None] | None = None,
     deleted_page_ids: set[str] | None = None,
 ) -> str:
-    """调用产品规划 ChatModel，并可选透传流式文本。
-
-    旧网关推理模型（GLM-5.2）默认开启深度思考，thinking 与正文共享
-    max_tokens，ProductPlan JSON 体量大（多页 information_items/actions），
-    thinking 会挤占输出预算，常在写完闭合括号前被截断。是否关闭 thinking
-    由 MODEL_DISABLE_THINKING 开关控制（见 model_factory.thinking_disabled_kwargs）：
-    CatPaw 网关的 glm-5.3-flash 未验证关闭思考控制，发送会被 400 拒绝，
-    默认不发送；切回旧网关推理模型时设 MODEL_DISABLE_THINKING=1。
-    """
+    """调用产品规划 ChatModel，并可选透传流式文本。"""
 
     model = create_chat_model(
         Settings.from_env(),
