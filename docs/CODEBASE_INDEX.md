@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+权限资源结果复用时，`services/build_unit_compiler.py` 仅在冻结的 `backend_auth_resources.applied` 为真时，识别固定平台任务 `backend-auth-resources` 的归属，按原跨 Unit 编译规则清除保留 Bootstrap 的旧执行依赖；不添加或重复执行权限资源任务。清单变化仍生成新的 pending 资源任务，缺少成功证据与其他未知缺失依赖仍阻断。生成与确认重验共用编译器。回归：`tests.test_backend_auth_resource_dependencies`。
+
 需求澄清回答由 `services/requirement_clarification.py` 在 `graph/nodes/requirements.py::_request_for_requirement_node` 的模型输入边界完整转换：保留原始需求、本轮补充说明、问题标题及题意，将单选/多选的稳定值还原为选项标签和描述，并保留“其他”补充。原结构化 `answers` 不变；仅作用于需求澄清 `answer`，正式确认、修改和其他文档动作保持原规则。独立回归 `tests.test_requirement_clarification` 校验模型实际入参包含全部问答，无需文档生成入口、checkpoint 或会话生命周期绑定。
 
 前端 Build 的 `frontend-engineering-standards` 补齐 Props/Effect/JSX、表单生命周期、选择与分页一致性及主题样式约束，`task_packet.py::_standard_rules` 按职责下发 API 的 5 条与页面的 17 条规则；新增条款仅指导生成，不新增强阻断。`generator.py` 只为复杂页面提示按章节读取组件或组合页面参考，仍为两份核心规范每任务最多成功读取一次。示例以用户手动优化的 Orders 为基准，由页面 State 管查询条件/分页，useRequest + refreshDeps 管请求，加载可保留列表、失败以 Result 展示，提交采用 Spin 和交互守卫，覆盖筛选、批量操作、ModalForm/DrawerForm/StepsForm、联动与独立标签状态；不维护 requestQuery、额外竞态标记或自定义缓存。`agent.py`、执行权限、Static 和其他非受控入口未变。回归扩展于 `tests.test_frontend_skill_loading_prompt`、`tests.test_frontend_core_docs`；历史逐项去向与验证限制见 `docs/template/前端Build_Skill规范补全_实施报告.md`，该报告不进入运行时必读资源。

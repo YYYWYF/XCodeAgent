@@ -16,7 +16,7 @@ from app.services.backend_module_scope import design_endpoint_keys, module_task_
 from app.services.planning_issues import ValidationIssue
 from app.services.page_task_freshness import page_task_input_digest
 from app.services.unit_task_manifest import BACKEND_MODULE_PREFIX
-from app.services.backend_authorization_resources import BACKEND_AUTH_UNIT
+from app.services.backend_authorization_resources import BACKEND_AUTH_TASK, BACKEND_AUTH_UNIT
 
 
 class BuildUnitCompilationError(ValueError):
@@ -184,6 +184,10 @@ def _apply_unit_task_dependencies(
         for task in tasks
         if task.get("id")
     }
+    # 当前完整权限清单已成功应用时，固定平台任务即使不进入本轮 DAG，归属仍然明确。
+    # 让原跨 Unit 重编译移除其旧执行边；不补任务、不放行其他来源不明的缺失依赖。
+    if (build_context.get("backend_auth_resources") or {}).get("applied") is True:
+        task_units.setdefault(BACKEND_AUTH_TASK, BACKEND_AUTH_UNIT)
     bootstrap_types = {
         task["id"]: {item.get("target_id") for item in _dict_items(task.get("deliverables"))
                      if item.get("kind") == "backend.bootstrap"}
