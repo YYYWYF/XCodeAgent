@@ -9,31 +9,31 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from app.agents.frontend.file_backend import FILE_ACCESS
-from app.agents.frontend.execution_scope import FRONTEND_CORE_DOCS, FrontendTaskExecutionScope, _CONTROL, _OPERATIONS
+from app.agents.frontend.execution_scope import (
+    FRONTEND_CORE_DOCS,
+    FrontendTaskExecutionScope,
+    _CONTROL,
+    _OPERATIONS,
+)
 from app.workspace.virtual_paths import is_host_workspace_virtual_path
 
 
-_READ_RANGE_HEADER = re.compile(
-    r"@@ lines (\d+)-(\d+) of (\d+)(?: \| ([^@\n]+))? @@"
-)
-
-
-def _complete_core_document_read(content: str, args: dict) -> bool:
-    """按当前读取状态头确认核心文档从首行到末行完整返回。"""
-    if (args.get("offset", 0) != 0 or "[Output was truncated" in content
-            or EMPTY_CONTENT_WARNING in content):
-        return False
-    # 工具最多在状态头前放置两条说明，不能让正文中的同形文本冒充状态头。
-    for row in content.split("\n", 2)[:3]:
-        match = _READ_RANGE_HEADER.fullmatch(row)
-        if match is None:
-            continue
-        start, end, total = (int(value) for value in match.group(1, 2, 3))
-        fields = match.group(4) or ""
-        limit = int(args.get("limit", DEFAULT_READ_LIMIT))
-        return (start == 1 and end == total and end <= limit
-                and "next offset" not in fields and "truncated" not in fields)
-    return False
+def _core_document_read_error(content, args: dict) -> str:
+    """按 DeepAgents 0.6.12 的 Tab 行号判断交付范围，分别报告读取异常。"""
+    if not isinstance(content, str) or not content.strip() or EMPTY_CONTENT_WARNING in content:
+        return "核心文档正文为空或不是文本"
+    if "[Output was truncated" in content:
+        return "核心文档正文被输出长度限制截断"
+    if args.get("offset", 0) != 0:
+        return "核心文档必须从首行完整读取"
+    # 长行的十进制续行号仍归属同一源文件行，不能按渲染行数判断分页。
+    lines = re.findall(r"^ *(\d+)(?:\.\d+)?\t", content, re.MULTILINE)
+    if not lines or int(lines[0]) != 1:
+        return "核心文档读取结果不符合 DeepAgents 0.6.12 的 Tab 行号格式"
+    # 此版本未返回总行数，满页无法区分恰好到末尾与仍有后续内容。
+    if int(lines[-1]) >= args.get("limit", DEFAULT_READ_LIMIT):
+        return "核心文档返回范围达到读取上限，无法确认已到末尾"
+    return ""
 
 
 class FrontendExecutionMiddleware(AgentMiddleware):
@@ -57,20 +57,38 @@ class FrontendExecutionMiddleware(AgentMiddleware):
         if name in {"execute", "code_graph_context"}:
             return "", None  # 独立工具本身在执行前作最终裁决。
         args = request.tool_call["args"]
-        return self.scope.authorize(name, args.get("path" if name == "grep" else "file_path"))
+        return self.scope.authorize(
+            name, args.get("path" if name == "grep" else "file_path")
+        )
 
     def _denied(self, request, reason: str, path: str = "") -> ToolMessage:
         """用工具错误反馈拒绝决定，保留原始工具调用 ID。"""
         name = request.tool_call["name"]
-        raw_path = request.tool_call["args"].get("path" if name == "grep" else "file_path")
-        if (not path and isinstance(raw_path, str) and len(raw_path) <= 1024
-            and raw_path.startswith("/") and not is_host_workspace_virtual_path(self.scope.root, raw_path)):
+        raw_path = request.tool_call["args"].get(
+            "path" if name == "grep" else "file_path"
+        )
+        if (
+            not path
+            and isinstance(raw_path, str)
+            and len(raw_path) <= 1024
+            and raw_path.startswith("/")
+            and not is_host_workspace_virtual_path(self.scope.root, raw_path)
+        ):
             path = raw_path
-        self.scope.record("frontend_tool_permission", tool_name=name, virtual_path=path,
-                          operation=_OPERATIONS.get(name, name), permission_decision="denied",
-                          permission_denial_reason=reason)
-        return ToolMessage(content=reason, status="error", name=name,
-                           tool_call_id=request.tool_call["id"])
+        self.scope.record(
+            "frontend_tool_permission",
+            tool_name=name,
+            virtual_path=path,
+            operation=_OPERATIONS.get(name, name),
+            permission_decision="denied",
+            permission_denial_reason=reason,
+        )
+        return ToolMessage(
+            content=reason,
+            status="error",
+            name=name,
+            tool_call_id=request.tool_call["id"],
+        )
 
     def wrap_tool_call(self, request, handler):
         """串行校验同步工具及其完整执行。"""
@@ -106,32 +124,61 @@ class FrontendExecutionMiddleware(AgentMiddleware):
         """先验证授权，再采集实际读版本。"""
         path, physical = self._permission(request)
         self.scope.mutation_notice = None
-        version = self.scope.reads.version(physical) if request.tool_call["name"] == "read_file" else None
+        version = (
+            self.scope.reads.version(physical)
+            if request.tool_call["name"] == "read_file"
+            else None
+        )
         return path, physical, version
 
     def _finish(self, request, path, physical, version, result):
         """补充权限观测与读写统计，保持读取正文的兼容行为。"""
         name = request.tool_call["name"]
         fields = {"duplicate_read": False}
-        if (name == "read_file" and isinstance(result, ToolMessage)
-            and result.status == "success"):
+        if (
+            name == "read_file"
+            and isinstance(result, ToolMessage)
+            and result.status == "success"
+        ):
             if path in FRONTEND_CORE_DOCS:
-                if not _complete_core_document_read(result.content, request.tool_call["args"]):
-                    return self._denied(request, "核心文档正文不完整或被截断，请报告任务失败；不得重试扩大读取范围或搜索替代文档", path)
+                error = _core_document_read_error(result.content, request.tool_call["args"])
+                if error:
+                    return self._denied(
+                        request,
+                        f"{error}；请以 tool_error 报告任务失败；不得重试扩大读取范围或搜索替代文档",
+                        path,
+                    )
                 self.scope.mark_core_doc_read(path)
             if isinstance(result.content, str):
-                fields.update(self.scope.reads.observe(
-                    path, physical, version, request.tool_call["args"], result.content, self.scope.step,
-                ))
+                fields.update(
+                    self.scope.reads.observe(
+                        path,
+                        physical,
+                        version,
+                        request.tool_call["args"],
+                        result.content,
+                        self.scope.step,
+                    )
+                )
         if name not in _CONTROL | {"execute", "code_graph_context"}:
-            self.scope.record("frontend_tool_permission", tool_name=name, virtual_path=path,
-                              operation=_OPERATIONS.get(name, name), permission_decision="allowed", **fields)
+            self.scope.record(
+                "frontend_tool_permission",
+                tool_name=name,
+                virtual_path=path,
+                operation=_OPERATIONS.get(name, name),
+                permission_decision="allowed",
+                **fields
+            )
         return self._mutation_feedback(result)
 
     def _mutation_feedback(self, result):
         """保留原成功消息，用简短文字及可选字段报告无变化与版本回退。"""
         notice = self.scope.mutation_notice
-        if not notice or not isinstance(result, ToolMessage) or result.status != "success":
+        if (
+            not notice
+            or not isinstance(result, ToolMessage)
+            or result.status != "success"
+        ):
             return result
         metadata = {key: value for key, value in notice.items() if key != "warn_revert"}
         content = result.content
@@ -139,5 +186,9 @@ class FrontendExecutionMiddleware(AgentMiddleware):
             content += "\n文件内容完全相同，已跳过落盘。"
         if notice["warn_revert"]:
             content += "\n该文件在本步骤回到既有版本，请按确定的方案继续。"
-        return result.model_copy(update={"content": content,
-            "additional_kwargs": {**result.additional_kwargs, **metadata}})
+        return result.model_copy(
+            update={
+                "content": content,
+                "additional_kwargs": {**result.additional_kwargs, **metadata},
+            }
+        )

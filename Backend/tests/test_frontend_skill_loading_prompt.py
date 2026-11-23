@@ -51,6 +51,10 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                     self.assertIn('最终输出单一 JSON 对象 {"task_results":[...]}', prompt)
                     self.assertIn("status（completed、already_satisfied 或 failed）", prompt)
                     self.assertIn("失败提供 failure_category、failure_reason", prompt)
+                    self.assertIn("failure_category=tool_error", prompt)
+                    self.assertIn("不将读取失败归类为契约或计划冲突", prompt)
+                    self.assertIn("必须提供非空且具体说明所需调整的 change_request", prompt)
+                    self.assertIn("其他失败分类不得携带 change_request", prompt)
                     if kind == PAGE:
                         self.assertIn("references/component-patterns.md 对应章节", prompt)
                         self.assertIn("references/page-structure-examples.md 对应章节", prompt)

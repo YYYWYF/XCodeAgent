@@ -18,6 +18,7 @@ from app.agents.frontend.execution_scope import (
     FrontendTaskExecutionScope,
 )
 from app.agents.frontend.file_backend import FrontendScopedFilesystemBackend
+from app.agents.frontend.execution_middleware import _core_document_read_error
 from app.agents.frontend.task_packet import API, PAGE
 from tests.test_build_observability import ToolCapableTestModel
 from tests.test_frontend_build_execution import _create_file, _packet
@@ -157,9 +158,10 @@ class FrontendCoreDocsTests(unittest.TestCase):
             self.assertEqual(tools["ok"].status, "success")
             self.assertEqual(tools["duplicate"].status, "error")
 
-    def test_complete_document_at_line_limit(self):
-        """范围状态头能确认恰好达到读取上限的完整文档，不再误判为分页。"""
-        self.document.write_text("说明\n" * 2000)
+    def test_complete_document_with_wrapped_last_line(self):
+        """0.6.12 的 Tab 行号及末行续行能完整交付，不将渲染行数误当成源文件行数。"""
+        source = "说明\n" * 1998 + "x" * 6000 + "\n"
+        self.document.write_text(source)
         for asynchronous in (False, True):
             with self.subTest(asynchronous=asynchronous):
                 scope = FrontendTaskExecutionScope(str(self.root), [_packet(API)])
@@ -167,8 +169,8 @@ class FrontendCoreDocsTests(unittest.TestCase):
                     tools = self._run(scope, [[_read(AGENTS, "complete")],
                                               [_read(AGENTS, "duplicate")]], asynchronous)
                     self.assertEqual(tools["complete"].status, "success", tools["complete"])
-                    self.assertIn("@@ lines 1-2000 of 2000 @@", tools["complete"].content)
-                    self.assertNotIn("truncated", tools["complete"].content)
+                    self.assertIn("1999.1\t" + "x" * 1000, tools["complete"].content)
+                    self.assertNotIn("[Output was truncated", tools["complete"].content)
                     self.assertEqual(scope.core_docs_read, {(API, AGENTS)})
                     self.assertEqual(tools["duplicate"].status, "error")
                     self.assertIn("本任务已读取该规范", tools["duplicate"].content)
@@ -178,15 +180,25 @@ class FrontendCoreDocsTests(unittest.TestCase):
         for asynchronous in (False, True):
             scope = FrontendTaskExecutionScope(str(self.root), [_packet(API)])
             with scope.task_context():
-                for source, args in (("one\ntwo\n", {"offset": 1}),
-                                     ("one\n" * 2100, {}),
-                                     ("x" * 150000, {}), ("", {})):
+                for source, args, reason in (("one\ntwo\n", {"offset": 1}, "从首行"),
+                                     ("one\n" * 2000, {}, "无法确认已到末尾"),
+                                     ("one\n" * 2100, {}, "无法确认已到末尾"),
+                                     ("x" * 150000, {}, "截断"), ("", {}, "正文为空")):
                     with self.subTest(asynchronous=asynchronous, args=args, length=len(source)):
                         self.document.write_text(source)
                         tools = self._run(scope, [[_read(AGENTS, "incomplete", **args)]], asynchronous)
                         self.assertEqual(tools["incomplete"].status, "error")
-                        self.assertIn("正文不完整或被截断", tools["incomplete"].content)
+                        self.assertIn(reason, tools["incomplete"].content)
+                        self.assertIn("tool_error", tools["incomplete"].content)
                         self.assertEqual(scope.core_docs_read, set())
+
+    def test_unrecognized_format_is_not_reported_as_truncation(self):
+        """未知显示格式明确报告协议不符，不伪称已发生输出截断。"""
+        for content in ("1  text", "@@ lines 1-1 of 1 @@\ntext", "plain text"):
+            with self.subTest(content=content):
+                error = _core_document_read_error(content, {"offset": 0, "limit": 2000})
+                self.assertIn("Tab 行号格式", error)
+                self.assertNotIn("截断", error)
 
     def test_exact_paths_and_physical_aliases(self):
         """大小写、点段、宿主路径以及符号与硬链接不能绕过精确授权。"""
