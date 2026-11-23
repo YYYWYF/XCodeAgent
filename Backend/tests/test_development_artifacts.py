@@ -109,51 +109,28 @@ class DevelopmentArtifactsTests(unittest.TestCase):
         self.assertNotIn("testEntryGate", json.loads((self.workspace / ".devagentstudio/application-lifecycle.json").read_text()))
         self.assertEqual(application_lifecycle_payload(state)["testEntryGate"]["total"], 3)
 
-    def test_snapshot_source_prefers_display_plan_after_strip(self) -> None:
-        """`technical_plan` 被换成干净版后，快照必须仍从展示版取到删除结论。"""
+    def test_snapshot_uses_final_plan_without_review_unchanged(self) -> None:
+        """首轮正式页面即使被审阅标未变更，开发快照仍独立判新增并保留删除目标。"""
 
-        from app.services.development_change_snapshot import (
-            change_snapshot_path, write_change_snapshot,
-        )
-        from app.services.technical_plan_merger import strip_change_status
-
-        display = {"pages": [
-            {"pageId": "one", "_change_status": "unchanged"},
-            {"pageId": "two", "_change_status": "deleted"},
-        ]}
-        # 确认节点手里可能只剩剥离后的版本；展示版由 `technical_plan_diff` 单独保有。
-        stripped = strip_change_status(display)
-        state = {"technical_plan": stripped, "technical_plan_diff": display}
-        chosen = state.get("technical_plan_diff") or state.get("technical_plan")
-
+        from app.services.development_change_snapshot import change_snapshot_path, write_change_snapshot
         target = self.workspace / ".devagentstudio/display-source"
         target.mkdir(parents=True, exist_ok=True)
-        write_change_snapshot(target, technical_plan=chosen)
-        self.assertEqual(
-            json.loads(change_snapshot_path(target).read_text())["pages"]["two"], "deleted"
-        )
+        plan = {"pages": [{"pageId": "one", "_change_status": "unchanged"}, {"pageId": "two", "_change_status": "deleted"}]}
+        write_change_snapshot(target, technical_plan=plan, product_plan=plan)
+        snapshot = json.loads(change_snapshot_path(target).read_text())
+        self.assertEqual(snapshot["pages"], {"one": "added", "two": "deleted"})
 
-    def test_unmarked_plan_is_rejected_instead_of_writing_all_unchanged(self) -> None:
-        """没有逐项标记的计划不能生成快照：全 unchanged 会让改过的产物被静默跳过。"""
+    def test_unmarked_final_plan_is_compared_and_invalid_identity_rejected(self) -> None:
+        """开发 diff 接受无审阅标记正式版，坏目录仍必须拒绝。"""
 
-        from app.services.development_change_snapshot import (
-            change_snapshot_path, write_change_snapshot,
-        )
-
+        from app.services.development_change_snapshot import change_snapshot_path, write_change_snapshot
         target = self.workspace / ".devagentstudio/marked-plan"
         target.mkdir(parents=True, exist_ok=True)
         with self.assertRaises(ValueError):
-            write_change_snapshot(target, technical_plan={"pages": [{"pageId": "one"}]})
+            write_change_snapshot(target, technical_plan={}, product_plan={"pages": [{}]})
         self.assertFalse(change_snapshot_path(target).exists())
-        # 带标记时正常写出，且删除结论如实保留。
-        write_change_snapshot(
-            target,
-            technical_plan={"pages": [
-                {"pageId": "one", "_change_status": "unchanged"},
-                {"pageId": "two", "_change_status": "deleted"},
-            ]},
-        )
-        self.assertEqual(json.loads(change_snapshot_path(target).read_text())["pages"]["two"], "deleted")
+        write_change_snapshot(target, technical_plan={"pages": [{"pageId": "one"}]}, product_plan={"pages": [{"pageId": "one"}]})
+        self.assertEqual(json.loads(change_snapshot_path(target).read_text())["pages"]["one"], "added")
 
     def test_deleted_page_remains_pending_until_cleanup_completes(self) -> None:
         """计划删除不是源码清理完成；删除目标仍参与开发门禁并需本轮完成证据。"""

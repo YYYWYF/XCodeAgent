@@ -492,6 +492,36 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(_endpoint(result["technical_plan_diff"], _OTHER_ENDPOINT_ID)["_change_status"], "modified")
                 self.assertEqual(result["application_planning_recovery_boundary"]["boundary"], "candidate_committed")
 
+    def test_named_schema_revision_survives_generation_node_and_marks_document_endpoint(self) -> None:
+        """直接点名类型字段的原有修改经过生产生成节点后生效且关联接口显示修改。"""
+
+        from tests.test_technical_plan_content_changes import _base_plan, _contract, _endpoint, _OTHER_ENDPOINT_ID
+        baseline = _base_plan()
+        candidate = deepcopy(baseline)
+        properties = _contract(candidate)["schemas"]["MorningGreetingResponse"]["properties"]
+        properties["greetingText"] = properties.pop("morningGreetingText")
+        request = "把 MorningGreetingResponse 的 morningGreetingText 改成 greetingText"
+        state = {
+            "request": request, "technical_plan": baseline,
+            "requirement_spec": self.harness.requirement_spec,
+            "application_planning_recovery_boundary": application_planning_boundary_payload(
+                operation_id="schema-revision-test", operation=ApplicationPlanningOperation.REVISE,
+                boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+                request=request, baseline=baseline,
+            ),
+        }
+        with (
+            patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=baseline),
+            patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={}),
+            patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(candidate, [], None)),
+            patch("app.graph.nodes.planning._attach_technical_plan_contracts", side_effect=lambda _state, plan: plan),
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+        ):
+            result = technical_planning_generate(state)
+        self.assertIn("greetingText", _contract(result["technical_plan_candidate"])["schemas"]["MorningGreetingResponse"]["properties"])
+        self.assertEqual(_endpoint(result["technical_plan_diff"])["_change_status"], "modified")
+        self.assertEqual(_endpoint(result["technical_plan_diff"], _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
+
     def test_ambiguous_and_unmatched_paths_stop_before_generation(self) -> None:
         """当前事务路径匹配失败或 HTTP 方法歧义，均在调用模型之前结束。"""
 

@@ -79,14 +79,14 @@ pnpm --version
 
 **注意**：curl 从 raw.githubusercontent.com 下载。如果失败（外网受限/网络抖动），先按模式 D 配镜像源再回来重试。
 
-#### 公司内部装法（招行桌面助手，不跑 curl）
+#### 公司内部装法（桌面助手，不跑 curl）
 
-公司内部**禁止**从 GitHub 下载，**必须**走招行桌面助手：
+公司内部**禁止**从 GitHub 下载，**必须**走桌面助手：
 
 1. **不要**跑 `curl ... | bash`——公司网络到不了 raw.githubusercontent.com，且违反公司软件分发规定。
 2. 把下面指引写进修复报告的"用户下一步操作"，让用户在自己机器上装：
    ```
-   1. 打开「招行桌面助手」
+   1. 打开「桌面助手」
    2. 进入「软件管理」
    3. 搜索「NVM」
    4. 点安装（macOS 版本）
@@ -171,7 +171,7 @@ cat frontend/.npmrc   # 验证
 
 `<注入值>` 来自后端 `Settings.npm_registry`（环境变量 `DEVAGENTSTUDIO_NPM_REGISTRY`）：
 - 公司外部（默认）：`https://registry.npmmirror.com`
-- 公司内部（招商银行）：`http://central.jaf.cmbchina.cn/artifactory/api/npm/group-npm/`
+- 公司内部：`http://central.jaf.cmbchina.cn/artifactory/api/npm/group-npm/`
 
 ### D.3 重试
 
@@ -320,12 +320,12 @@ echo "$HOME"
   cd frontend && pnpm install
   ```
 
-- **公司内部**（含 `central.jaf.cmbchina.cn`）：从招行桌面助手装 nvm
+- **公司内部**（含 `central.jaf.cmbchina.cn`）：从桌面助手装 nvm
 
   公司内**禁止**从 GitHub 下载。把下面指引写进报告，让用户在自己机器上装：
 
   ```
-  1. 打开「招行桌面助手」
+  1. 打开「桌面助手」
   2. 进入「软件管理」
   3. 搜索「NVM」
   4. 点安装（macOS 版本）

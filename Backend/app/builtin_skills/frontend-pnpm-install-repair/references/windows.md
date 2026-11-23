@@ -81,14 +81,14 @@ node --version
 
 **注意**：nvm-windows 安装**必须**走 GUI 安装包（涉及服务注册），无法用 winget/解压静默装。这是 Windows 平台的固有限制。
 
-#### 公司内部装法（招行桌面助手，不走 GitHub/winget）
+#### 公司内部装法桌面助手，不走 GitHub/winget）
 
 公司内部**禁止**从 GitHub 下载，也**不要**跑 `winget install`（公司软件分发要走桌面助手）：
 
 1. **不要**跑 `winget install Schniz.fnm`，也**不要**给用户贴 GitHub 下载链接——这两条在公司内部都不可达。
 2. 把下面指引写进修复报告的"用户下一步操作"：
    ```
-   1. 打开「招行桌面助手」
+   1. 打开「桌面助手」
    2. 进入「软件管理」
    3. 搜索「NVM for Windows」
    4. 点安装
@@ -104,7 +104,7 @@ node --version
    ```
    然后继续走 A.4 激活 pnpm。
 
-**注意**：招行桌面助手版的 nvm-windows 与官方版可能装到不同位置（通常 `%USERPROFILE%\nvm` 或 `C:\Program Files\nvm`）。Agent 不需要知道具体位置，只要 `nvm version` 能跑通就用它。
+**注意**：桌面助手版的 nvm-windows 与官方版可能装到不同位置（通常 `%USERPROFILE%\nvm` 或 `C:\Program Files\nvm`）。Agent 不需要知道具体位置，只要 `nvm version` 能跑通就用它。
 
 ### A.4 激活 pnpm 并重试
 
@@ -194,7 +194,7 @@ powershell -Command "Get-Content 'frontend\.npmrc'"
 
 `<注入值>` 来自后端 `Settings.npm_registry`（环境变量 `DEVAGENTSTUDIO_NPM_REGISTRY`）：
 - 公司外部（默认）：`https://registry.npmmirror.com`
-- 公司内部（招商银行）：`http://central.jaf.cmbchina.cn/artifactory/api/npm/group-npm/`
+- 公司内部：`http://central.jaf.cmbchina.cn/artifactory/api/npm/group-npm/`
 
 ### D.3 重试
 
@@ -362,12 +362,12 @@ echo %USERPROFILE%
   cd frontend && pnpm install
   ```
 
-- **公司内部**（含 `central.jaf.cmbchina.cn`）：从招行桌面助手装 NVM for Windows
+- **公司内部**（含 `central.jaf.cmbchina.cn`）：从桌面助手装 NVM for Windows
 
   公司内**禁止**跑 `winget install`，也**不要**给用户贴 GitHub 下载链接——这两条在公司内部都不可达。把下面指引写进修复报告的"用户下一步操作"：
 
   ```
-  1. 打开「招行桌面助手」
+  1. 打开「桌面助手」
   2. 进入「软件管理」
   3. 搜索「NVM for Windows」
   4. 点安装

@@ -58,6 +58,31 @@ function plan(): Record<string, any> {
   }
 }
 
+test('待确认卡修订后的接口响应、删除与未变更徽标同步展示', () => {
+  const before = plan(), after = plan()
+  after.api_contracts[0].schemas.SubmitStatus = {
+    type: 'object', properties: { status: { type: 'boolean' } }
+  }
+  const changed = after.api_contracts[0].endpoints[0]
+  changed.response_schema_ref = 'SubmitStatus'
+  changed._change_status = 'modified'
+  after.api_contracts[0].endpoints[1]._change_status = 'deleted'
+  after.api_contracts[0].endpoints.push({
+    id: 'unchanged', name: '其他接口', method: 'GET', path: '/other',
+    response_schema_ref: 'Task', _change_status: 'unchanged'
+  })
+  const markup = renderToStaticMarkup(createElement(TechnicalPlanReviewPanel, {
+    plan: after, productPlan: {}, baseline: before
+  }))
+  assert.match(markup, /有变更/)
+  assert.match(markup, /待删除/)
+  assert.match(markup, /未变更/)
+  assert.match(markup, /SubmitStatus/)
+  const interfaces = technicalPlanDiff(before, after, {})[2].objects
+  assert.equal(interfaces.find((item) => item.id.endsWith(':list'))?.kind, '修改')
+  assert.equal(after.api_contracts[0].endpoints[1]._change_status, 'deleted')
+})
+
 test('确认事实、摘要、对象键与有身份列表的重排不产生业务差异', () => {
   const before = plan(),
     after = plan()
@@ -133,11 +158,10 @@ test('同名参数按位置匹配；仅名称变化且唯一的实体字段合�
       baseline: before
     })
   )
-  assert.match(markup, /名称变更/)
-  assert.match(markup, /<code>title<\/code>/)
-  assert.match(markup, /<code>subject<\/code>/)
-  assert.match(markup, /其余属性未变/)
-  assert.doesNotMatch(markup, /&quot;name&quot;:|&quot;type&quot;:/)
+  assert.match(markup, /技术规划章节/)
+  assert.match(markup, /实体 · 1/)
+  assert.match(markup, /有变更/)
+  assert.doesNotMatch(markup, /技术规划本次变更|修改前/)
 })
 
 test('嵌套 JSON Schema 的字段 key 改名合并展示，未变属性不重复展开', () => {
@@ -157,7 +181,7 @@ test('嵌套 JSON Schema 的字段 key 改名合并展示，未变属性不重�
   }
 })
 
-test('API 字段及同名实体引用同步改名时合并名称，仍展示引用变化', () => {
+test('API 字段与实体引用同时改名时保留真实增删及引用变化', () => {
   const before = plan(),
     after = plan()
   before.api_contracts[0].schemas.Task.properties.title.entity_field_ref = 'task.title'
@@ -168,12 +192,9 @@ test('API 字段及同名实体引用同步改名时合并名称，仍展示引�
   delete after.api_contracts[0].schemas.Task.properties.title
   after.api_contracts[0].schemas.Task.required = ['subject']
   let changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
-  assert.equal(changes.length, 2)
-  assert.equal(changes[0].kind, 'rename')
-  assert.equal(changes[0].unchanged, false)
-  assert.equal(changes[1].field, 'entity_field_ref')
-  assert.equal(changes[1].before, 'task.title')
-  assert.equal(changes[1].after, 'task.subject')
+  assert.ok(changes.every((change) => change.kind !== 'rename'))
+  assert.ok(changes.some((change) => change.field === 'entity_field_ref' && change.before === 'task.title'))
+  assert.ok(changes.some((change) => change.field === 'entity_field_ref' && change.after === 'task.subject'))
   after.api_contracts[0].schemas.Task.properties.subject.entity_field_ref = 'other.subject'
   changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
   assert.ok(changes.every((change) => change.kind !== 'rename'))
@@ -204,8 +225,9 @@ test('API 字段改名且实体引用不变时只展示名称，required 同步�
   const markup = renderToStaticMarkup(
     createElement(TechnicalPlanReviewPanel, { plan: after, productPlan: {}, baseline: before })
   )
-  assert.match(markup, /名称变更/)
-  assert.doesNotMatch(markup, /删除|新增|&quot;required&quot;:/)
+  assert.match(markup, /有变更/)
+  assert.match(markup, /subject/)
+  assert.doesNotMatch(markup, /修改前|技术规划本次变更/)
   assert.equal(JSON.stringify({ before, after }), snapshot)
 })
 
@@ -241,7 +263,7 @@ test('嵌套多字段改名合并 required，但真实必填变化仍保留', ()
   assert.deepEqual(required.after, ['active', 'cup_image'])
 })
 
-test('原引用不变与同步改名同时存在候选时不强行合并，也不隐藏 required', () => {
+test('仅非名称属性完全相同的候选合并改名，其他候选与 required 仍保留', () => {
   const before = plan(),
     after = plan()
   before.api_contracts[0].schemas.Task.properties.title.entity_field_ref = 'task.title'
@@ -256,8 +278,8 @@ test('原引用不变与同步改名同时存在候选时不强行合并，也�
   delete after.api_contracts[0].schemas.Task.properties.title
   after.api_contracts[0].schemas.Task.required = ['subject']
   const changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
-  assert.ok(changes.every((change) => change.kind !== 'rename'))
-  assert.ok(changes.some((change) => change.field === 'required'))
+  assert.ok(changes.some((change) => change.kind === 'rename' && change.after === 'subject'))
+  assert.ok(changes.some((change) => change.field === 'entity_field_ref' && change.after === 'task.heading'))
 })
 
 test('改名同时变更属性或匹配不唯一时保留增删，不隐藏实际变化', () => {
@@ -309,16 +331,12 @@ test('修改审阅保留上方中英文说明，下方用代码展示属性名�
       baseline: before
     })
   )
-  assert.match(
-    markup,
-    /请求参数（parameters） → query.id → 类型定义（schema） → 说明（description）/
-  )
-  assert.match(markup, /最短长度（minLength）/)
-  assert.match(markup, /删除/)
-  assert.match(markup, /<code>&quot;description&quot;: &quot;按编号搜索&quot;<\/code>/)
-  assert.match(markup, /新增/)
-  assert.match(markup, /<code>&quot;minLength&quot;: 1<\/code>/)
-  assert.doesNotMatch(markup, /片段行号|代码差异|<table/)
+  const changes = technicalPlanDiff(before, after, {})[2].objects[0].differences
+  assert.ok(changes.some((change) => change.path.includes('请求参数（parameters） → query.id → 类型定义（schema） → 说明（description）')))
+  assert.ok(changes.some((change) => change.field === 'minLength' && change.after === 1))
+  assert.match(markup, /有变更/)
+  assert.match(markup, /最短长度：1/)
+  assert.doesNotMatch(markup, /片段行号|代码差异|修改前/)
 })
 
 test('页面绑定显示产品页面名称，连续两轮比较不会累积上一轮改动', () => {
@@ -339,7 +357,7 @@ test('页面绑定显示产品页面名称，连续两轮比较不会累积上�
   )
 })
 
-test('首次生成只展示完整规划，已有基线默认展示差异与两个阅读入口', () => {
+test('首次与修订均展示当前完整规划，修订章节保留变更计数和徽标', () => {
   const before = plan(),
     after = plan()
   after.entities[0].fields[0].required = true
@@ -350,11 +368,10 @@ test('首次生成只展示完整规划，已有基线默认展示差异与两�
   const changed = renderToStaticMarkup(
     createElement(TechnicalPlanReviewPanel, { plan: after, productPlan: {}, baseline: before })
   )
-  assert.match(changed, /技术规划本次变更/)
-  assert.match(changed, /本次变更/)
-  assert.match(changed, /完整规划/)
-  assert.match(changed, /修改前/)
-  assert.match(changed, /<code>&quot;required&quot;: true<\/code>/)
+  assert.match(changed, /技术规划章节/)
+  assert.match(changed, /实体 · 1/)
+  assert.match(changed, /未变更/)
+  assert.doesNotMatch(changed, /技术规划本次变更|修改前|完整规划/)
 })
 
 test('无变化时展示说明，生成中保留旧版且不显示提示卡和未完成的差异', () => {
@@ -362,7 +379,8 @@ test('无变化时展示说明，生成中保留旧版且不显示提示卡和�
   const empty = renderToStaticMarkup(
     createElement(TechnicalPlanReviewPanel, { plan: before, productPlan: {}, baseline: before })
   )
-  assert.match(empty, /本次未产生内容变化/)
+  assert.match(empty, /未变更/)
+  assert.doesNotMatch(empty, /有变更/)
   const running = renderToStaticMarkup(
     createElement(TechnicalPlanReviewPanel, {
       plan: before,

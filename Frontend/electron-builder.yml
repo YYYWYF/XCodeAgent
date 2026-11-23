@@ -11,6 +11,7 @@ asarUnpack:
   - resources/**
 win:
   target: nsis
+  icon: build/icon.ico
   verifyUpdateCodeSignature: false
   executableName: devagentstudio
   extraResources:
@@ -28,6 +29,7 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  icon: build/icon.icns
   target:
     - dmg
     - zip

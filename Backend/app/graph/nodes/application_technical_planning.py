@@ -29,7 +29,9 @@ from app.services.technical_plan_carryover import (
     drop_generated_fields,
     read_technical_plan_carryover,
 )
-from app.services.technical_plan_content_changes import direct_endpoint_revision_targets
+from app.services.technical_plan_content_changes import (
+    direct_endpoint_revision_targets, direct_revision_schema_targets,
+)
 from app.services.technical_plan_merger import (
     merge_direct_endpoint_revision,
     merge_technical_plan,
@@ -392,9 +394,22 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         direct_endpoint_revision_targets(request, existing_plan)
         if direct_revision else ({}, [])
     )
+    schema_targets, schema_errors = (
+        direct_revision_schema_targets(request, existing_plan)
+        if direct_revision else ({}, [])
+    )
+    target_errors.extend(schema_errors)
     if target_errors:
         # 生成前即挂既有 AG-UI 错误审阅门；不调用模型、不覆盖旧草稿、不进入确认成功。
         return _technical_generation_failure(state, target_errors, generation_fragments)
+    if targets:
+        technical_requirement = {
+            **technical_requirement,
+            "technical_plan_revision_scope": {
+                "endpoints": list(targets.values()),
+                "schemas": {key: sorted(names) for key, names in schema_targets.items()},
+            },
+        }
     plan, errors, failed_candidate = _generate_valid_technical_plan(
         state,
         technical_requirement,
@@ -427,10 +442,12 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
     # 合并产出两份：
     # - candidate：剥离 _change_status 的干净版，走原有校验 / 写盘 / 入库全流程；
     # - technical_plan_diff：带标记的展示版，仅存 state 供前端分区显示，不落盘。
-    if targets:
+    if targets or schema_targets:
         try:
             # 当前事务基线决定可修改内容；迭代初始基线仅重算展示，不能回退已采纳修订。
-            controlled = merge_direct_endpoint_revision(existing_plan, plan, targets)
+            controlled = merge_direct_endpoint_revision(
+                existing_plan, plan, targets, schema_targets=schema_targets,
+            )
             merged_with_status = technical_plan_revision_diff(baseline, controlled)
         except (TypeError, ValueError) as exc:
             return _technical_generation_failure(state, [str(exc)], generation_fragments)
@@ -620,14 +637,8 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     plan = state.get("technical_plan")
     if not isinstance(plan, dict) or not plan:
         raise ValueError("TechnicalPlan 正式候选缺失，无法确认。")
-    # 展示版标记要在剥离前留一份：确认成功后它是本轮变更的唯一来源，
-    # 用来冻结开发阶段的"新增/修改/删除"快照（见 development_change_snapshot）。
-    #
-    # 取值顺序有讲究：`technical_plan_diff` 是 generate 阶段单独存下的展示版，
-    # 从生成到确认一路不受 `technical_plan` 被改写的影响，是权威来源；
-    # `technical_plan` 只在没有该字段时才兜底（例如冷恢复）。
-    display_plan = deepcopy(state.get("technical_plan_diff") or plan)
     # 确认界面拿到的计划带本轮 `_change_status` 展示标记；确认、校验、落盘一律用剥离后的干净版，
+    # 开发变更稍后按正式规划与迭代基线独立计算。
     # 否则标记会被校验当成非法字段，也会跟着正式产物写进 git。
     plan = strip_change_status(plan)
     from app.graph.nodes.planning import (
@@ -675,13 +686,10 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
             "technical_plan_json_path": technical_plan_json,
         }
     )
-    # 正式产物不带变更标记，开发阶段又要靠它判断"哪些已删除、哪些要重做"，
-    # 所以在确认这一刻把展示版的结论冻结成独立快照。写盘失败只记日志：
-    # 它只影响开发阶段的打标与重做，不能反过来阻断已经完成的技术规划确认。
-    try:
-        write_change_snapshot(workspace, technical_plan=display_plan)
-    except ValueError:
-        logger.warning("development_change_snapshot_missing_marks", exc_info=True)
+    # 开发资格独立基于最终正式规划与迭代起始基线计算，不能复制计划审阅标记。
+    write_change_snapshot(
+        workspace, technical_plan=confirmed_plan, product_plan=state.get("product_plan") or {},
+    )
     revision_continuation: dict[str, Any] = {}
     active_revision = lifecycle.active_formal_revision
     if active_revision is not None and active_revision.formal_branch.value == "design_stage_revision":

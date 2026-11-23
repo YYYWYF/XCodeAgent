@@ -73,7 +73,7 @@ def product_plan_carryover_path(workspace: str | Path) -> Path:
 def read_product_plan_carryover(workspace: str | Path) -> dict[str, dict[str, Any]]:
     """读取上一轮登记的页面定义。
 
-    返回 `{pageId: {"requirement": {...}, "definition": {...}}}`。
+    返回 `{pageId: {"requirement": {...}, "development_page": {...}, "definition": {...}}}`。
 
     文件缺失或损坏时按"没有记录"处理，而不是报错：沿用是让用户少做重复工作的增强，
     读不出来时退回"本轮按模型给的走"即可，不该因此阻断规划阶段。
@@ -103,6 +103,7 @@ def read_product_plan_carryover(workspace: str | Path) -> dict[str, dict[str, An
             continue
         carried[str(page_id)] = {
             "requirement": requirement,
+            "development_page": record.get("development_page"),
             "definition": {
                 field: definition.get(field)
                 for field in DEFINITION_FIELDS
@@ -138,6 +139,7 @@ def write_product_plan_carryover(
         "pages": {
             str(page_id): {
                 "requirement": record.get("requirement") or {},
+                "development_page": record.get("development_page"),
                 "definition": {
                     field: record["definition"].get(field)
                     for field in DEFINITION_FIELDS

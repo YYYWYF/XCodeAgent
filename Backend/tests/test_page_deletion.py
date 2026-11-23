@@ -287,6 +287,10 @@ class DeletePageNodeTests(unittest.TestCase):
         # 新快照确认时必须作废旧快照的已重做记录，否则待删除接口会被门禁误判为未变更。
         write_change_snapshot(
             self.root,
+            product_plan={"pages": [
+                {"pageId": "cancel_completed", "_change_status": "deleted"},
+                {"pageId": "card_return"},
+            ]},
             technical_plan={
                 "pages": [
                     {"pageId": "cancel_completed", "_change_status": "deleted"},

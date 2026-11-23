@@ -1018,6 +1018,7 @@ function setupBrowserIpc(): void {
       minHeight: 640,
       title: '全屏预览',
       backgroundColor: '#ffffff',
+      ...(process.platform !== 'darwin' ? { icon } : {}),
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
@@ -1752,7 +1753,7 @@ function createMainWindow(): void {
     backgroundColor: '#f5f7fb',
     show: false,
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    ...(process.platform !== 'darwin' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -1808,7 +1809,7 @@ function createLoginWindow(): void {
     minimizable: false,
     maximizable: false,
     resizable: false,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    ...(process.platform !== 'darwin' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,

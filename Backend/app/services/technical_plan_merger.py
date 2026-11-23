@@ -301,9 +301,11 @@ def _schema_dependency_names(schemas: Any, roots: set[str]) -> set[str]:
 def merge_direct_endpoint_revision(
     base_plan: dict[str, Any], new_plan: dict[str, Any],
     targets: dict[str, dict[str, Any]],
+    *, schema_targets: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
-    """只采纳用户精确点名接口及其独占类型的修订，其他对象严格继承当前基线。"""
+    """只采纳精确点名接口及类型的修订，其他对象严格继承当前基线。"""
 
+    schema_targets = schema_targets or {}
     base = strip_change_status(base_plan)
     candidate = strip_change_status(new_plan)
     scoped = deepcopy(base)
@@ -312,12 +314,17 @@ def merge_direct_endpoint_revision(
     for contract in _items(scoped.get("api_contracts")):
         contract_id = _item_id(contract, "id")
         selected = {key: target for key, target in targets.items() if target["contract_id"] == contract_id}
-        if not selected:
+        selected_schemas = schema_targets.get(contract_id, set())
+        if not selected and not selected_schemas:
             continue
         proposed = contracts.get(contract_id, {})
         endpoints = {_item_id(item, "id"): item for item in _items(proposed.get(ENDPOINTS_FIELD))}
-        base_schemas = contract.get(SCHEMAS_FIELD) or {}
+        base_schemas = deepcopy(contract.get(SCHEMAS_FIELD) or {})
         new_schemas = proposed.get(SCHEMAS_FIELD) or {}
+        for name in selected_schemas:
+            if name not in new_schemas:
+                raise ValueError(f"点名类型未完成修改：{contract_id}.{name}。未授权删除类型。")
+            contract.setdefault(SCHEMAS_FIELD, {})[name] = deepcopy(new_schemas[name])
         # 非目标接口和仅要求删除的接口仍引用基线类型，不能被共享类型的改写波及。
         protected = _schema_dependency_names(base_schemas, _referenced_schema_names([
             item for item in _items(contract.get(ENDPOINTS_FIELD))
@@ -344,7 +351,7 @@ def merge_direct_endpoint_revision(
             for name in needed:
                 if name not in new_schemas:
                     raise ValueError(f"点名接口引用缺失类型：{contract_id}.{name}。")
-                if name in protected and _canonical(base_schemas.get(name)) != _canonical(new_schemas[name]):
+                if name in protected and name not in selected_schemas and _canonical(base_schemas.get(name)) != _canonical(new_schemas[name]):
                     raise ValueError(f"点名接口修改影响未授权的共享类型：{contract_id}.{name}。请为目标接口拆分独立类型，保留其他接口基线。")
                 contract.setdefault(SCHEMAS_FIELD, {})[name] = deepcopy(new_schemas[name])
             updates.append(deepcopy(changed))

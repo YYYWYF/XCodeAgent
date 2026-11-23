@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import unittest
 
-from app.services.technical_plan_content_changes import direct_endpoint_revision_targets
+from app.services.technical_plan_content_changes import (
+    direct_endpoint_revision_targets, direct_revision_schema_targets,
+)
 from app.services.technical_plan_merger import (
     merge_direct_endpoint_revision, merge_technical_plan, relevant_object_ids,
     strip_change_status, technical_plan_revision_diff,
@@ -168,6 +170,7 @@ class DirectEndpointRevisionTests(unittest.TestCase):
         for request in (
             "不要删除 GET /api/greetings/morning 接口，只改说明",
             "GET /api/greetings/morning 接口删除响应里的分页字段",
+            "GET /api/greetings/morning 接口删除 响应里的分页字段",
         ):
             with self.subTest(request=request):
                 self.assertFalse(self._targets(request, base)[_ENDPOINT_ID]["deleted"])
@@ -184,6 +187,49 @@ class DirectEndpointRevisionTests(unittest.TestCase):
             merge_direct_endpoint_revision(base, candidate, targets)
         merged = merge_direct_endpoint_revision(base, base, targets)
         self.assertEqual(strip_change_status(merged), base)
+
+    def test_named_schema_field_change_preserves_other_types_and_marks_its_endpoint(self) -> None:
+        """原有点名类型字段修改仍能落地，不要求用户改写成接口路径指令。"""
+
+        base = _base_plan()
+        request = "把 MorningGreetingResponse 中的 morningGreetingText 改成 greetingText"
+        schemas, errors = direct_revision_schema_targets(request, base)
+        self.assertEqual(errors, [])
+        self.assertEqual(schemas, {"greeting_contract": {"MorningGreetingResponse"}})
+        candidate = json.loads(json.dumps(base))
+        props = _contract(candidate)["schemas"]["MorningGreetingResponse"]["properties"]
+        props["greetingText"] = props.pop("morningGreetingText")
+        _contract(candidate)["schemas"]["OtherResponse"]["description"] = "模型润色"
+        merged = merge_direct_endpoint_revision(base, candidate, {}, schema_targets=schemas)
+        self.assertEqual(_endpoint(merged)["_change_status"], "modified")
+        self.assertEqual(_endpoint(merged, _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
+        self.assertIn("greetingText", _contract(merged)["schemas"]["MorningGreetingResponse"]["properties"])
+        self.assertEqual(_contract(merged)["schemas"]["OtherResponse"], _contract(base)["schemas"]["OtherResponse"])
+
+    def test_named_schema_permissions_are_not_derived_from_similar_names(self) -> None:
+        """类型原文名称不精确或同名跨组时，不能扩大授权范围。"""
+
+        base = _base_plan()
+        targets, errors = direct_revision_schema_targets("修改 MorningGreetingResponseExtra", base)
+        self.assertEqual((targets, errors), ({}, []))
+        base["api_contracts"].append({**_contract(base), "id": "duplicate_contract"})
+        targets, errors = direct_revision_schema_targets("修改 MorningGreetingResponse", base)
+        self.assertEqual(targets, {})
+        self.assertIn("歧义", errors[0])
+
+    def test_platform_scope_prompt_keeps_user_request_and_shared_schema_instruction(self) -> None:
+        """平台范围作为独立模型约束投射，不替换用户修改意见或全量校验反馈。"""
+
+        from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
+        prompt = technical_plan_feedback_prompt({
+            "planning_adjustment_request": "本次只改提交状态",
+            "technical_plan_validation_feedback": "当前类型引用未闭合",
+            "technical_plan_revision_scope": {"endpoints": [{"method": "POST", "path": "/api/greetings"}]},
+        })
+        self.assertIn("本次只改提交状态", prompt)
+        self.assertIn("当前类型引用未闭合", prompt)
+        self.assertIn("拆分独立类型", prompt)
+        self.assertIn("/api/greetings", prompt)
 
     def test_schema_response_change_is_adopted_without_other_rewrites(self) -> None:
         """修改独占响应类型时接口标修改，无关类型、页面、外壳及新增接口不采纳。"""

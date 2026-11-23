@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import path from 'node:path'
+import icon from '../../../resources/icon.png?asset'
 import { PRODUCT_DISPLAY_NAME } from '../branding'
 import { AppUpdateCoordinator } from './coordinator'
 import { checkAppRelease } from './checkRelease'
@@ -42,6 +43,7 @@ export async function runStartupUpdate(
     title: `${PRODUCT_DISPLAY_NAME} 更新`,
     backgroundColor: '#f7f5fc',
     autoHideMenuBar: true,
+    ...(process.platform !== 'darwin' ? { icon } : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,

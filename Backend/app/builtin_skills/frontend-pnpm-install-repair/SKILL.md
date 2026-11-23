@@ -53,7 +53,7 @@ description: 前端依赖安装失败的自动诊断与修复技能。当 DevAge
 | 生成应用运行环境 | 期望 registry |
 | --- | --- |
 | 公司外部（默认） | `https://registry.npmmirror.com` |
-| 公司内部（招商银行） | `http://central.jaf.cmbchina.cn/artifactory/api/npm/group-npm/` |
+| 公司内部| `http://central.jaf.cmbchina.cn/artifactory/api/npm/group-npm/` |
 
 **绝对不要**：
 - ❌ 不要在 SKILL/命令里硬编码 registry URL——必须读注入值
@@ -129,7 +129,7 @@ ERR_PNPM_UNSUPPORTED_ENGINE
 3. **挑选目标 Node 版本**：从 `engines.node` 范围里挑一个具体版本（取下限的稳定版本，例如 `>=20.19 <23` → `20.19.0`）。
 4. **检查版本管理器**：macOS 优先 nvm，其次 fnm；Windows 用 nvm-windows 或 fnm。如果都没装，按平台参考文件引导装一个。
    - **判断生成应用要在哪种环境跑**：看 `failureEvidence.deployment.npm_registry` 注入值——
-     - 含 `central.jaf.cmbchina.cn` → **公司内部**：nvm / nvm-windows 都得从**招行桌面助手**装（不能从 GitHub 下载）。Agent 不要跑 `curl | bash`，也不要让用户去 GitHub。把"打开招行桌面助手 → 软件管理 → 搜索 NVM（macOS）/ NVM for Windows（Windows）→ 点安装"写进报告的"用户下一步操作"，让用户在自己机器上装完后回到工作台点重试。
+     - 含 `central.jaf.cmbchina.cn` → **公司内部**：nvm / nvm-windows 都得从**桌面助手**装（不能从 GitHub 下载）。Agent 不要跑 `curl | bash`，也不要让用户去 GitHub。把"打开桌面助手 → 软件管理 → 搜索 NVM（macOS）/ NVM for Windows（Windows）→ 点安装"写进报告的"用户下一步操作"，让用户在自己机器上装完后回到工作台点重试。
      - 否则 → **公司外部**：macOS 走 `curl ... | bash`（GitHub raw），Windows 走 nvm-windows 的 GitHub Releases。
 5. **切换并验证**：用版本管理器切到目标 Node，跑 `node --version` 确认；然后跑 `corepack enable && corepack prepare pnpm@11.9.0 --activate` 激活模板要求的 pnpm。
 6. **重试 `pnpm install`**（在同一个 shell 上下文里），确保新激活的 Node/pnpm 生效。
@@ -138,7 +138,7 @@ ERR_PNPM_UNSUPPORTED_ENGINE
 **绝对不要**：
 - ❌ 不要装到系统目录（`/usr/local`、`C:\Program Files`）——会留下权限隐患
 - ❌ 不要修改 `frontend/package.json` 的 `engines.node` 去适配用户的旧 Node——这反向污染模板
-- ❌ 生成的应用要在公司内部跑时，不要尝试从 GitHub 下载 nvm/nvm-windows（网络不通，且违反公司软件分发规定）——必须引导用户走招行桌面助手
+- ❌ 生成的应用要在公司内部跑时，不要尝试从 GitHub 下载 nvm/nvm-windows（网络不通，且违反公司软件分发规定）——必须引导用户走桌面助手
 
 平台相关的具体命令（含 nvm 安装、环境变量加载、子进程 PATH 设置）：见 `references/macos.md` 和 `references/windows.md` 的 **A 节**。
 

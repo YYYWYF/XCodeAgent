@@ -301,8 +301,9 @@ def _register_product_plan_carryover(workspace_root: Path, devagentstudio_dir: P
     语义没变但 `itemId` 全换，于是上一轮按旧 ID 产出的设计稿对不上、继承被拒，
     用户被迫重做本可沿用的页面。
 
-    登记两样东西：
+    登记三样东西：
     - `requirement`：上一轮 RequirementSpec 的该页条目 —— 下一轮用它判断"用户改没改这一页"
+    - `development_page`：上一轮完整 ProductPlan 页面 —— 作为开发变更快照的迭代基线
     - `definition`：上一轮 ProductPlan 里模型补充的那部分 —— 未变时整份沿用
 
     读不到任一份产物（首轮、或从未进入规划）时清掉旧记录 —— 否则会沿用更早一轮的内容。
@@ -332,6 +333,8 @@ def _register_product_plan_carryover(workspace_root: Path, devagentstudio_dir: P
             continue
         pages[page_id] = {
             "requirement": requirement_pages[page_id],
+            # 开发 diff 使用完整产品页面，冻结于迭代起点，不随本轮审阅/续修推进。
+            "development_page": page,
             "definition": {field: page.get(field) for field in _DEFINITION_FIELDS},
         }
 

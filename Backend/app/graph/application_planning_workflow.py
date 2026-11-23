@@ -457,24 +457,12 @@ def _technical_planning(state: ProjectState) -> dict:
             )
         merged_state = {**node_state, **update}
         confirmation = confirm_application_planning_artifacts(merged_state)
-        # 这正是"技术规划被确认"的真实位置（`technical_planning_confirm` 不是主流程）。
-        # 正式产物不带变更标记，开发阶段又靠它判断删除与重做，因此在这里冻结快照。
-        # 优先用 `technical_plan_diff`：它是 generate 阶段单独保存的展示版，
-        # 从生成到确认全程不受 `technical_plan` 被改写成干净版的影响。
-        try:
-            write_change_snapshot(
-                workspace,
-                technical_plan=(
-                    update.get("technical_plan_diff")
-                    or update.get("technical_plan_candidate_diff")
-                    or merged_state.get("technical_plan")
-                    or {}
-                ),
-            )
-        except ValueError:
-            # 拿不到逐项标记时宁可没有快照：开发阶段会据此关闭测试入口，
-            # 而不是把"不知道"当成"什么都没变"。确认本身已经成功，不能因此回滚。
-            logger.warning("development_change_snapshot_missing_marks", exc_info=True)
+        # 开发快照独立对比最终正式规划与迭代冻结基线，不复制对话审阅标记。
+        write_change_snapshot(
+            workspace,
+            technical_plan=merged_state.get("technical_plan") or {},
+            product_plan=merged_state.get("product_plan") or {},
+        )
         lifecycle = _sync_design_revision_artifact(
             workspace,
             lifecycle,

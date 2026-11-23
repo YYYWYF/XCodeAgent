@@ -43,7 +43,7 @@ def direct_endpoint_revision_targets(
             # 否定表达不构成删除授权；接口之后的明确删除也支持，但删除响应字段不算。
             negated = bool(re.search(r"(?:不要|不应|不允许|不能|禁止|无需|不必|不得|别|不)\s*(?:删除|移除|去掉)", prefix))
             following = clause[match.end():]
-            suffix_deleted = bool(re.match(r"[`\"”'\s]*(?:接口\s*)?(?:删除|移除|去掉)(?:\s|$|[，,])", following))
+            suffix_deleted = bool(re.match(r"[`\"”'\s]*(?:接口\s*)?(?:删除|移除|去掉)\s*(?:$|[，,])", following))
             deleted = (deleted and not negated) or suffix_deleted
             matches = [
                 (contract, endpoint) for contract, endpoint in endpoints
@@ -73,6 +73,28 @@ def direct_endpoint_revision_targets(
             else:
                 targets[endpoint_id] = target
     return targets, list(dict.fromkeys(errors))
+
+
+def direct_revision_schema_targets(
+    request: str, base_plan: dict[str, Any],
+) -> tuple[dict[str, set[str]], list[str]]:
+    """按用户原文中明确点名的类型匹配修改范围，支持原有类型字段局部编辑。"""
+
+    owners: dict[str, list[str]] = {}
+    for contract in _items(base_plan.get("api_contracts")):
+        for name in (contract.get("schemas") or {}):
+            owners.setdefault(name, []).append(str(contract.get("id") or ""))
+    targets: dict[str, set[str]] = {}
+    errors: list[str] = []
+    for name, contract_ids in owners.items():
+        # 标识边界排除更长类型名，不把模型输出的类型或相近名称作为授权证据。
+        if not re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", request):
+            continue
+        if len(contract_ids) != 1:
+            errors.append(f"点名类型存在歧义：{name} 出现在多个接口分组，请明确分组及修改范围。")
+        else:
+            targets.setdefault(contract_ids[0], set()).add(name)
+    return targets, errors
 
 
 TextReplacement = tuple[str, str]

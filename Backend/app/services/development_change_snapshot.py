@@ -1,29 +1,27 @@
-"""把本轮各产物的变更类型落成快照，供开发阶段打标、禁用与重做判定。
+"""冻结开发阶段相对本迭代起始基线的变更类型，供入口、禁用与重做判定。
 
-**为什么需要它**：技术规划的变更类型（新增 / 修改 / 未变更 / 删除）是"本轮相对上一版
-基线"的视图，按契约不能写进正式产物（`plans/technical-plan.json` 要进 git，也不能
-被下游校验当成业务字段）。可开发阶段——工作台的"今天想从哪里开始"入口、测试门禁、
-构建跳过逻辑——恰恰需要这个事实，否则用户会看到一个本轮已经删除的页面仍然可以点进去
-开发，已经修改过的接口也不会被重做。
-
-因此本模块在 TechnicalPlan **确认**那一刻，把最终变更类型冻结成一份独立快照
-（`.devagentstudio/development-change-snapshot.json`），而不是让下游各自重新比对基线：
-
-- 快照只在确认时由计划阶段写一次，之后是只读事实，不参与任何生成决策；
-- 基线来源与计划阶段合并时完全一致（`technical_plan_carryover`），保证"界面看到的
-  标记"与"构建跳过的判断"是同一份结论，不会各算各的。
+计划审阅标识只描述用户当时看到的比较结果，不能作为开发资格事实。
+确认最终 TechnicalPlan 时独立比较跨迭代冻结的基线，忽略 added/modified/unchanged
+展示标记；页面同时考虑产品定义和依赖接口的变化。开发完成记录与快照仍分开保存。
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
+from app.services.product_plan_carryover import read_product_plan_carryover
 from app.services.repository_branch import read_workspace_branch_name
+from app.services.technical_plan_carryover import (
+    drop_generated_fields, read_technical_plan_carryover,
+)
+from app.services.api_schema_refs import normalize_local_schema_ref
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -102,60 +100,164 @@ def _reset_previous_snapshot_redevelopment(workspace: str | Path) -> None:
         raise ValueError("无法重置上一技术规划的已开发记录。") from exc
 
 
-def write_change_snapshot(
-    workspace: str | Path,
-    *,
-    technical_plan: dict[str, Any],
-) -> dict[str, Any]:
-    """从已确认 TechnicalPlan 提取变更类型并写盘，返回写入的载荷。
+def _records(value: Any, field: str, key: str) -> dict[str, dict[str, Any]]:
+    """校验当前规划目录的稳定身份，拒绝坏数据造成目标静默退出快照。"""
 
-    `technical_plan` 必须是确认界面使用的**展示版**（带 `_change_status`）。正式版没有
-    标记，用它只会写出一份全 "unchanged" 的快照，所以这里对无标记的输入直接报错，
-    避免把"没有变更信息"误当成"什么都没变"。
-    """
+    records = value.get(field, []) if isinstance(value, dict) else []
+    if not isinstance(records, list):
+        raise ValueError(f"开发变更比较要求 {field} 为数组。")
+    result: dict[str, dict[str, Any]] = {}
+    for record in records:
+        identity = record.get(key) if isinstance(record, dict) else None
+        if not isinstance(identity, str) or not identity.strip() or identity in result:
+            raise ValueError(f"开发变更比较要求 {field} 具有唯一的 {key}。")
+        result[identity] = record
+    return result
+
+
+def _content(value: Any) -> Any:
+    """去掉审阅标记和运行派生内容，并规范集合顺序，只比较正式业务内容。"""
+
+    if isinstance(value, dict):
+        return {key: _content(child) for key, child in sorted(value.items())
+                if key not in {CHANGE_STATUS_FIELD, "confirmation_status", "detail_design", "entity_detail_plans", "page_implementation_contracts"}}
+    if isinstance(value, list):
+        children = [_content(child) for child in value]
+        # 身份列表及纯值集合重排不改变开发要求。
+        return sorted(children, key=lambda child: json.dumps(child, sort_keys=True, ensure_ascii=False))
+    return value
+
+
+def _changed(current: dict[str, Any] | None, previous: dict[str, Any] | None) -> str:
+    """按最终业务内容计算增删改，只有 deleted 是正式删除事实而非审阅标记。"""
+
+    if current is None or _status(current) == "deleted":
+        return "deleted"
+    if previous is None or _status(previous) == "deleted":
+        return "added"
+    return "unchanged" if _content(current) == _content(previous) else "modified"
+
+
+def _endpoint_content(contract: dict[str, Any], endpoint: dict[str, Any]) -> Any:
+    """展开接口实际引用的请求、响应类型，间接及循环引用都参与独立开发比较。"""
+
+    schemas = contract.get("schemas") or {}
+    referenced: dict[str, Any] = {}
+    contract_id = str(contract.get("id") or "")
+
+    def visit(value: Any) -> None:
+        """沿本契约类型引用展开，已访问名称终止循环。"""
+
+        if isinstance(value, dict):
+            if value.get("$ref"):
+                add(normalize_local_schema_ref(value["$ref"], contract_id=contract_id))
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    def add(name: str) -> None:
+        """收集类型定义；悬空引用明确失败而非伪造未变更。"""
+
+        if name in referenced:
+            return
+        if name not in schemas:
+            raise ValueError(f"开发比较遇到缺失类型：{contract_id}.{name}。")
+        referenced[name] = schemas[name]
+        visit(schemas[name])
+
+    for key in ("request_schema_ref", "response_schema_ref"):
+        if endpoint.get(key):
+            add(normalize_local_schema_ref(endpoint[key], contract_id=contract_id))
+    shell = {key: value for key, value in contract.items() if key not in {"endpoints", "schemas"}}
+    return _content({"contract": shell, "endpoint": endpoint, "schemas": referenced})
+
+
+def _endpoint_status(
+    contract: dict[str, Any], endpoint: dict[str, Any], previous: dict[str, Any] | None,
+    old_endpoint: dict[str, Any] | None,
+) -> str:
+    """按接口外壳、正文和依赖类型比较开发状态，忽略全部非删除审阅标识。"""
+
+    if _status(contract) == "deleted" or _status(endpoint) == "deleted":
+        return "deleted"
+    if previous is None or old_endpoint is None or _status(old_endpoint) == "deleted":
+        return "added"
+    return "unchanged" if _endpoint_content(contract, endpoint) == _endpoint_content(previous, old_endpoint) else "modified"
+
+
+def build_development_change_snapshot(
+    workspace: str | Path, *, technical_plan: dict[str, Any], product_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """按冻结的上迭代基线独立计算完整开发快照，不消费计划审阅 diff。"""
+
+    baseline = drop_generated_fields(read_technical_plan_carryover(workspace) or {})
+    current = drop_generated_fields(technical_plan)
+    base_entities = _records(baseline, "entities", "id")
+    entities = {
+        key: _changed(record, base_entities.get(key))
+        for key, record in _records(current, "entities", "id").items()
+    }
+    for key in base_entities:
+        entities.setdefault(key, "deleted")
+    endpoints: dict[str, dict[str, str]] = {}
+    base_contracts = _records(baseline, "api_contracts", "id")
+    for key, contract in _records(current, "api_contracts", "id").items():
+        previous = base_contracts.get(key)
+        old_endpoints = _records(previous or {}, "endpoints", "id")
+        endpoints[key] = {
+            endpoint_id: _endpoint_status(contract, endpoint, previous, old_endpoints.get(endpoint_id))
+            for endpoint_id, endpoint in _records(contract, "endpoints", "id").items()
+        }
+        for endpoint_id in old_endpoints:
+            endpoints[key].setdefault(endpoint_id, "deleted")
+    for key, contract in base_contracts.items():
+        if key not in endpoints:
+            endpoints[key] = {endpoint_id: "deleted" for endpoint_id in _records(contract, "endpoints", "id")}
+    technical_pages = _records(current, "pages", "pageId")
+    base_pages = _records(baseline, "pages", "pageId")
+    carried = read_product_plan_carryover(workspace)
+    pages: dict[str, str] = {}
+    for key, page in _records(product_plan, "pages", "pageId").items():
+        old_product = (carried.get(key) or {}).get("development_page")
+        previous = base_pages.get(key)
+        status = _changed(page, old_product)
+        if _status(technical_pages.get(key)) == "deleted":
+            status = "deleted"
+        elif status == "unchanged" and _changed(technical_pages.get(key), previous) != "unchanged":
+            status = "modified"
+        # 产品与技术引用未变，但依赖接口的响应、参数或删除发生变化时页面仍须重做。
+        references = (technical_pages.get(key) or previous or {}).get("references") or {}
+        dependencies = {item.get("endpoint_id") for item in references.get("endpoint_dependencies", []) if isinstance(item, dict)}
+        for binding in references.get("action_implementations", []):
+            if not isinstance(binding, dict):
+                continue
+            dependencies.add(binding.get("endpointId"))
+            dependencies.update(item.get("endpointId") for item in binding.get("stepBindings", []) if isinstance(item, dict))
+        if status == "unchanged" and any(
+            endpoint_id in dependencies and change != "unchanged"
+            for changes in endpoints.values() for endpoint_id, change in changes.items()
+        ):
+            status = "modified"
+        pages[key] = status
+    for key in set(carried) | set(base_pages):
+        pages.setdefault(key, "deleted")
+    return {"pages": pages, "entities": entities, "endpoints": endpoints}
+
+
+def write_change_snapshot(
+    workspace: str | Path, *, technical_plan: dict[str, Any], product_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """独立比较最终规划与迭代基线，并原子冻结开发入口使用的变更事实。"""
 
     root = Path(workspace).expanduser().resolve()
-    # 没有逐项标记的输入（例如已经剥离过标记的正式版）只会写出全 "unchanged"，
-    # 那种快照比没有更危险：下游会据此认为"本轮什么都没变"并跳过重做。
-    # 因此这里显式拒绝，让调用方留下"无变更信息"的空缺，由门禁拦住。
-    records = [
-        record
-        for field in ("pages", "entities", "api_contracts")
-        for record in (technical_plan.get(field) or [])
-        if isinstance(record, dict)
-    ]
-    if not any(CHANGE_STATUS_FIELD in record for record in records):
-        raise ValueError("本轮变更快照缺少逐项变更标记，拒绝写出全未变更的快照。")
-    pages: dict[str, str] = {}
-    for page in technical_plan.get("pages") or []:
-        if isinstance(page, dict) and str(page.get("pageId") or "").strip():
-            pages[str(page["pageId"]).strip()] = _status(page)
-    entities: dict[str, str] = {}
-    for entity in technical_plan.get("entities") or []:
-        if isinstance(entity, dict) and str(entity.get("id") or "").strip():
-            entities[str(entity["id"]).strip()] = _status(entity)
-    endpoints: dict[str, dict[str, str]] = {}
-    for contract in technical_plan.get("api_contracts") or []:
-        if not isinstance(contract, dict):
-            continue
-        contract_id = str(contract.get("id") or "").strip()
-        contract_status = _status(contract)
-        for endpoint in contract.get("endpoints") or []:
-            endpoint_id = str((endpoint or {}).get("id") or "").strip() if isinstance(endpoint, dict) else ""
-            if not contract_id or not endpoint_id:
-                continue
-            # 接口自身的标记优先；缺失时继承分组结论。"删除"必须显式落在接口上，
-            # 不能被分组状态覆盖掉，否则已删页面的专属接口会被当成需要开发。
-            status = _status(endpoint) if CHANGE_STATUS_FIELD in endpoint else contract_status
-            endpoints.setdefault(contract_id, {})[endpoint_id] = status
-
+    changes = build_development_change_snapshot(root, technical_plan=technical_plan, product_plan=product_plan)
     payload = {
         "schemaVersion": _SCHEMA_VERSION,
         "sourceBranch": read_workspace_branch_name(root),
         "writtenAt": datetime.now(UTC).isoformat(),
-        "pages": pages,
-        "entities": entities,
-        "endpoints": endpoints,
+        **changes,
     }
     path = change_snapshot_path(root)
     previous = read_change_snapshot(root)
@@ -164,11 +266,18 @@ def write_change_snapshot(
         for field in ("pages", "entities", "endpoints")
     ):
         _reset_previous_snapshot_redevelopment(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=".development-change-", suffix=".tmp", dir=path.parent)
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except OSError:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except OSError as exc:
+        Path(temporary).unlink(missing_ok=True)
         logger.exception("development_change_snapshot_persist_failed")
+        raise ValueError("开发变更快照写入失败，未发布开发就绪状态。") from exc
     return payload
 
 

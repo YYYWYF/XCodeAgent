@@ -50,6 +50,7 @@ from app.services.application_lifecycle import (
     write_application_lifecycle,
     load_application_lifecycle,
 )
+from app.services.development_change_snapshot import read_change_snapshot
 from app.services.product_plan import create_product_plan
 from app.services.project_plan import create_technical_plan
 from app.services.page_implementation_contract import _artifact_hash
@@ -410,6 +411,9 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             }),
             expected_revision=lifecycle.revision,
         )
+        review_plan = deepcopy(harness.candidate)
+        for page in review_plan["pages"]:
+            page["_change_status"] = "unchanged"
         state = {
             "workspace": str(harness.workspace),
             "workflow_scope": "application_planning",
@@ -420,6 +424,8 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
             "product_plan_path": str(harness.workspace / ".devagentstudio/plans/product-plan.md"),
             "ui_designs": harness.ui_designs,
             "technical_plan": harness.candidate,
+            # 模拟多轮审阅后的全未变更徽标；首次开发仍必须按无迭代基线判为新增。
+            "technical_plan_diff": review_plan,
             "application_planning_interaction": {"action": "confirm"},
             "application_planning_recovery_boundary": application_planning_boundary_payload(
                 operation_id="technical-plan-confirmation",
@@ -445,6 +451,10 @@ class TechnicalPlanningRecoveryJourneyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Path(confirmed_path), technical_plan_json_path(state))
         self.assertEqual(update["project_plan_json_path"], confirmed_path)
         self.assertEqual(json.loads(Path(confirmed_path).read_text())["confirmation_status"], "confirmed")
+        snapshot = read_change_snapshot(harness.workspace)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(set(snapshot["pages"].values()), {"added"})
         claim = claim_template_reconcile_finalization(
             harness.workspace,
             change_id=active.change_id,
