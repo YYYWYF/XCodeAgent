@@ -44,6 +44,10 @@ export default function TechnicalPlanDocPanel({
   const architecture = asRecord(plan.architecture)
   const entities = recordItems(plan.entities)
   const contracts = recordItems(plan.api_contracts)
+  const endpointCount = contracts.reduce(
+    (count, contract) => count + recordItems(contract.endpoints).length,
+    0
+  )
   const pages = recordItems(plan.pages)
   const sections = [...technicalPlanSections, { key: 'authorization' as const, label: '接口权限绑定' }]
   // 正在重新生成时对比结果不可信：不展示任何变更标识，避免用户误判。
@@ -86,25 +90,31 @@ export default function TechnicalPlanDocPanel({
   return (
     <div className={cx('technical-plan-doc-panel')}>
       <div className={cx('technical-plan-section-tabs')} role="tablist" aria-label="技术规划章节">
-        {sections.map((section) => (
-          <button
-            aria-controls={`technical-plan-panel-${section.key}`}
-            aria-selected={resolvedActiveSection === section.key}
-            className={cx(
-              'technical-plan-section-tab',
-              resolvedActiveSection === section.key && 'is-active'
-            )}
-            key={section.key}
-            id={`technical-plan-tab-${section.key}`}
-            onClick={() => setActiveSection(section.key)}
-            role="tab"
-            type="button"
-          >
-            {section.label}
-            {changes?.find((group) => group.name === section.label)?.objects.length
-              ? ` · ${changes.find((group) => group.name === section.label)!.objects.length}` : ''}
-          </button>
-        ))}
+        {sections.map((section) => {
+          // API 契约展示所有分组的接口总数，其余章节仅在有变更时显示计数。
+          const count =
+            section.key === 'api-contracts'
+              ? endpointCount
+              : changes?.find((group) => group.name === section.label)?.objects.length || undefined
+          return (
+            <button
+              aria-controls={`technical-plan-panel-${section.key}`}
+              aria-selected={resolvedActiveSection === section.key}
+              className={cx(
+                'technical-plan-section-tab',
+                resolvedActiveSection === section.key && 'is-active'
+              )}
+              key={section.key}
+              id={`technical-plan-tab-${section.key}`}
+              onClick={() => setActiveSection(section.key)}
+              role="tab"
+              type="button"
+            >
+              {section.label}
+              {count !== undefined ? ` · ${count}` : ''}
+            </button>
+          )
+        })}
       </div>
       {resolvedActiveSection === 'architecture' ? (
         <ArchitectureSection architecture={architecture} sectionKey="architecture" changeKinds={changeKinds} hasBaseline={hasBaseline} />

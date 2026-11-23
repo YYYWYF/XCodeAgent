@@ -128,7 +128,9 @@ def registry_prompt(requirement: dict, entities: list[dict]) -> str:
         "及其他业务操作归入同一 Contract。例如新增商品和查询商品详情都属于“商品”分组，不要拆成“商品新增”和“商品查询”。\n"
         "不能按操作类型、读写差异、页面或生成批次拆分同一主体。内容较多时由平台在同一 Contract 内分批生成。\n\n"
         "【3. 汇总页面并输出目录】\n"
-        "Contract 可供多页共享。page_ids 汇总该主体操作涉及的页面，entity_ids 和 page_ids 均非空。"
+        "Contract 可供多页共享。"
+        "page_ids 汇总该主体操作涉及的页面，page_ids 非空。"
+        "entity_ids 汇总该能力涉及的实体，若能力不涉及实体，则将 entity_ids 填为 []。"
         "所有业务动作所在页面必须被相应 Contract 覆盖。\n"
         "只返回 {contracts:[{id,name,entity_ids,base_path,page_ids}]}。纯静态应用可以返回空数组。"
     )

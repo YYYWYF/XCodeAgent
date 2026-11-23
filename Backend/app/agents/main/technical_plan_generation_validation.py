@@ -57,7 +57,7 @@ class _Contract(_StrictFragment):
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    entity_ids: list[str] = Field(min_length=1)
+    entity_ids: list[str]
     base_path: str = Field(pattern=r"^/")
     page_ids: list[str] = Field(min_length=1)
     endpoints: list[_Endpoint] = Field(min_length=1)
@@ -92,7 +92,7 @@ class _FullContract(_StrictFragment):
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    entity_ids: list[str] = Field(min_length=1)
+    entity_ids: list[str]
     base_path: str = Field(pattern=r"^/")
     authentication: _Authentication
     schemas: dict[str, dict]

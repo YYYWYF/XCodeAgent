@@ -294,8 +294,8 @@ Contract 内部分批由代码根据当前模型的**输出预算**决定，和�
 TechnicalPlan 不再持久化 `app`、`requirements_overview`、`project_acceptance_criteria`、
 `business_flows`、`acceptance_criteria`、`risks`、`data_sources`、`permission_model`、
 `frontend_pages` 或 `page_implementation_contracts`。页面字段来自 ProductPlan；实体字段来自
-TechnicalPlan 顶层 `entities`；实体不做全局数据源绑定，数据源身份只存在于后续已确认的 Endpoint API 设计。API 设计场景 Entity 只能从当前 Contract 关联的 TechnicalPlan 实体复制，复制后保持只读且不回写全局实体；模板实体或字段变化会因 TechnicalPlan 契约指纹变化使 Endpoint 设计失效。API Contract 必须通过非空
-`entity_ids` 关联一个或多个实体，禁止 `data_source_id`。角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest；
+TechnicalPlan 顶层 `entities`；实体不做全局数据源绑定，数据源身份只存在于后续已确认的 Endpoint API 设计。API 设计场景 Entity 只能从当前 Contract 关联的 TechnicalPlan 实体复制，复制后保持只读且不回写全局实体；模板实体或字段变化会因 TechnicalPlan 契约指纹变化使 Endpoint 设计失效。API Contract 必须声明
+`entity_ids` 字符串数组，无关联实体时填写 `[]`，禁止 `data_source_id`。角色/跳转/状态来自 ProductPlan；UI 路径与控件映射来自已确认 UiManifest；
 运行时按当前构建范围组合这些正式上游产物。
 
 每个 API Contract 和 Endpoint 都必须持久化非空且至少包含一个中文字符的 `name`，允许混合英文缩写。Contract `name` 表示接口分组名称，Endpoint `name` 表示操作名称；Endpoint `summary` 继续保存较完整的接口说明。两层 `name` 不参与稳定身份或引用，关联关系仍只使用 Contract/Endpoint `id`。名称保存在结构化候选中；新增 Contract 或 Endpoint 仍必须提供合法名称。

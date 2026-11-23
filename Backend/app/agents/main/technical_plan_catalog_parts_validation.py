@@ -27,7 +27,7 @@ class ContractIdentity(_StrictFragment):
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    entity_ids: list[str] = Field(min_length=1)
+    entity_ids: list[str]
     base_path: str = Field(pattern=r"^/")
     page_ids: list[str] = Field(min_length=1)
 

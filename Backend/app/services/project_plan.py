@@ -1394,7 +1394,6 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
     contract_keys = (
         "id",
         "name",
-        "entity_ids",
         "base_path",
         "authentication",
         "schemas",
@@ -1429,7 +1428,9 @@ def _technical_api_contracts(items: list[dict[str, Any]]) -> list[dict[str, Any]
         }
         for contract in normalized
     ]
-    for contract in contracts:
+    for source, contract in zip(items, contracts, strict=True):
+        # 保留原始实体引用供正式校验，避免把缺失字段或非法值归一化为合法空数组。
+        contract["entity_ids"] = deepcopy(source.get("entity_ids"))
         schemas = contract.get("schemas")
         if isinstance(schemas, dict):
             for schema in schemas.values():
@@ -1548,13 +1549,13 @@ def validate_technical_plan_api_contracts(
                 f"TechnicalPlan API Contract {contract_id} 的 authentication 只能包含 boolean required。"
             )
         raw_ids = contract.get("entity_ids")
-        ids = [str(value).strip() for value in raw_ids if str(value).strip()] if isinstance(raw_ids, list) else []
-        if not ids:
-            errors.append(f"TechnicalPlan API Contract {contract_id} 必须声明非空 entity_ids。")
+        if not isinstance(raw_ids, list) or any(not isinstance(value, str) for value in raw_ids):
+            errors.append(f"TechnicalPlan API Contract {contract_id} 的 entity_ids 必须是字符串数组。")
             continue
-        if len(ids) != len(raw_ids) or len(ids) != len(set(ids)):
-            errors.append(f"TechnicalPlan API Contract {contract_id} 的 entity_ids 必须非空且不重复。")
-        unknown = sorted(set(ids) - known_entity_ids)
+        ids = [value.strip() for value in raw_ids]
+        if any(not value for value in ids) or len(ids) != len(set(ids)):
+            errors.append(f"TechnicalPlan API Contract {contract_id} 的 entity_ids 元素必须非空且不重复。")
+        unknown = sorted(set(ids) - known_entity_ids - {""})
         if unknown:
             errors.append(f"TechnicalPlan API Contract {contract_id} 引用了未知实体：{'、'.join(unknown)}。")
         for endpoint in _dict_items(contract.get("endpoints")):
