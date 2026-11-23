@@ -34,7 +34,9 @@ def direct_endpoint_revision_targets(
     clauses = re.split(r"[。；;\n]+|(?:^|\s)\d+[、)]", request)
     for clause in clauses:
         previous_end = 0
+        path_matched = False
         for match in _DIRECT_ENDPOINT_PATTERN.finditer(clause):
+            path_matched = True
             method = str(match.group(1) or "").upper()
             path = match.group(2).rstrip("/.")
             prefix = clause[previous_end:match.start()]
@@ -72,6 +74,46 @@ def direct_endpoint_revision_targets(
                 errors.append(f"点名接口的修改与删除要求冲突：{label}。请拆分并明确最终操作。")
             else:
                 targets[endpoint_id] = target
+        if path_matched:
+            continue
+        # 路径可省略，但接口名称必须完整写出并紧邻“接口”，且只能匹配一个当前端点。
+        named = []
+        for contract, endpoint in endpoints:
+            name = str(endpoint.get("name") or "").strip()
+            if name and f"{name}接口" in clause:
+                named.append((name, contract, endpoint))
+        if not named:
+            continue
+        if len(named) != 1:
+            names = "、".join(sorted({name for name, _, _ in named}))
+            locations = "、".join(sorted({
+                f"{endpoint.get('method') or ''} {endpoint.get('path') or ''}".strip()
+                for _, _, endpoint in named
+            }))
+            errors.append(f"点名接口名称存在歧义：{names}，匹配到 {locations}。请明确唯一接口或使用接口路径。")
+            continue
+        name, contract, endpoint = named[0]
+        reference = f"{name}接口"
+        start = clause.find(reference)
+        prefix = clause[:start]
+        following = clause[start + len(reference):]
+        deleted = bool(re.search(r"(?:删除|移除|去掉)\s*(?:接口\s*)?[`\"“'\s]*$", prefix))
+        negated = bool(re.search(r"(?:不要|不应|不允许|不能|禁止|无需|不必|不得|别|不)\s*(?:删除|移除|去掉)", prefix))
+        suffix_deleted = bool(re.match(r"[`\"”'\s]*(?:删除|移除|去掉)\s*(?:$|[，,])", following))
+        deleted = (deleted and not negated) or suffix_deleted
+        endpoint_id = str(endpoint.get("id") or "").strip()
+        target = {
+            "contract_id": str(contract.get("id") or "").strip(),
+            "method": str(endpoint.get("method") or "").upper(),
+            "path": str(endpoint.get("path") or "").strip().rstrip("/"),
+            "deleted": deleted,
+        }
+        if not endpoint_id or not target["contract_id"]:
+            errors.append(f"点名接口缺少稳定标识：{reference}。")
+        elif endpoint_id in targets and targets[endpoint_id] != target:
+            errors.append(f"点名接口的修改与删除要求冲突：{reference}。请拆分并明确最终操作。")
+        else:
+            targets[endpoint_id] = target
     return targets, list(dict.fromkeys(errors))
 
 
