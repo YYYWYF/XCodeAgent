@@ -50,7 +50,7 @@ LIST_QUERY_RULE = (
     "【列表查询】\n"
     "用户没有明确要求不分页时，列表查询默认分页。\n"
     "  - 分页查询参数为 current 和 pageSize，默认值分别为 1 和 20。\n"
-    "  - 分页响应采用通用泛型 PageResult<T>。响应 Schema 名称和 response_schema_ref 均使用 PageResult。\n"
+    "  - 分页响应采用通用泛型 PageResult<T>。响应 Schema 名称和 response_schema_ref 均使用 PageResult，list.items.$ref 指向 T\n"
     "  - PageResult 只包含 total、current、pageSize 和 list 四个同级字段。total、current 和 pageSize 为 integer，list 为数组。\n"
     "  - 列表项类型 T 由 list.items 指定，需要包含页面展示、后续操作或用户明确要求的字段，保留操作所需的记录标识。"
     "    先查找本 Contract 中已有的响应 Schema，满足条件时直接复用。如果没有符合条件的，新建以 ListItem 结尾的 Schema。\n"
