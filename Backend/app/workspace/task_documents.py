@@ -43,6 +43,10 @@ _TASK_RUNTIME_FIELDS = {
     # Markdown 同步结果由执行器产生，不属于用户确认的任务合同。
     "implementation_document",
     "scheduler",
+    # 重试与修复关闭是执行审计，不应使已确认的计划摘要发生变化。
+    "retry_count",
+    "completed_by_repair",
+    "repair_closed_at",
     "updated_by",
     "updated_at",
 }

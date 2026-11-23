@@ -515,6 +515,8 @@ def complete_initial_development(
                 # 仅清除本轮验证成功目标的变更，首次完成身份与归属保持不变。
                 current.change_status = "unchanged"
                 current.change_reason = None
+                # 同轮接口也要记录本轮变更已落实，避免写盘校准再次标为 changed。
+                state = _with_redeveloped_target(state, target)
                 changed = True
         if not changed:
             return state
