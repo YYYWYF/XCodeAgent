@@ -20,7 +20,6 @@
   .mapping-review-issue-status { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: 5px; background: color-mix(in srgb, var(--wb-warning) 10%, var(--wb-canvas)); color: var(--wb-warning); font-size: 12px; font-weight: 600; }
   .mapping-review-previous-answers { margin-top: 10px; }
   .mapping-review-previous-answer { margin: 8px 0; padding-left: 10px; border-left: 1px solid var(--wb-border); overflow-wrap: anywhere; }
-  .mapping-review-answer-budget { margin: 8px 0 0; }
   .mapping-assist-toolbar { align-items: center;
     > p { flex: 1 1 260px; margin: 0; }
   }
@@ -39,7 +38,7 @@
   &[open] .mapping-review-answer-closed { display: none; }
   &[open] .mapping-review-answer-open { display: inline-flex; }
   .mapping-assist-secondary { font-weight: 400; }
-  > .ant-input, > .ant-input-affix-wrapper { margin-top: 4px; }
+  > .mapping-assist-textarea { margin-top: 4px; }
 }
 
 .binding-workspace .mapping-assist-local-review {
@@ -47,7 +46,7 @@
   summary { color: var(--wb-accent); cursor: pointer; }
   p { margin: 6px 0 0; color: var(--wb-text); }
 }
-.binding-workspace :is(.field-response-row.is-readonly .field-response-target, .external-request-field):has(> .mapping-assist-local-review) {
+.binding-workspace .external-request-field:has(> .mapping-assist-local-review) {
   flex-wrap: wrap;
   > .mapping-assist-local-review { flex-basis: 100%; min-width: 0; margin-top: 0; }
 }

@@ -1,6 +1,6 @@
 """静态返回映射与独立 Mock 数据生成的当前 AG-UI 请求合同。"""
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import Field, model_validator
 
@@ -52,7 +52,9 @@ class StaticRefineRequest(RefineRuleRequest):
 class GenerateMockRequest(StaticGenerateRequest):
     """Mock 以返回契约和用户需求为依据，每组列表生成有限条样例。"""
 
-    instruction: str = Field(min_length=1, max_length=4000)
+    requirements_limit: ClassVar[int] = 4000
+    instruction: str = Field(min_length=1, max_length=requirements_limit)
+    clarification: str = Field(default="", max_length=requirements_limit)
     row_count: int = Field(default=3, alias="rowCount", strict=True, ge=1, le=20)
     retry_token: None = Field(default=None, alias="retryToken")
 

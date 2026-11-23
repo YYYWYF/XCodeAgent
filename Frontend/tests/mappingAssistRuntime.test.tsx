@@ -112,16 +112,28 @@ test('mapping review exposes pending fields and adopt or discard actions without
     ] }, questions: [{ target: 'response:response_body:categoryName', text: '分类名称如何返回？' }], reviews: [{ area: 'return', key: 'response:response_body:price', reason: '用户要求金额转为分', needsReview: true }] },
     close: noop, cancel: noop, setInstruction: noop, setClarification: noop, setAnswer: noop, generate: noop, apply: noop } as unknown as MappingAssistState
   const markup = renderToStaticMarkup(createElement(Fragment, null,
-    createElement(MappingAssistPanel, { assist, disabled: false, onShowReview: noop }),
+    createElement(MappingAssistPanel, { assist, disabled: false, onShowReview: noop, context: {
+      sourceName: 'product',
+      apiFieldRows: [{ label: '请求参数', fields: [] }, { label: '返回字段', fields: ['categoryName'] }],
+      sourceFieldRow: { label: '表字段', fields: ['category_name'] }
+    } }),
     createElement(MappingAssistResult, { assist, disabled: false, result: assist.result! })))
   for (const label of ['采纳 AI 映射', '不采纳', 'categoryName', '会置为未配置', '待明确问题', '补充并重新生成', 'AI 映射预览']) assert.ok(markup.includes(label))
   assert.doesNotMatch(markup, /checkbox|映射结果分区|查看当前草稿|补充规则/)
+  assert.match(markup, /<dt>数据表<\/dt><dd[^>]*><code>product<\/code>/)
+  assert.deepEqual([...markup.matchAll(/<dt>(请求参数|返回字段|数据表|表字段)<\/dt>/g)].map(([, label]) => label),
+    ['请求参数', '返回字段', '数据表', '表字段'])
+  const evidenceHeader = markup.match(/<summary>[\s\S]*?<\/summary>/)?.[0] || ''
+  assert.match(evidenceHeader, /判断依据/)
+  assert.doesNotMatch(evidenceHeader, /product/)
+  assert.doesNotMatch(markup, /<dt>API 契约<\/dt>/)
+  assert.doesNotMatch(markup, /数据库操作 · 查询|接口返回商品列表|与当前草稿的操作一致/)
   const locked = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, phase: 'applying' }, disabled: true }))
   assert.match(locked, /disabled/)
   const hidden = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, open: false }, disabled: false }))
   assert.equal(hidden, '')
   const changed = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, requirementsChanged: true, canApply: false }, disabled: false }))
-  assert.ok(changed.includes('补充信息已变更'))
+  assert.ok(changed.includes('补充说明已变更'))
   const review = renderToStaticMarkup(createElement(MappingReviewContext.Provider, { value: assist.result!.reviews },
     createElement(MappingAssistReview, { area: 'return', target: 'response:response_body:price' })))
   assert.ok(review.includes('用户要求金额转为分'))
@@ -133,16 +145,18 @@ test('mapping review exposes pending fields and adopt or discard actions without
   assert.ok(!ambiguous.includes('采纳 AI 映射'))
 })
 
-/** 补充信息留空也可以直接生成映射。 */
-test('生成入口将补充信息标记为选填', () => {
+/** 补充说明留空也可以直接生成映射。 */
+test('生成入口将补充说明标记为选填', () => {
   const assist = { open: true, phase: 'idle', instruction: '', clarification: '', answers: {}, requirementsLength: 0,
     requirementsChanged: false, close: () => {}, setInstruction: () => {}, generate: async () => {} } as unknown as MappingAssistState
   for (const instruction of ['', ' \n ', '查询商品列表']) {
     const markup = renderToStaticMarkup(createElement(MappingAssistPanel, { assist: { ...assist, instruction }, disabled: false }))
-    assert.ok(markup.includes('补充信息'))
+    assert.ok(markup.includes('补充说明'))
     assert.ok(markup.includes('（选填）'))
     const textarea = markup.match(/<textarea\b[^>]*>/)?.[0] || ''
-    assert.ok(textarea.includes('aria-label="AI 映射补充信息"'))
+    assert.ok(textarea.includes('aria-label="AI 映射补充说明"'))
+    assert.match(textarea, /\smaxlength="500"/i)
+    assert.match(markup, />0\/500<\/span>/)
     assert.doesNotMatch(textarea, /\srequired=""|aria-required="true"/)
     const button = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].find(([value]) => value.includes('生成映射'))?.[0] || ''
     assert.ok(button)

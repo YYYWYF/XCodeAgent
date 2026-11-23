@@ -1,8 +1,7 @@
 import { Alert, Button, Input, InputNumber, Spin, Tag } from 'antd'
 import { BulbOutlined } from '@ant-design/icons'
 import type { ReactElement } from 'react'
-import type { MockDataAssistState } from './useMockDataAssist'
-import { MAPPING_REQUIREMENTS_LIMIT } from './mappingAssistModel'
+import { MOCK_REQUIREMENTS_LIMIT, type MockDataAssistState } from './useMockDataAssist'
 import { readableMappingQuestion } from './mappingAssistReviewModel'
 import './MappingAssist.less'
 import './StaticMockDataPanel.less'
@@ -19,11 +18,11 @@ export default function StaticMockDataPanel({ assist, disabled }: { assist: Mock
         <Button type="text" disabled={assist.phase === 'applying'} onClick={assist.close}>收起</Button></div>
       <p className="mapping-assist-secondary">根据接口返回契约生成虚构样例，预览后应用到数据内容。</p>
       <label>Mock 数据需求 <span className="mapping-assist-secondary">（必填）</span><Input.TextArea aria-label="Mock 数据需求" required
-        value={assist.instruction} maxLength={MAPPING_REQUIREMENTS_LIMIT} autoSize={{ minRows: 2, maxRows: 5 }} disabled={disabled || running}
+        value={assist.instruction} maxLength={MOCK_REQUIREMENTS_LIMIT} autoSize={{ minRows: 2, maxRows: 5 }} disabled={disabled || running}
         placeholder="例如：生成商品列表样例，名称使用中文，覆盖不同的商品类别。" onChange={(event) => assist.setInstruction(event.target.value)} /></label>
       <div className="mapping-assist-toolbar"><label className="static-mock-count">每组列表条数<InputNumber aria-label="Mock 每组列表条数" min={1} max={20} precision={0}
         value={assist.rowCount} disabled={disabled || running} onChange={(value) => assist.setRowCount(Number(value))} /></label>
-        <Button type="primary" disabled={disabled || running || !assist.instruction.trim() || assist.instruction.trim().length > MAPPING_REQUIREMENTS_LIMIT} onClick={() => void assist.generate()}>{result ? '重新生成 Mock 数据' : '生成 Mock 数据'}</Button></div>
+        <Button type="primary" disabled={disabled || running || !assist.instruction.trim() || assist.instruction.trim().length > MOCK_REQUIREMENTS_LIMIT} onClick={() => void assist.generate()}>{result ? '重新生成 Mock 数据' : '生成 Mock 数据'}</Button></div>
       {assist.phase === 'generating' && <div className="mapping-assist-toolbar" role="status"><span><Spin size="small" /> {assist.progress?.message || '正在准备样例'}</span><Button onClick={assist.cancel}>取消生成</Button></div>}
       {assist.error && <Alert type="error" showIcon message={assist.error} />}
       {assist.stale && <Alert type="warning" showIcon message="草稿或契约已变化，请重新生成 Mock 数据。" />}

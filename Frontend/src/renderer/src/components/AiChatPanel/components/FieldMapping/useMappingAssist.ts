@@ -89,7 +89,7 @@ export function useMappingAssist(request: MappingAssistRequest | undefined, meta
     const input = { ...current.current }
     if (!input.request || locked.current) return
     const values = mappingRequirementsInput(input.instruction, input.clarification, input.answers)
-    if (values.instruction.length + values.clarification.length > MAPPING_REQUIREMENTS_LIMIT) { setError('补充信息合计不能超过 4000 字，请精简后重新生成。'); return }
+    if (values.instruction.length + values.clarification.length > MAPPING_REQUIREMENTS_LIMIT) { setError(`补充说明合计不能超过 ${MAPPING_REQUIREMENTS_LIMIT} 字，请精简后重新生成。`); return }
     const retry = failure?.inputKey === input.key && failure.requirementsKey === input.requirementsKey ? failure.value : undefined
     if (resume && !retry) return
     const run = new AbortController(); controller.current = run; locked.current = true
@@ -144,7 +144,6 @@ export function useMappingAssist(request: MappingAssistRequest | undefined, meta
     isExternal: request?.selection.sourceType === 'external_api',
     isStatic: request?.selection.sourceType === 'static',
     requirementsLength: requirements.instruction.length + requirements.clarification.length, phase, progress, progressSteps, error,
-    currentOperation: request?.draft.databaseOperation,
     requirementsChanged: Boolean(result && result.requirementsKey !== requirementsKey),
     failure: failure?.inputKey === currentKey && failure.requirementsKey === requirementsKey ? failure.value : undefined,
     canApply: Boolean(request && result?.value.mapping && result.inputKey === currentKey && result.requirementsKey === requirementsKey && phase === 'idle'),

@@ -76,14 +76,14 @@ test('字段补充必须重新生成且保留回答，切换接口后清除', as
 test('字段回答与全局要求合计超限时保留输入并阻止生成', async () => {
   await withMappingHarness(async (h, server) => {
     await act(async () => {
-      h.state().setInstruction('说明'.repeat(1500))
-      h.state().setAnswer('a', '返回字段 a', '规则'.repeat(450))
-      h.state().setAnswer('b', '返回字段 b', '规则'.repeat(450))
+      h.state().setInstruction('说明'.repeat(150))
+      h.state().setAnswer('a', '返回字段 a', '规则'.repeat(60))
+      h.state().setAnswer('b', '返回字段 b', '规则'.repeat(50))
       await h.state().generate()
     })
     assert.equal(server.requests.length, 0)
-    assert.match(h.state().error, /4000/)
-    assert.equal(h.state().answers.b.value.length, 900)
+    assert.match(h.state().error, /500/)
+    assert.equal(h.state().answers.b.value.length, 100)
     assert.equal(h.state().phase, 'idle')
   })
 })

@@ -213,6 +213,46 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
                     self.assertIn("response:response_body:price", human)
                     self.assertIn("column:price", human)
 
+    def test_return_prompt_injects_only_the_confirmed_template_rules(self):
+        """各来源只在返回映射阶段注入正式契约引用的公共返回体规则。"""
+        base = context_fixture()
+        sources = (
+            (base, ("operation", "query", "write", "description")),
+            ({**base, "selection": {"sourceType": "external_api"}, "externalFields": [],
+              "externalOperation": {"method": "GET", "path": "/items", "name": "查询", "description": ""}},
+             ("request", "description")),
+            ({**base, "selection": {"sourceType": "static"}, "staticFields": [], "rowCount": 2}, ("mock",)),
+        )
+        for source, other_steps in sources:
+            for schema_ref, required, forbidden in (
+                ("PageResult", "分页前的总记录数", "OperationResult"),
+                ("OperationResult", "success 默认为 true", "PageResult"),
+                ("CustomResult", "", "返回体规范】"),
+                (None, "", "返回体规范】"),
+            ):
+                with self.subTest(source=source["selection"], schema_ref=schema_ref):
+                    context = {**source, "endpoint": {**source["endpoint"], "response_schema_ref": schema_ref}}
+                    system, human = [message.content for message in build_assist_messages(context, "return")]
+                    if required:
+                        self.assertLess(
+                            system.index(f"【{schema_ref} 返回体规范】"),
+                            system.index(f"【{schema_ref} 映射生成规则】"),
+                        )
+                        self.assertIn(required, system)
+                        self.assertIn(f"返回体 Schema：{schema_ref}", human)
+                    else:
+                        self.assertNotIn("返回体 Schema：", human)
+                    if schema_ref == "OperationResult":
+                        self.assertLess(
+                            system.index("按当前接口定义的错误码抛出异常"),
+                            system.index("【OperationResult 映射生成规则】"),
+                        )
+                    self.assertNotIn(forbidden, system)
+                    for step in other_steps:
+                        prompt = "\n".join(message.content for message in build_assist_messages(context, step))
+                        self.assertNotIn("返回体规范】", prompt)
+                        self.assertNotIn("返回体 Schema：", prompt)
+
     def test_rule_prompt_only_uses_selected_dependencies(self):
         """规则完善使用独立短提示，不携带查询或返回结构说明。"""
         context = {"target": {"area": "write", "key": "price", "type": "decimal"},
@@ -297,9 +337,9 @@ class EndpointDesignAssistStepsTests(unittest.TestCase):
         valid = GenerateMappingRequest(**request, instruction=" 查询商品 ", clarification=" 返回匹配总数 ")
         self.assertEqual(valid.instruction, "查询商品")
         self.assertEqual(valid.clarification, "返回匹配总数")
-        GenerateMappingRequest(**request, instruction="需" * 3999, clarification="补")
+        GenerateMappingRequest(**request, instruction="需" * 499, clarification="补")
         with self.assertRaisesRegex(ValueError, "合计"):
-            GenerateMappingRequest(**request, instruction="需" * 3999, clarification="补充")
+            GenerateMappingRequest(**request, instruction="需" * 499, clarification="补充")
 
     def test_replacement_validates_against_new_operation(self):
         """旧草稿为查询时允许整体替换为新增，同时拒绝保留新增不适用的查询。"""

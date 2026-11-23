@@ -8,7 +8,7 @@ import BusinessRuleEntry from './BusinessRuleEntry'
 import ValueRuleEditor from './ValueRuleEditor'
 import ReadOnlyValue from './ReadOnlyValue'
 import { BUILTIN_OPTIONS, VALUE_SOURCE_OPTIONS } from './valueRules'
-import MappingAssistReview from './MappingAssistReview'
+import { useMappingReviewReason } from './MappingAssistReview'
 
 type Props = { field: WorkflowApiField; fields: WorkflowApiField[]; sources: WorkflowApiSourceField[]; draft: WorkflowApiDesignDraft; readOnly: boolean; disabled: boolean; error?: string; aiChanged?: boolean; onChange: (draft: WorkflowApiDesignDraft) => void }
 
@@ -24,6 +24,7 @@ export function ResponseFieldMappingHeader({ readOnly }: { readOnly: boolean }):
 /** 按目标返回字段展示直接来源、多字段加工或无来源业务生成。 */
 export default function ResponseFieldMapping({ field, fields, sources, draft, readOnly, disabled, error, aiChanged, onChange }: Props): ReactElement {
   const [editing, setEditing] = useState(false)
+  const reviewReason = useMappingReviewReason('return', apiDesignFieldKey(field))
   const sourceLabel = draft.sourceBinding?.sourceType === 'static' ? '静态数据字段' : '数据源字段'
   const mapping = draft.fieldMappings.find((item) => apiDesignFieldKey(item.endpointField) === apiDesignFieldKey(field))
   const mapped = mapping?.mappingType === 'source_mapping' ? mapping : undefined
@@ -61,10 +62,9 @@ export default function ResponseFieldMapping({ field, fields, sources, draft, re
   if (readOnly) return <div className="field-response-row is-readonly">
     <div className="field-response-target" title={field.path}>
       <code>{field.path}</code><span className="field-response-type">{field.type}</span>
-      <MappingAssistReview area="return" target={apiDesignFieldKey(field)} />
     </div>
     <ReadOnlyValue title={field.path} right={valueMapping?.right} sourceFields={selected} businessDescription={ruleDescription}
-      endpointFields={requestDependencies} builtinFields={ruleInputs?.builtinFields} />
+      endpointFields={requestDependencies} builtinFields={ruleInputs?.builtinFields} reviewReason={reviewReason} />
     {issue ? <small className="field-rule-error">{issue}</small> : null}
   </div>
   return <div className="field-response-row">

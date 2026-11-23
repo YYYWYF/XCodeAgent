@@ -85,6 +85,18 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
   const editable = Boolean(entry && !entry.readOnly && !entry.complex && !entry.conflict)
   // 静态来源只枚举已应用内容；无效或未配置数据仍允许独立生成 Mock。
   const staticSources = useMemo(() => { try { return selection?.sourceType === 'static' ? staticFields(entry?.value.draft.staticData) : [] } catch { return [] } }, [selection?.sourceType, entry?.value.draft.staticData])
+  // 保留字段标识和来源顺序，显示层按实际空间省略尾部字段。
+  const evidenceFields = useMemo(() => ({
+    apiFieldRows: [
+      { label: '请求参数', fields: fields.filter((field) => field.side === 'request').map((field) => field.path) },
+      { label: '返回字段', fields: fields.filter((field) => field.side === 'response').map((field) => field.path) }
+    ],
+    sourceFieldRow: selection?.sourceType === 'static'
+      ? { label: '静态字段', fields: staticSources.flatMap((field) => field.sourceType === 'static' ? [field.path] : []) }
+      : selection?.sourceType === 'external_api'
+        ? { label: '外部字段', fields: metadata && 'fields' in metadata ? metadata.fields?.map((field) => `${field.section}.${field.path}`) ?? [] : [] }
+        : { label: '表字段', fields: metadata && 'columns' in metadata ? metadata.columns?.map((column) => column.name) ?? [] : [] }
+  }), [fields, metadata, selection?.sourceType, staticSources])
   const assistAvailable = editable && !sourceChanging && !metadataLoading && !unavailableTable && (
     selection?.sourceType === 'static' ? staticSources.length > 0 : metadata && (
       selection?.sourceType === 'database' && 'columns' in metadata && Boolean(metadata.columns?.length)
@@ -228,7 +240,10 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
           {selection && <Button className="binding-stash-button" icon={<BulbOutlined />} disabled={assistDisabled || assist.open} title={selection.sourceType === 'static' && !staticSources.length ? '请先应用静态数据，或在数据内容中生成 Mock 数据。' : undefined} onClick={() => assist.show()}>AI 生成映射</Button>}
           <Button className="binding-stash-button" loading={busy} disabled={previewing || mock.blocking || mock.phase !== 'idle' || entry.conflict || sourceChanging || editingRules > 0 || assist.phase !== 'idle'} onClick={() => saveMapping(false)}>暂存</Button><Button className="binding-confirm-button" type="primary" loading={busy} disabled={!canConfirm} onClick={confirmMapping}>保存并确认</Button></> : null}</Space></header>
         <MappingAssistPanel assist={assist} disabled={reviewDisabled} onShowReview={showMappingReview}
-          context={{ endpointName: activeEndpointName, endpointPath: activeEndpointPath, table: databaseSelection?.table || sourceLabel, details: <div className="mapping-assist-secondary"><p>请求参数：{fields.filter((field) => field.side === 'request').map((field) => field.path).join('、') || '无'}</p><p>返回字段：{fields.filter((field) => field.side === 'response').map((field) => field.path).join('、') || '无'}</p><p>{selection?.sourceType === 'static' ? '静态字段' : selection?.sourceType === 'external_api' ? '外部字段' : '表字段'}：{selection?.sourceType === 'static' ? staticSources.map((field) => field.sourceType === 'static' ? field.path : '').join('、') : metadata && 'columns' in metadata ? metadata.columns?.map((column) => column.name).join('、') : metadata && 'fields' in metadata ? metadata.fields?.map((field) => `${field.section}.${field.path}`).join('、') : ''}</p></div> }} />
+          context={{
+            sourceName: databaseSelection?.table || sourceLabel,
+            ...evidenceFields
+          }} />
         {!previewing && assist.receipt && <div className="mapping-assist-receipt" aria-live="polite"><div><strong>已采纳到草稿 · 尚未保存</strong><p className="mapping-assist-secondary">请审阅并补全未配置项，再保存并确认。继续编辑、暂存、确认或切换接口后，撤销失效。</p></div>{assist.canUndo && <Button disabled={busy || assist.phase !== 'idle'} onClick={assist.undoApply}>撤销本次采纳</Button>}</div>}
         {entry.conflict ? <Alert type="warning" message="草稿基于的契约或正式映射已变化，当前草稿已保留。" description="请核对当前内容后，明确放弃旧草稿并重新加载。" action={<Button disabled={busy} onClick={() => confirmWorkspaceAction({ title: '放弃旧草稿并重新加载？', okText: '放弃并加载', cancelText: '保留草稿', onOk: state.discard })}>重新加载</Button>} /> : null}
         {entry.complex ? <Alert type="info" message="当前接口包含复杂映射，继续使用原有编辑能力。" action={<Button onClick={() => setAdvanced(true)}>打开完整编辑器</Button>} /> : <>

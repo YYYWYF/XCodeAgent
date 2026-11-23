@@ -4,12 +4,12 @@ import type { WorkflowApiBuiltinField, WorkflowApiEndpointFieldSnapshot, Workflo
 import BusinessRuleEntry, { type BusinessRuleInput } from './BusinessRuleEntry'
 import { BUILTIN_OPTIONS, valueText } from './valueRules'
 
-type Props = { title: string; right?: WorkflowApiValueRight; sourceFields?: WorkflowApiSourceField[]; businessDescription?: string; endpointFields?: WorkflowApiEndpointFieldSnapshot[]; builtinFields?: WorkflowApiBuiltinField[]; showDescriptions?: boolean }
+type Props = { title: string; right?: WorkflowApiValueRight; sourceFields?: WorkflowApiSourceField[]; businessDescription?: string; endpointFields?: WorkflowApiEndpointFieldSnapshot[]; builtinFields?: WorkflowApiBuiltinField[]; showDescriptions?: boolean; reviewReason?: string }
 const LOCATION_LABELS: Record<string, string> = { path: 'Path', query: 'Query', header: 'Header', request_body: 'Body' }
 const PARAMETER_LOCATION_LABELS: Record<string, string> = { path: '路径参数', query: '查询参数', header: '请求头', request_body: '请求体', response_body: '响应体' }
 
 /** 在详情行中并列展示值来源与取值内容，复杂规则仅保留查看入口。 */
-export default function ReadOnlyValue({ title, right, sourceFields = [], businessDescription, endpointFields, builtinFields, showDescriptions = true }: Props): ReactElement {
+export default function ReadOnlyValue({ title, right, sourceFields = [], businessDescription, endpointFields, builtinFields, showDescriptions = true, reviewReason }: Props): ReactElement {
   const business = Boolean(businessDescription) || right?.kind === 'business'
   const fixed = right?.kind === 'fixed'
   const endpoint = right?.kind === 'endpoint' ? right.endpointField : undefined
@@ -40,12 +40,13 @@ export default function ReadOnlyValue({ title, right, sourceFields = [], busines
     <div className="field-detail-content">
       {business ? <BusinessRuleEntry title={title} configured={Boolean(businessDescription || (right?.kind === 'business' && right.businessDescription))}
         inputCount={ruleInputs.length} disabled={false} inline description={businessDescription || (right?.kind === 'business' ? right.businessDescription : '')}
-        inputs={ruleInputs} />
+        inputs={ruleInputs} reviewReason={reviewReason} />
         : fixed ? <span className="field-detail-value" title={valueText(right?.kind === 'fixed' ? right.value : undefined)}>{valueText(right?.kind === 'fixed' ? right.value : undefined) || '—'}</span>
           : values.length ? values.map((value, index) => <span className="field-detail-value" key={`${index}:${value.name}`} title={`${value.name}${showDescriptions && value.description?.trim() ? `（${value.description.trim()}）` : ''}`}>
             <code>{value.name}</code>{showDescriptions && value.description?.trim() ? <span className="field-detail-meaning">（{value.description.trim()}）</span> : null}
             {value.location && LOCATION_LABELS[value.location] ? <span className="field-detail-location">{LOCATION_LABELS[value.location]}</span> : null}
           </span>) : <span className="field-detail-empty">—</span>}
+      {!business && reviewReason ? <BusinessRuleEntry title={title} configured inputCount={0} disabled={false} inline reviewReason={reviewReason} reviewOnly /> : null}
     </div>
   </>
 }

@@ -14,7 +14,7 @@
   .field-business-entry-count { flex: 0 0 auto; padding: 1px 6px; border-radius: 4px; background: var(--wb-accent-soft); font-size: 12px; line-height: 18px; color: var(--wb-accent); }
 }
 .field-business-inline-link.ant-btn-link {
-  height: auto; min-height: 24px; padding: 0; border: 0; box-shadow: none; color: var(--wb-accent); font-size: 13px;
+  flex: 0 0 auto; height: auto; min-height: 24px; padding: 0; border: 0; box-shadow: none; color: var(--wb-accent); font-size: 13px;
   &:hover, &:focus-visible { color: var(--wb-accent-hover); }
 }
 .field-detail-source {
@@ -44,6 +44,10 @@
   .field-business-viewer-source { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; .anticon { color: var(--wb-text-secondary); font-size: 16px; } }
   .field-business-viewer-description { margin-left: 10px; color: var(--wb-text-secondary); font-size: 13px; }
   .field-business-viewer-logic { margin: 0; padding: 20px 24px; border-radius: 8px; background: var(--wb-surface-subtle); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--wb-text); line-height: 1.9; }
+  .field-business-viewer-basis { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--wb-border);
+    summary { color: var(--wb-accent); cursor: pointer; &:hover, &:focus-visible { color: var(--wb-accent-hover); } }
+    &[open] > summary { margin-bottom: 8px; }
+  }
   .field-business-viewer-empty { padding: 20px; border-radius: 8px; background: var(--wb-surface-subtle); color: var(--wb-text-secondary); }
   .ant-modal-body { max-height: 65vh; overflow-y: auto; }
   .ant-modal-footer .ant-btn-primary { background: var(--wb-accent); border-color: var(--wb-accent); &:hover, &:focus-visible { background: var(--wb-accent-hover); border-color: var(--wb-accent-hover); } }

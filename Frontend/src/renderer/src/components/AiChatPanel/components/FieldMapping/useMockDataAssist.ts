@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WorkflowApiDesignDraft } from '../../../../typings'
 import type { MappingAssistProgress, MappingAssistRequest, MockDataAssistance } from '../../../../typings/endpointDesignAssist'
 import { requestMappingAssist } from '../../../../service/endpointDesigns'
-import { assistInputKey, mappingInputKey, MAPPING_REQUIREMENTS_LIMIT } from './mappingAssistModel'
+import { assistInputKey, mappingInputKey } from './mappingAssistModel'
+
+export const MOCK_REQUIREMENTS_LIMIT = 4000
 
 /** Mock 与映射独立运行；只经原草稿回填，并隔离取消、迟到响应和一次撤销。 */
 export function useMockDataAssist(request: MappingAssistRequest | undefined, disabled: boolean, onEdit: (draft: WorkflowApiDesignDraft) => void) {
@@ -49,7 +51,7 @@ export function useMockDataAssist(request: MappingAssistRequest | undefined, dis
     const input = { ...current.current }
     if (!input.request || input.disabled || controller.current) return
     if (!input.instruction.trim()) { setError('请填写 Mock 数据需求说明。'); return }
-    if (input.instruction.trim().length > MAPPING_REQUIREMENTS_LIMIT) { setError('Mock 数据需求不能超过 4000 字。'); return }
+    if (input.instruction.trim().length > MOCK_REQUIREMENTS_LIMIT) { setError(`Mock 数据需求不能超过 ${MOCK_REQUIREMENTS_LIMIT} 字。`); return }
     if (!Number.isInteger(input.rowCount) || input.rowCount < 1 || input.rowCount > 20) { setError('每组列表条数须为 1 至 20。'); return }
     const run = new AbortController(); controller.current = run
     setPhase('generating'); setError(''); setResult(undefined); setProgress(undefined)

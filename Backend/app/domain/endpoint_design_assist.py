@@ -1,6 +1,6 @@
 """数据库字段映射 AI 辅助的当前请求与受限建议契约。"""
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, StringConstraints, model_validator
 
@@ -67,8 +67,9 @@ class AssistRequest(ApiDesignModel):
 class GenerateMappingRequest(AssistRequest):
     """基于当前契约生成全部映射，可附带用户补充信息和后续回答。"""
 
-    instruction: str = Field(default="", max_length=4000)
-    clarification: str = Field(default="", max_length=4000)
+    requirements_limit: ClassVar[int] = 500
+    instruction: str = Field(default="", max_length=requirements_limit)
+    clarification: str = Field(default="", max_length=requirements_limit)
     retry_token: str | None = Field(default=None, alias="retryToken", pattern=r"^[0-9a-f]{32}$")
 
     @model_validator(mode="after")
@@ -76,8 +77,8 @@ class GenerateMappingRequest(AssistRequest):
         """清理两段可选文本，并限制用户补充信息的总长度。"""
         self.instruction = self.instruction.strip()
         self.clarification = self.clarification.strip()
-        if len(self.instruction) + len(self.clarification) > 4000:
-            raise ValueError("补充信息合计不能超过 4000 字。")
+        if len(self.instruction) + len(self.clarification) > self.requirements_limit:
+            raise ValueError(f"补充说明合计不能超过 {self.requirements_limit} 字。")
         return self
 
 

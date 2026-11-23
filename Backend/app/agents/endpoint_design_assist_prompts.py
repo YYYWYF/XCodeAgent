@@ -417,8 +417,62 @@ def _rule_input(context: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _assist_messages(system: str, human: str, step: AssistStep) -> list[Any]:
-    """给可提出问题的步骤附加对应输出格式，映射说明只输出正文。"""
+def _operation_result_prompt(source_type: str) -> str:
+    """先说明操作结果的业务行为，再给出映射生成规则。"""
+    if source_type == "external_api":
+        success_rule = (
+            "success 依据外部契约明确的业务成功标志或已确认的判断规则。"
+        )
+    else:
+        success_rule = (
+            "根据当前新增、更新或删除的执行结果判断操作是否正常完成。"
+        )
+
+    return f"""【OperationResult 返回体规范】
+- 业务正常完成时返回 OperationResult，success 默认为 true。
+- 发生业务错误时，按当前接口定义的错误码抛出异常，进入错误响应。
+- {success_rule}
+
+【OperationResult 映射生成规则】
+- 为 success 生成业务处理映射，inputs 始终填 []。此字段以本节规则为准。
+- 在 rule 中写清本次操作的成功判定、返回 true 的条件和异常处理。如果依据外部 API 的成功标志，写明契约规定的字段和判定条件。
+- basis 说明依据的模板约定及当前业务操作。不得将 success 配置为固定值，也不得编造错误码。
+- 模板的标准成功和异常处理无需提问。只有接口另有特殊成功条件且缺少判断依据，或当前来源无法确定执行结果时才提问。"""
+
+
+def _page_result_prompt(source_type: str) -> str:
+    """先说明分页结果的数据来源，再给出映射生成规则。"""
+    if source_type == "external_api":
+        source_rule = "分页元数据和列表取自契约明确的外部分页结果，或按已确认的实际生效参数取值。"
+    else:
+        source_rule = "单表分页使用本次查询的实际分页结果。"
+
+    return f"""【PageResult 返回体规范】
+- total 取同一筛选条件下分页前的总记录数，不能用当前页条数替代。
+- current 和 pageSize 取实际生效的页码和每页条数，默认值只使用已确认契约中的值。
+- {source_rule}
+
+【PageResult 映射生成规则】
+- total、current 和 pageSize 均使用业务处理映射。这三个字段以本节规则为准，inputs 始终填 []。
+- total 的 rule 使用“符合条件的{{查询对象}}总数”。查询对象使用当前接口契约中的名称，例如“符合条件的商品总数”。名称未明确时使用“记录”。
+- current 的 rule 固定为“实际页码”。
+- pageSize 的 rule 固定为“实际每页条数”。"""
+
+
+def _assist_messages(system: str, human: str, step: AssistStep, context: dict[str, Any]) -> list[Any]:
+    """按正式契约注入本步骤需要的模板规则和问题格式。"""
+    if step == "return":
+        # 模板类型由已确认 Endpoint 的 Schema 引用决定，不从字段或 HTTP 方法推断。
+        schema_ref = context["endpoint"].get("response_schema_ref")
+        source_type = context["selection"].get("sourceType", "database")
+        rules = ""
+        if schema_ref == "OperationResult":
+            rules = _operation_result_prompt(source_type)
+        elif schema_ref == "PageResult":
+            rules = _page_result_prompt(source_type)
+        if rules:
+            system = system.replace("【取值方式】", f"{rules}\n\n【取值方式】", 1)
+            human = human.replace("【处理目标】", f"【处理目标】\n返回体 Schema：{schema_ref}", 1)
     if step != "description":
         questions_format = _TEXT_QUESTIONS_FORMAT if step in {"rule", "mock"} else _QUESTIONS_FORMAT
         system = f"{system}\n\n{questions_format}"
@@ -437,7 +491,8 @@ def build_assist_messages(context: dict[str, Any], step: AssistStep) -> list[Any
     # 独立阶段保留各自问题边界；共享规则只用于写入、说明和已选依赖规则完善。
     if step in {"write", "description", "rule"}:
         parts.insert(0, _POLICY)
-    return _assist_messages("\n\n".join(parts), _rule_input(context) if step == "rule" else _mapping_input(context, step), step)
+    human = _rule_input(context) if step == "rule" else _mapping_input(context, step)
+    return _assist_messages("\n\n".join(parts), human, step, context)
 
 
 _EXTERNAL_POLICY = """【角色与边界】
@@ -488,7 +543,7 @@ def _external_field_line(field: dict[str, Any]) -> str:
 def _external_assist_messages(context: dict[str, Any], step: AssistStep) -> list[Any]:
     """统一外部辅助各阶段的提示风格，按步骤限定处理目标与可用输入。"""
     if step == "rule":
-        return _assist_messages(f"{_EXTERNAL_POLICY}\n\n{_TASKS['rule']}", _rule_input(context), step)
+        return _assist_messages(f"{_EXTERNAL_POLICY}\n\n{_TASKS['rule']}", _rule_input(context), step, context)
     if step not in {"request", "return", "description"}:
         raise ValueError("外部 API 不支持数据库操作识别或查询写入步骤。")
     task = _EXTERNAL_TASKS.get(step, _TASKS["description"])
@@ -516,7 +571,7 @@ def _external_assist_messages(context: dict[str, Any], step: AssistStep) -> list
         if step == "return":
             lines += ["外部响应字段（输入标识 | 类型 | 必填性 | 说明）："]
             lines += [_external_field_line(field) for field in context["externalFields"] if field["section"] == "response_body"]
-    return _assist_messages(system, "\n".join(lines), step)
+    return _assist_messages(system, "\n".join(lines), step, context)
 
 
 _STATIC_POLICY = """【角色与边界】
@@ -563,7 +618,7 @@ _STATIC_MOCK = """【角色与边界】
 def _static_assist_messages(context: dict[str, Any], step: AssistStep) -> list[Any]:
     """映射只读取静态结构；Mock 只读取返回目标和要求，两类能力保持独立。"""
     if step == "rule":
-        return _assist_messages(f"{_STATIC_POLICY}\n\n{_TASKS['rule']}", _rule_input(context), step)
+        return _assist_messages(f"{_STATIC_POLICY}\n\n{_TASKS['rule']}", _rule_input(context), step, context)
     if step not in {"return", "mock"}:
         raise ValueError("静态来源不支持操作、查询、写入或映射说明步骤。")
     endpoint = context["endpoint"]
@@ -585,4 +640,4 @@ def _static_assist_messages(context: dict[str, Any], step: AssistStep) -> list[A
                   "应用请求参数（输入标识 | 类型 | 必填性 | 说明）：",
                   *[_field_line(field) for field in context["endpointFields"] if field["side"] == "request"]]
     system = _STATIC_MOCK if step == "mock" else f"{_STATIC_POLICY}\n\n{_STATIC_RETURN}"
-    return _assist_messages(system, "\n".join(lines), step)
+    return _assist_messages(system, "\n".join(lines), step, context)

@@ -1,7 +1,7 @@
 import type { MappingAssistRequest, MappingGenerationInput } from '../../../../typings/endpointDesignAssist'
 
 export type MappingAssistAnswers = Record<string, { label: string; value: string }>
-export const MAPPING_REQUIREMENTS_LIMIT = 4000
+export const MAPPING_REQUIREMENTS_LIMIT = 500
 
 /** 规范对象键顺序用于比较，忽略 JSON 请求不会发送的 undefined。 */
 export function mappingInputKey(value: unknown): string {
