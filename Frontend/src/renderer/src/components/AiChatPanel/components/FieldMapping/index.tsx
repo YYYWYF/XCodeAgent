@@ -165,6 +165,8 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
 
   /** 更换来源必须显式放弃当前映射，取消不修改草稿。 */
   const changeSelection = (next: BindingSelection | null, nextKind = next?.sourceType): void => {
+    // 仅禁止新选静态来源；已有静态配置仍沿原读取、编辑和保存流程处理。
+    if (next?.sourceType === 'static' || nextKind === 'static') return
     if (!entry || selectionKey(next) === selectionKey(selection) && nextKind === kind) return
     const apply = (): void => {
       assist.close()
@@ -172,7 +174,7 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
       setSourceChanging(false)
       setPendingSelection(null)
       setValidation(undefined)
-      editMapping({ ...entry.value.draft, sourceBinding: next || undefined, staticData: undefined, implementationDescription: next?.sourceType === 'static' ? '' : entry.value.draft.implementationDescription, databaseOperation: next?.sourceType === 'database' ? defaultDatabaseOperation(String(entry.preparation.payload.endpoint.method || '')) : undefined, databaseQuery: undefined, databaseWrites: [], externalApiBindings: [], fieldMappings: fields.map(createUnconfiguredFieldMapping) }, next)
+      editMapping({ ...entry.value.draft, sourceBinding: next || undefined, staticData: undefined, databaseOperation: next?.sourceType === 'database' ? defaultDatabaseOperation(String(entry.preparation.payload.endpoint.method || '')) : undefined, databaseQuery: undefined, databaseWrites: [], externalApiBindings: [], fieldMappings: fields.map(createUnconfiguredFieldMapping) }, next)
     }
     if (entry.value.draft.fieldMappings.some((item) => item.mappingType !== 'unconfigured') || Boolean(entry.value.draft.databaseQuery?.items.length) || Boolean(entry.value.draft.databaseWrites?.length) || Boolean(entry.value.draft.externalApiBindings?.length)) confirmWorkspaceAction({ title: '更换数据来源？', content: '当前字段映射、写入字段、外部接口取值规则和数据库查询条件将清空，已保存的正式映射在重新确认前不变。', okText: '更换并清空', cancelText: '取消', onOk: apply })
     else apply()
@@ -203,12 +205,14 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
 
   /** 暂存新的来源类型，等待用户选择具体来源并确认。 */
   const stageSourceKind = (nextKind: BindingSelection['sourceType']): void => {
+    // 与界面入口保持一致，避免事件处理仍能暂存静态来源。
+    if (nextKind === 'static') return
     if (!selection && !sourceChanging) {
-      changeSelection(nextKind === 'static' ? { sourceType: 'static' } : null, nextKind)
+      changeSelection(null, nextKind)
       return
     }
     setKind(nextKind)
-    setPendingSelection(nextKind === 'static' ? { sourceType: 'static' } : selection?.sourceType === nextKind ? selection : null)
+    setPendingSelection(selection?.sourceType === nextKind ? selection : null)
     setSourceChanging(true)
   }
 
@@ -272,7 +276,6 @@ export default function FieldMappingWorkspace({ workspaceRoot, target, contracts
                 <Radio.Group disabled={busy || entry.conflict} value={kind} onChange={(event) => stageSourceKind(event.target.value)}>
                   <Radio.Button value="database">数据表</Radio.Button>
                   <Radio.Button value="external_api">外部 API</Radio.Button>
-                  <Radio.Button value="static">静态数据</Radio.Button>
                 </Radio.Group>
                 {kind && kind !== 'static' && <Select className="binding-target" showSearch optionFilterProp="label" placeholder={kind === 'database' ? '选择已添加的数据表' : '选择域名 / 目录 / 接口'} disabled={busy || entry.conflict || kind === 'database' && prerequisite !== 'ready'} value={displayedSelection?.sourceType === kind ? selectionKey(displayedSelection) : undefined} options={candidates} onDropdownVisibleChange={(open) => { if (open) state.refreshSourceCandidates() }} onChange={(value) => stageSourceSelection(candidates.find((item) => item.value === value)?.selection || null)} />}
                 {sourceChanging ? <div className="database-source-toolbar"><Space><Button disabled={busy} onClick={cancelSourceChange}>取消</Button><Button type="primary" disabled={busy || entry.conflict || !pendingSelectionChanged} onClick={() => changeSelection(pendingSelection, kind)}>确认更换</Button></Space></div> : null}
