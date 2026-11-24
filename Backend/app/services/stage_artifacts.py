@@ -129,7 +129,7 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
     if node in {"unit_test", "unit_test_repair", "test_phase_confirmation"} and not deletion_test:
         from app.services.stage_execution_artifacts import load_stage_execution_artifacts
         fields.update(load_stage_execution_artifacts({**state, **fields}, fields["build_task_plan"], node))
-    if state.get("retry_source_run_id") and node in {"classify_intent", "execute_frontend", "execute_backend", "code_review", "unit_test", "integration_test"}:
+    if state.get("retry_source_run_id") and node in {"classify_intent", "execute_frontend", "execute_backend", "unit_test", "integration_test"}:
         from app.graph.nodes.workspace_inspection import inspect_workspace
         fields.update({key: value for key, value in inspect_workspace({**state, **fields}).items() if key.startswith("workspace_")})
     return fields

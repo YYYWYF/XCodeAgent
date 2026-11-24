@@ -1,14 +1,15 @@
-"""真实主图恢复 Diff 审查时不再被旧文件指纹阻断。"""
+"""真实主图启动和恢复 Diff 审查时无需重建工作区索引。"""
 
 import tempfile
 import unittest
+from contextlib import AsyncExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from app.domain.application_lifecycle import ApplicationLifecycleStage, ApplicationLifecycleStatus
 from app.graph.workflow import build_graph
-from app.persistence.checkpoints import workflow_checkpointer
+from app.persistence.checkpoints import close_workflow_checkpointer_for_workspace, workflow_checkpointer
 from app.persistence.execution_recovery import get_execution, mark_execution_interrupted
 from app.services.application_lifecycle import create_application_lifecycle, start_workbench_execution, write_application_lifecycle
 from app.services.execution_recovery import observe_execution_started, observe_execution_failed
@@ -22,20 +23,22 @@ from app.services.workspace_inspector import workspace_inventory
 class CodeReviewNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
     """保留真实 checkpoint、handoff 和节点包装器，仅替换模型和扫描工具。"""
 
-    async def test_interrupted_diff_review_reenters_current_source(self):
+    async def test_interrupted_diff_review_reenters_current_source(self) -> None:
         """模拟模型调用期间后端退出且文件改变，验证恢复后回到审查确认门。"""
 
         await self.exercise(interrupted=True)
 
-    async def test_escaped_failure_reenters_current_source(self):
+    async def test_escaped_failure_reenters_current_source(self) -> None:
         """异常失败走同一兜底事务，源码变化不能阻断精确节点重入。"""
 
         await self.exercise(interrupted=False)
 
-    async def exercise(self, *, interrupted):
+    async def exercise(self, *, interrupted: bool) -> None:
         """串联真实主图入口、Durable 来源、恢复解析和审查包装器。"""
 
-        with tempfile.TemporaryDirectory() as raw:
+        async with AsyncExitStack() as cleanup:
+            raw = cleanup.enter_context(tempfile.TemporaryDirectory())
+            cleanup.push_async_callback(close_workflow_checkpointer_for_workspace, workspace=raw)
             root = Path(raw)
             source_file = root / "backend" / "Demo.java"
             source_file.parent.mkdir()
@@ -53,16 +56,20 @@ class CodeReviewNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
             state = {
                 "workspace": raw, "active_run_id": "source", "active_thread_id": "thread",
                 "status": "completed", "quality_gate_passed": True, "workspace_revision": old_revision,
+                "retry_source_run_id": "prior-build-retry",
                 "code_review_mode": "diff", "code_review_repair_iteration": 2,
                 "code_review_max_repair_iterations": 3,
                 "resume_from": "review_phase_confirmation",
                 "review_phase_confirmation": {"action": "confirm", "reviewMode": "diff"},
             }
-            # 真实执行到模型节点再中断，确保起点拥有确定的 checkpoint writer。
+            # 模拟上游留有重试标记的首次审查，执行到模型节点后中断以保留真实 checkpoint。
             with patch("app.graph.nodes.code_review.development_review_files", return_value=["backend/Demo.java"]), patch(
+                "app.graph.nodes.workspace_inspection.inspect_workspace",
+            ) as scan, patch(
                 "app.graph.workflow.nodes.code_review", side_effect=RuntimeError("backend shutdown"),
             ), self.assertRaisesRegex(RuntimeError, "backend shutdown"):
                 await graph.ainvoke(state, {"configurable": {"thread_id": "thread"}})
+            scan.assert_not_called()
             source_file.write_text("after")
             current_revision = workspace_inventory(root)[1]
             self.assertNotEqual(current_revision, old_revision)
@@ -83,14 +90,15 @@ class CodeReviewNativeRecoveryTests(unittest.IsolatedAsyncioTestCase):
                                                    reentry_plan=plan)
             try:
                 with bind_recovery_runtime(context.node_recovery_context()), patch(
-                    "app.graph.nodes.workspace_inspection.inspect_workspace", return_value={"workspace_revision": current_revision},
-                ), patch("app.graph.workflow.nodes.code_review", return_value={
+                    "app.graph.nodes.workspace_inspection.inspect_workspace",
+                ) as scan, patch("app.graph.workflow.nodes.code_review", return_value={
                     "phase": "code_review", "status": "requires_user_input",
                     "clarification": {"mode": "code_review_repair_confirmation"}, "code_review_next_action": "await_user_input",
                 }) as review:
                     result = await graph.ainvoke(None, config=context.fork_config)
+                scan.assert_not_called()
                 received = review.call_args.args[0]
-                self.assertEqual(received["workspace_revision"], current_revision)
+                self.assertEqual(received["workspace_revision"], old_revision)
                 self.assertEqual(received["code_review_mode"], "diff")
                 self.assertEqual(received["code_review_repair_iteration"], 2)
                 self.assertEqual(result["status"], "requires_user_input")

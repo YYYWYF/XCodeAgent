@@ -1,6 +1,7 @@
-"""审查恢复的范围、确认权限、修复次数及工作区刷新回归。"""
+"""审查恢复的范围、确认权限、修复次数及工作区快照回归。"""
 
 import unittest
+from typing import Any
 from unittest.mock import patch
 
 from app.domain.execution_recovery import RecoveryExecutionError, WorkflowReentryReason
@@ -9,10 +10,12 @@ from app.services.node_recovery_context import NodeRecoveryContext, bind_node_re
 
 
 class CodeReviewReentryTests(unittest.TestCase):
-    """验证外层恢复刷新磁盘事实但不会篡改审查授权。"""
+    """验证审查重入保留原授权和修复进度。"""
 
-    def prepare(self, progress=None, *, approved=True):
-        """构造经验证的首次节点调用并隔离代码图扫描。"""
+    def prepare(
+        self, progress: dict[str, Any] | None = None, *, approved: bool = True,
+    ) -> dict[str, Any]:
+        """构造经验证的首次节点调用。"""
 
         state = {
             "active_run_id": "child", "active_thread_id": "thread", "code_review_mode": "diff",
@@ -24,17 +27,16 @@ class CodeReviewReentryTests(unittest.TestCase):
         context = NodeRecoveryContext(source_run_id="source", execution_run_id="child", thread_id="thread",
                                       target_node="code_review", checkpoint_id="entry", reentry_reason=WorkflowReentryReason.INTERRUPTED_CONTINUE,
                                       entry_state=state, internal_progress={**state, **progress} if progress else None)
-        with bind_recovery_runtime(context), bind_node_recovery(state, "code_review"), patch(
-            "app.graph.nodes.workspace_inspection.inspect_workspace", return_value={"workspace_revision": "current"},
-        ):
+        with bind_recovery_runtime(context), bind_node_recovery(state, "code_review"):
             return prepare_code_review_reentry(state)
 
-    def test_interrupted_diff_review_refreshes_source_and_preserves_confirmation(self):
-        """后端中断重新扫描当前源码，同时保留原修复授权与额度。"""
+    def test_interrupted_diff_review_preserves_snapshot_and_confirmation(self) -> None:
+        """后端中断续接沿用已有索引身份及原修复授权与额度。"""
 
-        state, fields = self.prepare()
-        self.assertEqual(state["workspace_revision"], "current")
-        self.assertEqual(fields["workspace_revision"], "current")
+        with patch("app.graph.nodes.workspace_inspection.inspect_workspace") as scan:
+            state = self.prepare()
+        scan.assert_not_called()
+        self.assertEqual(state["workspace_revision"], "old")
         self.assertEqual(state["code_review_mode"], "diff")
         self.assertEqual(state["code_review_repair_iteration"], 2)
         self.assertEqual(state["code_review_repair_confirmation"]["action"], "repair_all")
@@ -43,14 +45,14 @@ class CodeReviewReentryTests(unittest.TestCase):
     def test_failed_progress_keeps_consumed_iterations(self):
         """恢复提交的内部失败结果，不把消耗的修复轮次归零。"""
 
-        state, _ = self.prepare({"code_review_repair_iteration": 3, "code_review_build_results": [{"passed": False}]})
+        state = self.prepare({"code_review_repair_iteration": 3, "code_review_build_results": [{"passed": False}]})
         self.assertEqual(state["code_review_repair_iteration"], 3)
         self.assertEqual(state["code_review_build_results"], [{"passed": False}])
 
     def test_progress_cannot_invent_user_confirmation(self):
         """未确认的一键修复不能从内部进度中复活为授权。"""
 
-        state, _ = self.prepare({"code_review_repair_confirmation": {"action": "repair_all"}}, approved=False)
+        state = self.prepare({"code_review_repair_confirmation": {"action": "repair_all"}}, approved=False)
         self.assertEqual(state["code_review_repair_confirmation"], {})
 
     def test_other_review_mode_or_scope_is_rejected(self):
@@ -64,6 +66,4 @@ class CodeReviewReentryTests(unittest.TestCase):
         """普通审查、确认及内部修复保持既有行为。"""
 
         state = {"code_review_repair_iteration": 2}
-        with patch("app.graph.nodes.workspace_inspection.inspect_workspace") as scan:
-            self.assertEqual(prepare_code_review_reentry(state), (state, {}))
-        scan.assert_not_called()
+        self.assertIs(prepare_code_review_reentry(state), state)

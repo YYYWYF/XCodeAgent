@@ -438,13 +438,12 @@ def build_graph(
     builder.add_node("test_phase_confirmation", observe_model_node("test_phase_confirmation", nodes.test_phase_confirmation))
     builder.add_node("review_phase_confirmation", observe_model_node("review_phase_confirmation", nodes.review_phase_confirmation))
     def code_review_with_recovery(state: ProjectState, config: RunnableConfig) -> dict[str, Any]:
-        """审查重入刷新当前源码，再交回原扫描、修复和构建验证子图。"""
+        """恢复已验证的审查上下文，由审查子图直接读取当前源码。"""
 
         from app.services.code_review_reentry import prepare_code_review_reentry
 
         with bind_node_recovery(state, "code_review"):
-            prepared, fields = prepare_code_review_reentry(state)
-            return {**nodes.code_review(prepared, config), **fields}
+            return nodes.code_review(prepare_code_review_reentry(state), config)
 
     builder.add_node("code_review", observe_model_node("code_review", code_review_with_recovery))
     builder.add_node("acceptance_phase_confirmation", observe_model_node("acceptance_phase_confirmation", nodes.acceptance_phase_confirmation))

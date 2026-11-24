@@ -104,7 +104,7 @@ Windows 发布归档入口为根目录的 `scripts/stage-windows-update.mjs`。�
 
 `workspace/task_documents.py::_TASK_RUNTIME_FIELDS` 包含后端 Markdown 同步回执 `implementation_document`，统一用于计划摘要、运行状态回写与 Build 恢复合同比较，避免较早成功任务的文档回执阻断后续失败任务重试。`graph/subgraphs/build.py::_restore_build_runtime` 的真实任务合同漂移错误附带变更字段名，仍严格校验身份、计划绑定及合同正文，不输出正文或放宽正式变更校验。
 
-Build 单项及全部失败任务重试由 `graph/subgraphs/build.py` 按非空 `build_retry_task_ids` 跳过两处 `refresh_build_workspace`；仍验证原执行进度和计划绑定，缺失进度直接失败，不降级为扫描及整轮重启。调度收口清空仅用于本次任务恢复的 `retry_source_run_id`，防止后续测试/审查阶段因该标记再次扫描；实际写入文件后的代码图增量更新、正常规划和整阶段重试/重启扫描保持原行为。
+Build 单项及全部失败任务重试由 `graph/subgraphs/build.py` 按非空 `build_retry_task_ids` 跳过两处 `refresh_build_workspace`；仍验证原执行进度和计划绑定，缺失进度直接失败，不降级为扫描及整轮重启。调度收口清空仅用于本次任务恢复的 `retry_source_run_id`，防止后续测试阶段因该标记再次扫描；实际写入文件后的代码图增量更新、正常规划和整阶段重试/重启扫描保持原行为。
 
 本地会话保存由 `Frontend/src/main/sessionFileWriter.ts` 在复制未加载历史后、发布前关闭源文件句柄；`sessionPersistence.ts::publishSessionFile` 统一原子替换，Windows 的 EPERM/EACCES/EBUSY 最多延迟重试五次，每次重新核对保存起点的源文件签名。失败保留原会话，不先删除目标、不退化为非原子覆盖；Worker 的既有串行保存和阶段身份校验不变。
 
@@ -570,9 +570,9 @@ Recovery GET 投影增加可选 `error`（`RECOVERY_PROJECTION_READ_FAILED`）�
 
 验收 `acceptance` 的项目启动失败通过现有 BUSINESS_RETRY 重入同一验收节点，仍校验 lifecycle、Run/Thread、checkpoint 与资源归属。启动节点显式写入本轮 `message/error`，成功时清空旧错误；AG-UI 下一节点投影仅在明确验收通过后宣告 `finalize_project`，失败或待用户验收时不得覆盖 durable 当前节点。预览底栏的“验收通过”调用 `useWorkflowConversation.handleAcceptPreview`，沿 `/workflow/run` 提交 `page_acceptance: accepted`，不再本地乐观改写通过状态；提交期间按钮禁用并显示 loading。`protocols/workflow/lifecycle.py` 在验收节点实际确认后将质量门结果与 execution 同次落盘，原 `finalize_project` 释放 execution 和资源锁，前端消费服务端快照。未改 Agent 节点或增加 Lifecycle 校验。回归：`tests.test_acceptance_decision_projection`、`tests.test_workflow_failure_message`、`tests.test_workflow_reentry_contract`。
 
-所有阶段统一取消 checkpoint 旧工作区 revision/hash 的恢复门禁及其快照文件存在性要求；`execution_recovery_executor.py` 只保留运行身份、精确节点入口、正式上下文和 lifecycle/资源归属校验。没有逐节点豁免名单或旧门禁失败的特殊重试分支。工作区指纹仍用于缓存和业务证据有效性：Build、测试、审查保留各自重入刷新；`prepare_build_tasks` 恢复先扫描当前磁盘再冻结规划输入；`acceptance` 恢复重新走确定性启动器检查当前项目，不能仅凭旧 preview URL 跳过启动。用户已提交的验收决定仍按原确认合同消费，不重新运行验收。回归包括 `tests.test_execution_recovery_langgraph_native`、`tests.test_recovery_current_workspace` 与 `tests.test_acceptance_subgraph`。
+所有阶段统一取消 checkpoint 旧工作区 revision/hash 的恢复门禁及其快照文件存在性要求；`execution_recovery_executor.py` 只保留运行身份、精确节点入口、正式上下文和 lifecycle/资源归属校验。没有逐节点豁免名单或旧门禁失败的特殊重试分支。工作区指纹仍用于缓存和业务证据有效性：Build、测试保留各自重入刷新；`prepare_build_tasks` 恢复先扫描当前磁盘再冻结规划输入；`acceptance` 恢复重新走确定性启动器检查当前项目，不能仅凭旧 preview URL 跳过启动。用户已提交的验收决定仍按原确认合同消费，不重新运行验收。回归包括 `tests.test_execution_recovery_langgraph_native`、`tests.test_recovery_current_workspace` 与 `tests.test_acceptance_subgraph`。
 
-代码审查 `code_review` 同样不以旧工作区 revision/snapshot hash 阻止 Native Recovery；`services/code_review_reentry.py` 仅在首次已验证重入中重新扫描当前源码，保留 Diff/full 方式、原入口的修复确认、同范围已提交问题快照和修复轮次，再进入原审查子图。Diff 文件范围由现有服务端正式计划重新选取，正常扫描/修复及用户确认门不变；审查支持同一 INTERRUPTED_CONTINUE、FAILURE_RETRY 和经 lifecycle 证明的 BUSINESS_RETRY 入口，运行身份、checkpoint、资源归属与 Build 绑定仍严格校验。回归：`tests.test_code_review_reentry`、`tests.test_code_review_native_recovery`。
+代码审查 `code_review` 首次执行及失败重试、中断续接均直接进入审查流程，`stage_artifacts.py` 与 `code_review_reentry.py` 无需刷新工作区代码索引。Diff 文件范围由服务端正式 Build 计划重新选取，审查 Agent 读取当前源码。Native Recovery 保留 Diff/full 方式、原入口的修复确认、同范围已提交问题快照和修复轮次，并严格校验运行身份、checkpoint、资源归属及 Build 绑定。回归：`tests.test_code_review_reentry`、`tests.test_code_review_native_recovery`。
 
 测试阶段 `services/integration_test_reentry.py` 在经验证的首次失败重入中刷新工作区、清空旧检查/报告/修复任务/交接与性能选择，并把本轮 `repair_iteration` 重置为 0；保留单测决定、既有代码变更归属与修复上限。入口更新先合并，再由真实节点结果覆盖，避免旧 checkpoint 状态残留或入口重置覆盖新报告。暂停续接保留原修复额度与同入口任务进度，正常内部修复循环不重置。执行归属、资源锁和 checkpoint 校验保持不变，已执行或起点变化的事务禁止再次准备。沿用现有 AG-UI 恢复入口；前端 `service/recoveryIncident.ts` 只解释服务端签发的测试重启，不推断恢复目标。回归：`tests.test_integration_test_reentry`、`tests.test_integration_native_recovery`、`pnpm test:execution-recovery`。
 

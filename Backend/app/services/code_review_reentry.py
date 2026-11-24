@@ -1,4 +1,4 @@
-"""代码审查重入时刷新工作区事实，并保留经验证的审查与修复上下文。"""
+"""代码审查重入时保留经验证的审查与修复上下文。"""
 
 from copy import deepcopy
 from typing import Any
@@ -7,12 +7,12 @@ from app.domain.execution_recovery import RecoveryExecutionError
 from app.services.node_recovery_context import current_node_recovery_context
 
 
-def prepare_code_review_reentry(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def prepare_code_review_reentry(state: dict[str, Any]) -> dict[str, Any]:
     """只处理 Native Recovery 首次目标调用，普通扫描和修复循环不重置。"""
 
     recovery = current_node_recovery_context()
     if recovery is None:
-        return state, {}
+        return state
     restored = dict(state)
     progress = recovery.internal_progress
     if progress is not None:
@@ -31,8 +31,4 @@ def prepare_code_review_reentry(state: dict[str, Any]) -> tuple[dict[str, Any], 
         "code_review_retry": {}, "code_review_next_action": "",
         "acceptance_phase_confirmation": {},
     })
-    from app.graph.nodes.workspace_inspection import inspect_workspace
-
-    scanned = inspect_workspace(restored)
-    fields = {key: value for key, value in scanned.items() if key.startswith("workspace_")}
-    return {**restored, "workspace_snapshot": {}, **fields}, fields
+    return restored
