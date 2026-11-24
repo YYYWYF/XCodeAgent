@@ -17,6 +17,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from app.agents.execution_control import RunCancellationMiddleware
 from app.agents.messages import _coerce_content_text
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
+from app.agents.main.technical_plan_edit_context import technical_plan_edit_context
 from app.agents.main.technical_plan_file_tools import TechnicalPlanFileMiddleware
 from app.agents.main.technical_plan_generation_prompts import (
     ENTITY_DESCRIPTION_RULE,
@@ -217,11 +218,15 @@ def _editor_system_prompt(requirement_spec: dict[str, Any]) -> str:
         "修改相关片段，保留其他全部内容。不要在最终回答中输出整份规划、Contract 或 JSON。\n"
         f"可编辑文件：{TECHNICAL_PLAN_CANDIDATE_PATH}。"
         f"只读的已确认产品事实：{PRODUCT_CONTEXT_PATH}；应用约束：{CONSTRAINTS_CONTEXT_PATH}。\n"
+        "若首条用户消息已提供已定位的候选原文，视为已完成首次读取，可直接 edit_file；"
+        "只在原文不足、需核对其他引用或编辑后复核时继续搜索读取。未提供原文时，"
         "先 grep 定位名称、ID、路径或字段，再 read_file 读取相关窗口（offset 从0开始，每次最多120行）。"
         "grep 按字面量搜索，不支持正则或 | 多词搜索；多个关键词要分别调用。"
         "grep 的 content 模式返回定位行号；read_file 的代码块返回原始文本，不含行号或额外展示缩进。"
         "edit_file 的 old_string 必须精确且唯一匹配；若匹配不到或存在多处，补读上下文后再修改。"
-        "只改唯一的键值或文字时，直接用不带前导缩进的最短唯一片段；例如将"
+        "已预载且未截断的目标窗口，首次 edit_file 必须复制该完整窗口作为 old_string，"
+        "new_string 复制同一窗口只改变目标字段；不要缩短为可能在其他接口重复的参数或键值。"
+        "没有完整预载窗口且确认只改唯一的键值或文字时，可用不带前导缩进的最短唯一片段；例如将"
         "old_string 设为 '\"name\": \"旧名称\"'，new_string 设为 '\"name\": \"新名称\"'。"
         "多行片段必须逐字复制 read_file 代码块中的原文缩进。不要重复提交已经失败的匹配片段。"
         "允许在同一轮使用多次 edit_file 完成关联修改，也允许中间文件暂时不是有效 JSON；"
@@ -286,9 +291,14 @@ def edit_technical_plan_with_agent(
         ],
     )
     callbacks = [_PlanningTokenCallback(on_token)] if on_token else []
+    # 从与文件工具完全相同的候选序列化文本预载，不引入第二份候选或额外模型调用。
+    context = technical_plan_edit_context(
+        requirement_spec.get("technical_plan_revision_scope"),
+        file_data_to_string(files[TECHNICAL_PLAN_CANDIDATE_PATH]),
+    )
     # 读取方式由模型按需选择，调用次数和图步数沿用框架原有运行限制。
     agent.invoke(
-        {"messages": [{"role": "user", "content": "请核对原始要求与本轮反馈，需要修改时局部编辑并读回；已满足要求且无需修改时，说明结论并调用 finish_review。"}],
+        {"messages": [{"role": "user", "content": "请核对原始要求与本轮反馈，需要修改时局部编辑并读回；已满足要求且无需修改时，说明结论并调用 finish_review。\n" + context}],
          "files": files},
         config={"callbacks": callbacks},
     )

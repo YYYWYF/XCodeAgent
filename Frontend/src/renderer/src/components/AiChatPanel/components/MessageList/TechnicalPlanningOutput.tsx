@@ -3,7 +3,7 @@ import {
   ExpandOutlined, LoadingOutlined, MinusCircleOutlined, UpOutlined
 } from '@ant-design/icons'
 import { Button, Empty, Modal, Tooltip, message } from 'antd'
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { TechnicalPlanningOutput as Output, TechnicalPlanningOutputEntry } from '../../../../typings/technicalPlanningOutput'
 import { cx } from '../../../../utils'
@@ -22,12 +22,17 @@ export default function TechnicalPlanningOutput({ output, running, runId }: {
   running: boolean
   runId: string
 }): ReactElement {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(running)
   const [modalOpen, setModalOpen] = useState(false)
   const [copying, setCopying] = useState(false)
   const bodyId = useId()
   const entries = output?.entries || []
   const status = running ? '接收中' : '输出已结束'
+
+  // 每轮生成默认展开，输出结束时收起；之后手动展开不受后续快照影响。
+  useEffect(() => {
+    setExpanded(running)
+  }, [running, runId])
 
   /** 复制当前实际收到的内容，失败时提供明确反馈。 */
   const copyOutput = async (): Promise<void> => {
