@@ -1451,6 +1451,7 @@ export type WorkflowRunPayload = {
   threadId: string
   summary: WorkflowSummary
   events: WorkflowEvent[]
+  technicalPlanningOutput?: import('./technicalPlanningOutput').TechnicalPlanningOutput
   confirmationArtifact?: WorkflowConfirmationArtifact
   codeChanges?: WorkspaceCodeChangeSet
   state?: Record<string, unknown>

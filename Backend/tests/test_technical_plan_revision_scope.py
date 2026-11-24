@@ -212,6 +212,10 @@ class TechnicalPlanClarificationJourneyTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=self._generator) as generate:
             events = await self._submit_card("answer", answers={"修改范围1": "GET"})
         self.assertFalse(any(event["type"] == "RUN_ERROR" for event in events), events[-1])
+        output = [event["value"] for event in events if event.get("name") == "technical-planning.output"]
+        self.assertTrue(any(item["text"] == "技术修改操作已生成" for item in output))
+        self.assertTrue(any(item["text"] == "技术修改已应用并通过校验，正在准备待确认版本" for item in output))
+        self.assertNotIn("expectedBefore", json.dumps(output))
         generate.assert_called_once()
         self.assertIn("GET", generate.call_args.args[0]["planning_adjustment_request"])
         await self._assert_new_confirmation()

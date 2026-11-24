@@ -285,6 +285,10 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "technicalPlanGenerationError": "technical_plan_generation_error",
             "technicalPlanRevisionClarification": "technical_plan_revision_clarification",
         },
+        "technicalPlanningOutput": {
+            "customEventName": "technical-planning.output", "kinds": ["text", "activity", "retry"],
+            "identityFields": ["runId", "threadId"], "reasoningIncluded": False,
+        },
         "artifactSchemas": {
             "product_plan": "product-plan.v5",
             "ui_designs": "ui-manifest.v3",

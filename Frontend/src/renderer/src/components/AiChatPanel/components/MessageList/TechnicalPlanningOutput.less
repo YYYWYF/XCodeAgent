@@ -1,0 +1,93 @@
+.@{class-prefix}-technical-planning-output {
+  flex: 1 0 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  border: 1px solid var(--wb-accent-border);
+  border-radius: 8px;
+
+  .@{class-prefix}-workflow-run-card > & { flex: none; }
+}
+
+.@{class-prefix}-technical-planning-output-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--wb-accent-soft);
+
+  .ant-btn { color: var(--wb-text-secondary); }
+  .ant-btn:hover { color: var(--wb-accent); background: var(--wb-canvas); }
+  .ant-btn[disabled] { color: var(--wb-text-secondary); opacity: .45; }
+  button:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 2px; }
+}
+
+.@{class-prefix}-technical-planning-output-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+  color: var(--wb-text);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.@{class-prefix}-technical-planning-output-status {
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+  &.@{class-prefix}-running { color: var(--wb-accent); }
+}
+
+.@{class-prefix}-technical-planning-output-body {
+  max-height: 320px;
+  padding: 14px 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--wb-text);
+  background: var(--wb-canvas);
+  scrollbar-color: var(--wb-border-strong) transparent;
+
+  .ant-empty-description { color: var(--wb-text-secondary); }
+}
+
+.@{class-prefix}-technical-planning-output-text {
+  margin: 0 0 10px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-technical-planning-output-activity {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+
+  > span:first-child { color: var(--wb-accent); }
+  time { flex-shrink: 0; color: var(--wb-text-secondary); font-variant-numeric: tabular-nums; }
+  &.@{class-prefix}-failed > span:first-child { color: var(--wb-code-delete-text); }
+}
+
+.@{class-prefix}-technical-planning-output-hint {
+  padding: 6px 0;
+  color: var(--wb-text-secondary);
+  font-size: 12px;
+}
+
+.@{class-prefix}-technical-planning-output-modal {
+  .ant-modal-content, .ant-modal-header { color: var(--wb-text); background: var(--wb-canvas); }
+  .ant-modal-title, .ant-modal-close { color: var(--wb-text); }
+  .ant-modal-header { border-color: var(--wb-border-strong); }
+  .@{class-prefix}-technical-planning-output-body { max-height: 65vh; }
+}

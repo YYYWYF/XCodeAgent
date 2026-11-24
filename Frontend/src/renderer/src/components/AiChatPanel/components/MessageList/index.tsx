@@ -863,6 +863,13 @@ export default function MessageList({
                     isAcceptancePhaseConfirmationCard ||
                     isCodeReviewCard)
               )
+              // 有确认卡时由该卡片内嵌输出；失败或停止时仍保留原进度卡的完整外框。
+              const technicalOutputRecordVisible = Boolean(
+                !planningActivityVisible && !showWorkflowCard &&
+                !(currentPlanningConfirmation?.runId === planningCardWorkflow?.runId &&
+                  currentPlanningConfirmation?.threadId === planningCardWorkflow?.threadId) &&
+                planningCardWorkflow?.technicalPlanningOutput?.entries.length
+              )
               // 设计阶段/会话内只有列表末尾的待答卡可交互：其后出现答案留痕或下一张卡
               // 即证明它已被回答。历史待答卡渲染为失效态，避免旧表单以空白可填样式误导。
               // 手动切回设计阶段浏览已完成应用时（lifecycle 已就绪且无活跃 formal revision），
@@ -971,6 +978,7 @@ export default function MessageList({
                   message.developmentContinuation ||
                   showPlanningLoading ||
                   (planningActivityVisible && planningCardWorkflow) ||
+                  technicalOutputRecordVisible ||
                   (!hideEntityWorkflowChrome &&
                     !designPhasePlanning &&
                     visibleProcessSteps?.length) ||
@@ -1030,6 +1038,9 @@ export default function MessageList({
                         planningActivityVisible &&
                         planningCardWorkflow ? (
                           <PlanningWorkflowActivity workflow={planningCardWorkflow} />
+                        ) : null}
+                        {technicalOutputRecordVisible && planningCardWorkflow ? (
+                          <PlanningWorkflowActivity workflow={planningCardWorkflow} outputEnded />
                         ) : null}
                         {!hideEntityWorkflowChrome &&
                           visibleProcessSteps &&

@@ -12,6 +12,7 @@ from app.agents.model_factory import create_chat_model, thinking_disabled_kwargs
 from app.agents.model_operations import observe_model_operation
 from app.config import Settings
 from app.utils.model_output import extract_json_object
+from app.services.technical_planning_output import emit_technical_planning_activity
 
 
 CLARIFICATION_MODE = "technical_plan_revision_clarification"
@@ -146,8 +147,14 @@ def resolve_technical_plan_revision_scope(
         f"当前目录：{json.dumps(_revision_catalog(plan), ensure_ascii=False)}\n"
         f"用户修改要求：{request}"
     )
+    activity_id = emit_technical_planning_activity("正在识别技术规划修改目标")
     result = create_chat_model(Settings.from_env(), extra_model_kwargs=thinking_disabled_kwargs()).invoke(prompt)
     scope = TechnicalPlanRevisionScope.model_validate(extract_json_object(
         _coerce_content_text(getattr(result, "content", "")) or "",
     ))
-    return validate_revision_scope(scope, plan)
+    targets, schemas, questions = validate_revision_scope(scope, plan)
+    emit_technical_planning_activity(
+        "修改范围需要补充信息" if questions else "技术规划修改目标已识别",
+        call_id=activity_id, status="completed",
+    )
+    return targets, schemas, questions

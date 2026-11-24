@@ -5,6 +5,7 @@ from deepagents.backends.state import StateBackend
 from deepagents.backends.utils import file_data_to_string
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
+from app.services.technical_planning_output import emit_technical_planning_activity
 
 
 class TechnicalPlanFileMiddleware(AgentMiddleware):
@@ -19,7 +20,23 @@ class TechnicalPlanFileMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         """原生读取成功后返回同一窗口原文，元信息与可复制文本分开呈现。"""
 
-        result = handler(request)
+        name = request.tool_call["name"]
+        label = {"grep": "定位规划内容", "read_file": "读取规划片段", "edit_file": "应用局部修改"}.get(name)
+        identity = None
+        if label:
+            identity = emit_technical_planning_activity(label, call_id=request.tool_call.get("id"))
+        try:
+            result = handler(request)
+        except Exception:
+            if identity:
+                emit_technical_planning_activity(f"{label}失败", call_id=identity, status="failed")
+            raise
+        if identity:
+            failed = isinstance(result, ToolMessage) and result.status == "error"
+            emit_technical_planning_activity(
+                f"{label}未成功，等待模型修正" if failed else f"{label}完成",
+                call_id=identity, status="failed" if failed else "completed",
+            )
         if (
             not isinstance(result, ToolMessage)
             or result.status == "error"

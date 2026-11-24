@@ -97,6 +97,43 @@ test('技术规划子节点完成后继续显示原进度卡', () => {
   }
 })
 
+/** 检查真实消息列表的 HTML 祖先，防止输出结束后被移到卡片外或重复展示。 */
+function assertOutputInsideCard(markup: string, cardClass: string): void {
+  const ancestors: string[] = []
+  const outputAncestors: string[][] = []
+  for (const match of markup.matchAll(/<\/?(?:div|section)\b[^>]*>/g)) {
+    const tag = match[0]
+    if (tag.startsWith('</')) {
+      ancestors.pop()
+      continue
+    }
+    const classes = /class="([^"]*)"/.exec(tag)?.[1] || ''
+    if (classes.split(' ').includes('xa-technical-planning-output')) outputAncestors.push([...ancestors])
+    ancestors.push(classes)
+  }
+  assert.equal(outputAncestors.length, 1, '每次规划只展示一个内嵌实时输出窗口')
+  assert.ok(outputAncestors[0].some((classes) => classes.split(' ').includes(cardClass)),
+    `实时输出必须在 ${cardClass} 卡片边框内，实际祖先：${outputAncestors[0].join(' > ')}`)
+}
+
+test('技术规划实时输出在生成中、待确认和失败后始终嵌在对应卡片内', () => {
+  for (const status of ['running', 'requires_user_input', 'failed']) {
+    const workflow = planningProgress(status === 'failed' ? 'technical_planning_generate' : 'technical_planning', status)
+    workflow.technicalPlanningOutput = { entries: [{
+      id: 'read-1', kind: 'activity', text: '读取规划片段完成', status: 'completed', timestamp: '2026-11-24T04:00:00Z'
+    }], truncated: false }
+    if (status === 'requires_user_input') {
+      workflow.summary.clarification = { mode: 'technical_plan_confirmation', status, questions: [] }
+      workflow.state = { ...workflow.state, application_planning_interrupt: {
+        gateId: 'output-gate', artifact: 'technical_plan', artifactRevision: 'output-revision'
+      } }
+    }
+    const markup = renderPlanningMessage(workflow)
+    assertOutputInsideCard(markup, status === 'requires_user_input' ? 'xa-workflow-run-card' : 'xa-planning-workflow-activity')
+    if (status !== 'running') assert.doesNotMatch(markup, /anticon-loading/)
+  }
+})
+
 /** 模板重试不能被仍停留在技术规划确认的 lifecycle 误报为重新生成规划。 */
 test('模板重试显示真实模板阶段，保留已确认规划的生命周期', () => {
   const workflow = planningProgress('template_reconcile', 'running')

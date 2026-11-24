@@ -11,6 +11,7 @@ from langgraph.config import get_stream_writer
 
 from app.agents.main.document_sync import sync_project_plan_from_markdown
 from app.agents.main.technical_plan_editor import TechnicalPlanCandidateError
+from app.services.technical_planning_output import emit_technical_planning_activity
 from app.agents.main.technical_plan_fragment_retry import PlanningFragmentFailed, dependency_repair_key
 from app.agents.main.technical_plan_language import validate_technical_plan_chinese_prose
 from app.agents.database.generator import (
@@ -1909,6 +1910,11 @@ def _generate_valid_technical_plan(
     attempt = 0
     dependency_repairs: dict[str, int] = {}
     while attempt < _TECHNICAL_PLAN_GENERATION_ATTEMPTS:
+        if attempt:
+            emit_technical_planning_activity(
+                f"本轮技术规划未通过校验，正在进行第 {attempt + 1}/{_TECHNICAL_PLAN_GENERATION_ATTEMPTS} 次尝试。",
+                retry=True,
+            )
         validation_feedback = (
             _technical_plan_retry_feedback(remaining_errors)
             if remaining_errors
@@ -1937,10 +1943,12 @@ def _generate_valid_technical_plan(
             candidate = apply_project_plan_feedback(candidate, base_feedback)
             # 拿到完整候选后，即使后续编译或校验失败，也必须基于它继续局部修复。
             current_plan = candidate
+            activity_id = emit_technical_planning_activity("正在校验技术规划及字段引用")
             candidate = _attach_technical_plan_contracts(state, candidate)
             candidate["confirmation_status"] = "pending_user_confirmation"
             remaining_errors = _project_plan_validation_errors(candidate, state)
             if not remaining_errors:
+                emit_technical_planning_activity("技术规划校验通过，正在准备待确认版本", call_id=activity_id, status="completed")
                 return candidate, [], None
             current_plan = candidate
         except PlanningFragmentFailed as exc:

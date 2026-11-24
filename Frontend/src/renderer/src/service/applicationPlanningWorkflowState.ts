@@ -3,6 +3,7 @@ import type {
   WorkflowClarificationAnswers,
   WorkflowRunPayload
 } from '../typings'
+import { retainTechnicalPlanningOutput } from './technicalPlanningOutput'
 
 export type PlanningWorkflowActivity = {
   status: 'running' | 'completed' | 'failed'
@@ -117,6 +118,7 @@ export function retainApplicationPlanningInterrupt(
   previous: WorkflowRunPayload | undefined,
   incoming: WorkflowRunPayload
 ): WorkflowRunPayload {
+  incoming = retainTechnicalPlanningOutput(previous, incoming)
   const sameRun =
     previous?.threadId === incoming.threadId && previous?.runId === incoming.runId
   // 同一恢复轮一旦开始生成 TechnicalPlan，晚到的入口 checkpoint 帧只能视为旧投影，

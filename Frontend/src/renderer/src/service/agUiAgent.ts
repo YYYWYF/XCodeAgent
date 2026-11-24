@@ -11,6 +11,7 @@ import type { Message } from '@ag-ui/core'
 import { createAgUiHttpAgent } from './authentication'
 import { parseRecoveryFailureDiagnostic } from './recoveryActionPlan'
 import { readWorkspaceToolActivity } from './workspaceToolActivity'
+import { appendTechnicalPlanningOutput, retainTechnicalPlanningOutput } from './technicalPlanningOutput'
 import type {
   ApplicationConfig,
   ApplicationPlanningInteraction,
@@ -702,6 +703,14 @@ export class AgUiChatSession {
     const subscriber: AgentSubscriber = {
       onCustomEvent: ({ event }) => {
         if (!acceptingEvents) return
+        if (event.name === 'technical-planning.output') {
+          const next = appendTechnicalPlanningOutput(workflow, event.value)
+          if (next && next !== workflow) {
+            workflow = next
+            options.onWorkflow?.(workflow)
+          }
+          return
+        }
         if (event.name === 'build-task-retry' && event.value?.status === 'failed') {
           runErrorMessage = event.value.error?.message || '任务重试失败。'
           runErrorCode = 'BUILD_TASK_RETRY_REJECTED'
@@ -1478,6 +1487,7 @@ export function reconcileWorkflowFailurePayload(
   incoming?: WorkflowRunPayload
 ): WorkflowRunPayload | undefined {
   if (!incoming) return previous
+  incoming = retainTechnicalPlanningOutput(previous, incoming)
   if (
     !previous || previous.runId !== incoming.runId ||
     previous.threadId !== incoming.threadId ||

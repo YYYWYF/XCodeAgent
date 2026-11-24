@@ -110,6 +110,11 @@ def workflow_capabilities() -> dict[str, Any]:
         "name": "workflow-run",
         "endpoint": "/workflow/run",
         "transport": "ag-ui-sse",
+        "technicalPlanningOutput": {
+            "customEventName": "technical-planning.output", "kinds": ["text", "activity", "retry"],
+            "identityFields": ["runId", "threadId"], "reasoningIncluded": False,
+            "storage": "current-client-run-only",
+        },
         "eventStorage": {
             "stateDelta": "changed-presentation-fields-only",
             "graphStateAuthority": "checkpoint",

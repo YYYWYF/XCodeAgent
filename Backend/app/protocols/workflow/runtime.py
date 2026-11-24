@@ -104,6 +104,7 @@ from app.services.execution_failure_classifier import sanitize_failure_diagnosti
 from app.services.execution_recovery_executor import NativeRecoveryRuntimeContext, WorkflowReentryExecutor
 from app.services.node_recovery_context import bind_recovery_runtime
 from app.services.run_workers import bind_run_workers
+from app.services.technical_planning_output import OUTPUT_EVENT, TechnicalPlanningOutput
 from app.services.failed_run_cleanup import (
     drain_failed_run, observe_drained_failure, release_failed_execution_resources, shield_run_cleanup, wait_failed_run,
 )
@@ -2054,7 +2055,23 @@ def build_workflow_ag_ui_stream(
                             attempt=tool_attempt,
                         )
                         continue
+                    if event_type == OUTPUT_EVENT:
+                        output = TechnicalPlanningOutput.model_validate({key: value for key, value in progress.items() if key != "type"})
+                        yield encoder.encode(CustomEvent(name=OUTPUT_EVENT, value={
+                            "runId": run_id, "threadId": thread_id,
+                            **output.model_dump(exclude_none=True),
+                        }))
+                        continue
                     if event_type == "llm.token":
+                        if str(current_phase).startswith("technical_planning"):
+                            token = progress.get("token")
+                            if isinstance(token, str) and token:
+                                output = TechnicalPlanningOutput(kind="text", text=token)
+                                yield encoder.encode(CustomEvent(name=OUTPUT_EVENT, value={
+                                    "runId": run_id, "threadId": thread_id,
+                                    **output.model_dump(exclude_none=True),
+                                }))
+                            continue
                         yield encoder.encode(
                             CustomEvent(
                                 name="llm.token",

@@ -336,13 +336,11 @@ def _invoke_prompt_with_chat_model(
             default_max_tokens=max(settings.default_max_tokens, 2048),
         )
     model = create_chat_model(settings, extra_model_kwargs={"thinking": thinking})
-    if on_token is None or thinking_enabled:
-        # 思考阶段收齐消息后提取正文，再将正文交给前端和片段解析。
+    if on_token is None:
+        # 未订阅公开输出时沿用完整调用；有订阅时逐片段提取正文并过滤思考内容。
         result = model.invoke(prompt)
         check_output_finish(result)
         text = _coerce_content_text(getattr(result, "content", ""))
-        if text and on_token is not None:
-            on_token(text)
         return text
 
     accumulated_text = ""
@@ -351,8 +349,8 @@ def _invoke_prompt_with_chat_model(
         # 流式模型返回 AIMessageChunk；非流式边界情况返回完整 AIMessage，
         # 两者都要提取 content，否则非流式时 accumulated_text 永远为空。
         if isinstance(chunk, (AIMessageChunk, AIMessage)):
-            token = chunk.content
-            if isinstance(token, str) and token:
+            token = _coerce_content_text(chunk.content)
+            if token:
                 accumulated_text += token
                 on_token(token)
     return accumulated_text

@@ -9,6 +9,7 @@ from app.agents.main.technical_plan_contract_batch_validation import SchemaPlanR
 from app.agents.main.technical_plan_contract_budget import contract_part_prefix
 from app.agents.main.technical_plan_fragment_output import PlanningOutputTruncated, parse_batch_json
 from app.services.run_workers import run_worker
+from app.services.technical_planning_output import emit_technical_planning_activity
 from app.utils.model_output import extract_json_root_object_with_repair
 
 
@@ -48,6 +49,10 @@ def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str]
         return deepcopy(cache[key])
     feedback = ""
     for attempt in range(1, FRAGMENT_ATTEMPTS + 1):
+        activity_id = emit_technical_planning_activity(
+            f"正在生成技术规划片段（第 {attempt}/{FRAGMENT_ATTEMPTS} 次尝试）",
+            retry=attempt > 1,
+        )
         # 保留阶段首行和原只读上下文位置，仅在本片段提示中插入最新反馈。
         first, separator, rest = prompt.partition("\n")
         current_prompt = first + separator + (feedback + "\n" if feedback else "") + rest
@@ -74,6 +79,7 @@ def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str]
             raise
         except (TypeError, ValueError) as exc:
             logger.warning("technical_plan_fragment_retry: fragment=%s attempt=%s/%s error=%s", key, attempt, FRAGMENT_ATTEMPTS, exc)
+            emit_technical_planning_activity("当前规划片段未通过校验", call_id=activity_id, status="failed")
             if attempt == FRAGMENT_ATTEMPTS:
                 raise PlanningFragmentFailed(key, attempt, str(exc)) from exc
             # 每轮只追加最新诊断；基础提示和原始要求不变，其他片段不接收这份反馈。
@@ -86,4 +92,5 @@ def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str]
             except (TypeError, ValueError) as exc:
                 raise PlanningFragmentFailed(key, attempt, f"片段保存失败：{exc}") from exc
         cache[key] = validated
+        emit_technical_planning_activity("技术规划片段已生成并通过校验", call_id=activity_id, status="completed")
         return deepcopy(validated)

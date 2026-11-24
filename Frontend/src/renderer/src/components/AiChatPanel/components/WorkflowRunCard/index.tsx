@@ -83,6 +83,7 @@ import {
 } from '../../stageOutputState'
 import UiDesignConfirmationPanel from '../../../Welcome/UiDesignConfirmationPanel'
 import { PlanConfirmationCard } from './PlanConfirmationCard'
+import TechnicalPlanningOutput from '../MessageList/TechnicalPlanningOutput'
 import ApplicationConfigPrerequisiteCard from './ApplicationConfigPrerequisiteCard'
 import './WorkflowRunCard.less'
 
@@ -879,6 +880,10 @@ export default function WorkflowRunCard({
           )}
         </div>
       )}
+      {status !== 'running' && workflow.technicalPlanningOutput?.entries.length ? (
+        <TechnicalPlanningOutput key={workflow.runId} runId={workflow.runId}
+          output={workflow.technicalPlanningOutput} running={false} />
+      ) : null}
     </div>
   )
 }

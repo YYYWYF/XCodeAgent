@@ -17,6 +17,7 @@ from app.services.technical_plan_changeset import (
 )
 from app.services.authorization_manifest import compile_authorization_manifest
 from app.services.technical_plan_merger import preserve_deletion_records
+from app.services.technical_planning_output import emit_technical_planning_activity
 
 
 def _changeset_prompt(requirement_spec: dict, document: dict, request: str, feedback: list[str]) -> str:
@@ -101,15 +102,26 @@ def generate_technical_plan_revision(state: dict, requirement_spec: dict, existi
     document = revision_document(existing_plan)
     feedback = []
     for _attempt in range(3):
+        activity_id = emit_technical_planning_activity(
+            f"正在规划技术修改（第 {_attempt + 1}/3 次尝试）", retry=_attempt > 0,
+        )
         try:
             changeset = plan_technical_plan_changeset(requirement_spec, document, request, feedback=feedback)
+            emit_technical_planning_activity("技术修改操作已生成", call_id=activity_id, status="completed")
+            activity_id = emit_technical_planning_activity("正在应用并校验技术修改")
             patched, effects = apply_technical_plan_changeset(document, changeset, request=request)
             candidate = _materialize_revision(state, requirement_spec, existing_plan, patched)
             verify_revision_effects(revision_document(candidate), effects)
             # schemaVersion 和基本结构之外的约束统一检查最终文档，中间步骤可以暂时不闭合。
             feedback = _project_plan_validation_errors(candidate, state)
             if not feedback:
+                emit_technical_planning_activity("技术修改已应用并通过校验，正在准备待确认版本", call_id=activity_id, status="completed")
                 return candidate, []
         except (TypeError, ValueError) as exc:
             feedback = [str(exc)]
+        except Exception:
+            # 外部模型失败仍沿原异常恢复链传播，展示记录不能改变原重试资格。
+            emit_technical_planning_activity("技术修改未完成", call_id=activity_id, status="failed")
+            raise
+        emit_technical_planning_activity("本轮技术修改未通过校验", call_id=activity_id, status="failed")
     return None, feedback

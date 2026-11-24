@@ -250,6 +250,7 @@
   background: color-mix(in srgb, var(--wb-canvas) 88%, var(--wb-accent-soft));
   border: 1px solid var(--wb-accent-border);
   border-radius: 8px;
+  &.@{class-prefix}-has-output { flex-wrap: wrap; }
 
   &.@{class-prefix}-completed {
     border-color: var(--wb-border-strong);
@@ -279,6 +280,7 @@
 
 .@{class-prefix}-planning-workflow-activity-copy {
   display: flex;
+  flex: 1;
   min-width: 0;
   flex-direction: column;
   gap: 3px;

@@ -15,6 +15,7 @@ from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
 
 from app.agents.execution_control import RunCancellationMiddleware
+from app.agents.messages import _coerce_content_text
 from app.agents.main.technical_plan_feedback import technical_plan_feedback_prompt
 from app.agents.main.technical_plan_file_tools import TechnicalPlanFileMiddleware
 from app.agents.main.technical_plan_generation_prompts import (
@@ -182,7 +183,9 @@ class _PlanningTokenCallback(BaseCallbackHandler):
         """仅转发模型正文，工具参数仍保留在内部工具循环。"""
 
         if isinstance(token, str) and token:
-            self.on_token(token)
+            text = _coerce_content_text(token)
+            if text:
+                self.on_token(text)
 
 
 def _candidate_files(requirement_spec: dict[str, Any], existing_plan: dict[str, Any]) -> dict:
