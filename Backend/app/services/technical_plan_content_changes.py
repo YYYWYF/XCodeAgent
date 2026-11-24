@@ -11,9 +11,15 @@ import re
 from typing import Any
 
 
+_ENDPOINT_PATH_VALUE = r"/[A-Za-z0-9_\-/{}.:]+"
 _DIRECT_ENDPOINT_PATTERN = re.compile(
     r"(?:(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+[`\"“']?)?"
-    r"(/[A-Za-z0-9_\-/{}.:]+)", re.IGNORECASE,
+    rf"({_ENDPOINT_PATH_VALUE})", re.IGNORECASE,
+)
+_PATH_REASSIGNMENT_PATTERN = re.compile(
+    r"(?:url|路径|地址)\s*(?:改成|改为|修改为|换成|调整为|设置为|设为)\s*"
+    rf"(?P<path>{_ENDPOINT_PATH_VALUE})",
+    re.IGNORECASE,
 )
 
 
@@ -33,9 +39,21 @@ def direct_endpoint_revision_targets(
     # 编号和句号只分隔修改项；分页、响应字段中的“删除”不能被当成删除接口。
     clauses = re.split(r"[。；;\n]+|(?:^|\s)\d+[、)]", request)
     for clause in clauses:
+        reassignments = list(_PATH_REASSIGNMENT_PATTERN.finditer(clause))
+        if len(reassignments) > 1:
+            errors.append("每条接口修改只能指定一个新路径，请将多个修改拆分为独立条目。")
+            continue
+        # path 只定位当前接口；new_path 是用户要求的目标值，不能拿去查询旧规划。
+        new_path = (
+            reassignments[0].group("path").rstrip("/.") if reassignments else ""
+        )
+        replacement_starts = {match.start("path") for match in reassignments}
         previous_end = 0
         path_matched = False
         for match in _DIRECT_ENDPOINT_PATTERN.finditer(clause):
+            if match.start(2) in replacement_starts:
+                previous_end = match.end()
+                continue
             path_matched = True
             method = str(match.group(1) or "").upper()
             path = match.group(2).rstrip("/.")
@@ -67,6 +85,7 @@ def direct_endpoint_revision_targets(
                 "method": str(endpoint.get("method") or "").upper(),
                 "path": path,
                 "deleted": deleted,
+                **({"new_path": new_path} if new_path else {}),
             }
             if not endpoint_id or not target["contract_id"]:
                 errors.append(f"点名接口缺少稳定标识：{label}。")
@@ -83,6 +102,8 @@ def direct_endpoint_revision_targets(
             if name and f"{name}接口" in clause:
                 named.append((name, contract, endpoint))
         if not named:
+            if new_path:
+                errors.append(f"URL 修改未定位到现有接口：{new_path}。请写明当前接口名称或旧路径。")
             continue
         if len(named) != 1:
             names = "、".join(sorted({name for name, _, _ in named}))
@@ -107,6 +128,7 @@ def direct_endpoint_revision_targets(
             "method": str(endpoint.get("method") or "").upper(),
             "path": str(endpoint.get("path") or "").strip().rstrip("/"),
             "deleted": deleted,
+            **({"new_path": new_path} if new_path else {}),
         }
         if not endpoint_id or not target["contract_id"]:
             errors.append(f"点名接口缺少稳定标识：{reference}。")

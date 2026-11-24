@@ -407,6 +407,64 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("modified", str(doc))
             self.assertIn("deleted", str(doc))
 
+    async def test_url_revision_by_name_updates_draft_and_document_marker(self) -> None:
+        """仅写接口名称和 URL 新值时，真实 Graph 采纳新路径并展示修改标识。"""
+
+        harness = self.harness
+        from app.workspace.plan_documents import technical_plan_draft_json_path
+        with patch("app.config.Settings.from_env", side_effect=harness.current_settings):
+            await harness.initialize_graph()
+            with patch(
+                "app.graph.nodes.planning._generate_valid_technical_plan",
+                return_value=(deepcopy(harness.candidate), [], None),
+            ):
+                await harness.run_initial()
+            config = {"configurable": {"thread_id": harness.thread_id}}
+            before = await harness.graph.aget_state(config)
+            baseline = drop_generated_fields(before.values["technical_plan"])
+            contract = baseline["api_contracts"][0]
+            endpoint = contract["endpoints"][0]
+            old_path = endpoint["path"]
+            new_path = old_path.rstrip("/") + "/list"
+            request = f"{endpoint['name']}接口url改成{new_path}"
+            candidate = deepcopy(baseline)
+            candidate["api_contracts"][0]["endpoints"][0]["path"] = new_path
+            pending = before.tasks[0].interrupts[0].value
+
+            with patch(
+                "app.graph.nodes.planning._generate_valid_technical_plan",
+                return_value=(candidate, [], None),
+            ) as model:
+                frames = [frame async for frame in build_workflow_ag_ui_stream(
+                    graph=harness.graph,
+                    payload={
+                        "threadId": harness.thread_id, "runId": "technical-plan-url-revision",
+                        "message": request,
+                        "forwardedProps": {
+                            "workspaceRoot": str(harness.workspace), "workflowScope": "application_planning",
+                            "applicationPlanningInteraction": {
+                                "gateId": pending["gateId"], "artifact": pending["artifact"],
+                                "artifactRevision": pending["artifactRevision"], "action": "revise", "request": request,
+                            },
+                        },
+                    },
+                )]
+
+            self.assertTrue(frames)
+            model.assert_called_once()
+            requirement = model.call_args.args[1]
+            scope = requirement["technical_plan_revision_scope"]["endpoints"][0]
+            self.assertEqual(scope["path"], old_path)
+            self.assertEqual(scope["new_path"], new_path)
+            after = await harness.graph.aget_state(config)
+            self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_confirmation")
+            revised = after.values["technical_plan"]["api_contracts"][0]["endpoints"][0]
+            self.assertEqual(revised["path"], new_path)
+            self.assertEqual(revised["_change_status"], "modified")
+            draft = technical_plan_draft_json_path({"workspace": str(harness.workspace)})
+            persisted = json.loads(draft.read_text())
+            self.assertEqual(persisted["api_contracts"][0]["endpoints"][0]["path"], new_path)
+
     async def test_unmatched_revision_preserves_draft_and_emits_error_review(self) -> None:
         """待确认卡的错误路径经真实 AG-UI 挂错误门，零模型调用且不覆盖当前草稿。"""
 

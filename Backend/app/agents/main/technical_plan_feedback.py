@@ -13,7 +13,8 @@ def technical_plan_feedback_prompt(requirement_spec: dict[str, Any]) -> str:
     scope_prompt = (
         "平台已精确匹配本次接口修改范围：\n"
         + json.dumps(scope, ensure_ascii=False)
-        + "\n只修改上述接口，保持方法、路径和稳定标识；未点名接口、实体和页面继承基线。"
+        + "\n只修改上述接口，保持 HTTP 方法和稳定标识；path 是当前路径，"
+        "若提供 new_path 则必须改为该路径，否则保持原路径；未点名接口、实体和页面继承基线。"
         "必要请求/响应类型可局部修改；共享类型被非目标接口引用时，为目标接口拆分独立类型，"
         "不能连带改写其他接口。明确点名的类型按该类型处理。生成后仍需完整校验和用户确认。\n"
         if isinstance(scope, dict) else ""

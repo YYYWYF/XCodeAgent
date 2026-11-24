@@ -344,9 +344,17 @@ def merge_direct_endpoint_revision(
             changed = endpoints.get(endpoint_id)
             if changed is None or changed.get(CHANGE_STATUS_FIELD) == "deleted":
                 raise ValueError(f"点名接口未完成修改：{target['method']} {target['path']}。模型省略接口不构成删除授权。")
-            if (str(changed.get("method") or "").upper() != target["method"]
-                    or str(changed.get("path") or "").strip().rstrip("/") != target["path"]):
-                raise ValueError(f"点名接口身份被改写：{target['method']} {target['path']}。本次未授权修改方法或路径。")
+            if str(changed.get("method") or "").upper() != target["method"]:
+                raise ValueError(f"点名接口身份被改写：{target['method']} {target['path']}。本次未授权修改 HTTP 方法。")
+            expected_path = str(target.get("new_path") or target["path"])
+            actual_path = str(changed.get("path") or "").strip().rstrip("/")
+            if actual_path != expected_path:
+                if target.get("new_path"):
+                    raise ValueError(
+                        f"点名接口未按要求修改路径：{target['method']} {target['path']} "
+                        f"应改为 {expected_path}，候选实际为 {actual_path or '空路径'}。"
+                    )
+                raise ValueError(f"点名接口身份被改写：{target['method']} {target['path']}。本次未授权修改路径。")
             needed = _schema_dependency_names(new_schemas, _referenced_schema_names([changed]))
             for name in needed:
                 if name not in new_schemas:

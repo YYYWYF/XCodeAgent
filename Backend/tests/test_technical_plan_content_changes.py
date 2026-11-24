@@ -224,6 +224,33 @@ class DirectEndpointRevisionTests(unittest.TestCase):
                 self.assertEqual(_endpoint(merged)["_change_status"], "modified")
                 self.assertEqual(_endpoint(merged, _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
 
+    def test_url_reassignment_separates_existing_selector_from_new_path(self) -> None:
+        """接口名称或旧路径定位目标，URL 新值仅作为授权结果，不查询旧规划。"""
+
+        base = _base_plan()
+        _endpoint(base).update({"name": "分页查询人员明细", "path": "/personnel"})
+        for request in (
+            "分页查询人员明细接口url改成/personnel/list",
+            "/personnel 接口url改成/personnel/list",
+        ):
+            with self.subTest(request=request):
+                targets = self._targets(request, base)
+                target = targets[_ENDPOINT_ID]
+                self.assertEqual(target["path"], "/personnel")
+                self.assertEqual(target["new_path"], "/personnel/list")
+
+                candidate = json.loads(json.dumps(base))
+                _endpoint(candidate)["path"] = "/personnel/list"
+                merged = merge_direct_endpoint_revision(base, candidate, targets)
+                self.assertEqual(_endpoint(merged)["path"], "/personnel/list")
+                self.assertEqual(_endpoint(merged)["id"], _ENDPOINT_ID)
+                self.assertEqual(_endpoint(merged)["_change_status"], "modified")
+                self.assertEqual(_endpoint(merged, _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
+
+                # 模型未落实明确的新路径时必须报错，不能返回未变更的成功候选。
+                with self.assertRaisesRegex(ValueError, "未按要求修改路径"):
+                    merge_direct_endpoint_revision(base, base, targets)
+
     def test_duplicate_endpoint_name_requires_an_unambiguous_path(self) -> None:
         """相同接口名称不能猜测目标，必须报告歧义并由用户补充路径。"""
 
@@ -284,12 +311,15 @@ class DirectEndpointRevisionTests(unittest.TestCase):
         prompt = technical_plan_feedback_prompt({
             "planning_adjustment_request": "本次只改提交状态",
             "technical_plan_validation_feedback": "当前类型引用未闭合",
-            "technical_plan_revision_scope": {"endpoints": [{"method": "POST", "path": "/api/greetings"}]},
+            "technical_plan_revision_scope": {"endpoints": [{
+                "method": "POST", "path": "/api/greetings", "new_path": "/api/greetings/list",
+            }]},
         })
         self.assertIn("本次只改提交状态", prompt)
         self.assertIn("当前类型引用未闭合", prompt)
         self.assertIn("拆分独立类型", prompt)
         self.assertIn("/api/greetings", prompt)
+        self.assertIn("new_path", prompt)
 
     def test_schema_response_change_is_adopted_without_other_rewrites(self) -> None:
         """修改独占响应类型时接口标修改，无关类型、页面、外壳及新增接口不采纳。"""
