@@ -26,9 +26,11 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
 
             result = apply_authorization_constants_projection(workspace, projection)
             content = target.read_text(encoding="utf-8")
-            apply_authorization_constants_projection(workspace, projection)
+            repeated = apply_authorization_constants_projection(workspace, projection)
 
             self.assertTrue(result["applied"])
+            self.assertTrue(result["changed"])
+            self.assertFalse(repeated["changed"])
             self.assertIn('public static final String ORDERS_APPROVE_RESOURCE = "orders_approve";', content)
             self.assertIn('public static final String ORDERS_RECHECK_RESOURCE = "orders_recheck";', content)
             self.assertIn("template-owned prefix", content)
@@ -55,7 +57,8 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
             target = self._write_auth_template_contract(workspace)
             state = workspace / ".devagentstudio/template-state.json"
             state.write_text(
-                '{"schemaVersion":2,"templateRevision":"r1","requested":{},"effective":{},"appliedAdditions":{}}',
+                '{"schemaVersion":3,"templateRevision":"2026.10.16.1","requested":{},"effective":{},'
+                '"installedArtifacts":{},"managedContributions":{}}',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(AuthorizationConstantsProjectionError, "effective"):
@@ -71,8 +74,10 @@ class AuthorizationConstantsProjectionTests(unittest.TestCase):
         state = workspace / ".devagentstudio/template-state.json"
         state.parent.mkdir(parents=True)
         state.write_text(
-            '{"schemaVersion":2,"templateRevision":"r1","requested":{"authorization":{"enabled":true,"config":{}}},'
-            '"effective":{"authorization":{"enabled":true,"config":{}}},"appliedAdditions":{}}',
+            '{"schemaVersion":3,"templateRevision":"2026.10.16.1",'
+            '"requested":{"authorization":{"enabled":true,"config":{}}},'
+            '"effective":{"authorization":{"enabled":true,"config":{}}},'
+            '"installedArtifacts":{},"managedContributions":{}}',
             encoding="utf-8",
         )
         target = workspace / (

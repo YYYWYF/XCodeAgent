@@ -5,9 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services.application_config import read_application_config
-from app.services.authorization_constants_projection import (
-    apply_authorization_constants_projection, verify_authorization_constants_projection,
-)
+from app.services.authorization_constants_projection import apply_authorization_constants_projection
 from app.services.backend_auth_resource_candidate import is_backend_auth_resource_task
 from app.services.backend_authorization_resources import (
     BACKEND_AUTH_EXECUTOR, BACKEND_AUTH_PATH, backend_resources_applied,
@@ -18,7 +16,7 @@ from app.services.backend_authorization_resources import (
 def execute_authorization_backend_resources(
     task: Mapping[str, Any], context: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """核对当前正式资源与任务清单，写入并校验常量后才保存完成记录。"""
+    """核对当前正式资源与任务清单，写入常量后保存完成记录。"""
 
     base = {
         "task_id": task.get("id"), "owner": "backend", "execution_strategy": "deterministic",
@@ -51,15 +49,12 @@ def execute_authorization_backend_resources(
                     "agent_note": "当前后端权限资源常量清单已成功应用，无需重复执行。",
                     "satisfaction_evidence": {"constants": constants, "record_status": "completed"}}
         failure_category = "backend_authorization_resource_write_failed"
-        before = target.read_bytes()
-        apply_authorization_constants_projection(workspace, constants)
-        if target.read_bytes() != before:
+        projection = apply_authorization_constants_projection(workspace, constants)
+        if projection["changed"]:
             changed = [BACKEND_AUTH_PATH]
-        if verify_authorization_constants_projection(workspace, constants).get("verified") is not True:
-            raise ValueError("后端权限常量写后校验未通过。")
         record_backend_resources(workspace, constants)
         return {**base, "status": "completed", "changed_files": changed,
-                "agent_note": "已生成并校验全部接口的权限资源常量，保存最近成功清单。"}
+                "agent_note": "已生成全部接口的权限资源常量，保存最近成功清单。"}
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {**base, "status": "failed", "changed_files": changed,
                 "failure_category": failure_category, "failure_reason": str(exc),

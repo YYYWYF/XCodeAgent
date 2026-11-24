@@ -7,13 +7,8 @@ from typing import Any
 
 from app.services.engineering_acceptance import ensure_engineering_acceptance
 from app.services.business_acceptance_verifiers.common import strip_comments
-from app.services.business_acceptance_verifiers.java_inspection_support import (
-    _find_controller_method,
-    _inspect_or_block,
-    _type_has_suffix,
-)
 
-_AUTHORIZATION_CHECK_KINDS = {"frontend_authorization", "backend_authorization"}
+_AUTHORIZATION_CHECK_KINDS = {"frontend_authorization"}
 
 
 def unauthorized_batch_paths(
@@ -70,8 +65,6 @@ def verify_engineering_acceptance(
         rule_results = []
         if kind == "frontend_authorization":
             error, detail, mismatch = _verify_frontend_authorization(check, root=root)
-        elif kind == "backend_authorization":
-            error, detail, mismatch = _verify_backend_authorization(check, root=root)
         elif kind == "frontend_api_boundary":
             error, detail, rule_results = _verify_frontend_api_boundary(
                 check, root=root, task=task, build_task_plan=frontend_build_task_plan,
@@ -502,57 +495,6 @@ def _verify_frontend_api_boundary(
     if any(item["status"] == "not_evaluable" for item in rules):
         return None, "部分前端请求规则需要人工确认。", rules
     return None, "任务文件中的可验证前端请求规则通过。", rules
-
-
-def _verify_backend_authorization(
-    check: dict[str, Any],
-    *,
-    root: Path | None,
-) -> tuple[str | None, str, bool]:
-    """验证 Controller 权限注解，第三项标明是否发现实际接入不一致。"""
-
-    expected = _dict_value(check.get("expected"))
-    identity = _dict_value(expected.get("endpointIdentity"))
-    method = str(identity.get("httpMethod") or "").upper()
-    path = str(identity.get("path") or "")
-    resource_keys = _string_list(expected.get("operationResourceKeys"))
-    constants = [
-        str(item.get("name") or "").strip()
-        for item in _dict_items(expected.get("authConstants"))
-        if str(item.get("name") or "").strip()
-    ]
-    sources: dict[str, str] = {}
-    for target_path in _string_list(check.get("target_paths")):
-        source, error = _read_workspace_file(root, _normalize_path(target_path))
-        if error:
-            return error, error, False
-        sources[_normalize_path(target_path)] = source or ""
-    model = _inspect_or_block(sources)
-    if isinstance(model, dict):
-        return str(model.get("reason") or "Controller 权限验收无法安全解析源码。"), "Java AST 无法解析 Controller 源码。", False
-    controllers = [item for item in model.types if _type_has_suffix(item, "Controller", "Resource", "Endpoint", "Handler")]
-    matched = _find_controller_method(controllers, method, path)
-    if matched is None:
-        return f"无法唯一定位 Controller Endpoint：{method} {path}。", "未发现与平台 Endpoint 身份匹配的 Controller Method。", False
-    _controller, handler = matched
-    annotations = [item for item in handler.annotations if item.name == "RequireAnyResource"]
-    if not resource_keys:
-        if annotations:
-            return f"未受控 Endpoint {method} {path} 不得新增 RequireAnyResource。", "空资源集合存在权限注解。", True
-        return None, f"未受控 Endpoint {method} {path} 未发现 RequireAnyResource。", False
-    if len(annotations) != 1:
-        return f"受控 Endpoint {method} {path} 必须恰好存在一个 RequireAnyResource，实际为 {len(annotations)} 个。", "权限注解数量不符合唯一性约束。", True
-    annotation_text = annotations[0].text
-    actual_constants = set(re.findall(r"(?:AuthConstants\s*\.\s*)?([A-Z][A-Z0-9_]*_RESOURCE)\b", annotation_text))
-    if actual_constants != set(constants):
-        return (
-            f"Endpoint {method} {path} 的 RequireAnyResource 常量集合不匹配：期望 {', '.join(constants)}，实际 {', '.join(sorted(actual_constants)) or '<empty>'}。",
-            "权限常量集合未精确匹配平台 Contract。",
-            True,
-        )
-    if any("@RequireAnyResource" in text for source_path, text in sources.items() if source_path != _controller.source_path):
-        return "Controller 之外的任务目标文件出现 RequireAnyResource。", "资源权限判断越过 Controller 边界。", True
-    return None, f"已验证 {method} {path} 的唯一 RequireAnyResource，包含 {len(resource_keys)} 个 ANY-OF 常量。", False
 
 
 def _permission_block_matches(attributes: str, action: dict[str, Any]) -> bool:

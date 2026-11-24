@@ -7,7 +7,10 @@ from app.services.build_scheduler import resolve_execution_slice
 from app.services.build_task_planner import (
     compile_build_task_plan_scope, create_build_task_plan, tasks_from_build_task_plan,
 )
+from app.services.build_unit_compiler import apply_unit_compilation
 from app.services.build_unit_skeleton import ensure_build_unit_skeleton
+from app.services.business_acceptance import compile_business_acceptance
+from app.services.engineering_acceptance import compile_engineering_acceptance
 from tests.dag_planning_baseline_fixtures import (
     build_context, candidate_tasks, compiled_plan, confirmed_baseline,
     execution_scope, project_plan, task, workspace_snapshot,
@@ -182,25 +185,34 @@ class DagPlanningBaselineTests(unittest.TestCase):
         self.assertNotEqual(original[0]["id"], changed[0]["id"])
         self.assertEqual(changed[0]["expected"]["endpoints"][0]["path"], "/changed-orders")
 
-    def test_authorization_compile_keeps_platform_slices_and_exact_any_of(self) -> None:
-        """权限切片进入页面与 Controller 验收，候选不能覆盖平台权限事实。"""
+    def test_authorization_compile_keeps_controller_generation_contract(self) -> None:
+        """权限切片继续指导 Controller 实现，候选不能覆盖平台权限事实。"""
 
         plan = project_plan(authorization=True)
         context = build_context(plan, execution_scope())
         candidates = candidate_tasks(context)
+        candidates.append(task(
+            "orders:controller", "backend:module:orders-api", "backend.endpoint_controller",
+            "backend/src/main/java/example/OrdersController.java", "orders.list",
+        ))
         for candidate in candidates:
             candidate["source_refs"] = {"authorization": {"actions": [{"resourceKey": "forged"}]}}
-        result = create_build_task_plan(plan, agent_plan={"tasks": candidates}, build_context=context,
-            base_build_task_plan=ensure_build_unit_skeleton(plan, workspace_snapshot()))
-        self.assertTrue(result["task_graph"]["validation"]["is_valid"])
-        registry = result["task_registry"]
+        skeleton = ensure_build_unit_skeleton(plan, workspace_snapshot())
+        tasks_with_units = apply_unit_compilation(skeleton, candidates, context)
+        engineering = compile_engineering_acceptance(tasks_with_units, context)
+        registry = {item["id"]: item for item in compile_business_acceptance(engineering, context)}
         page = next(c["expected"] for c in registry["orders:page"]["acceptance_checks"] if c["kind"] == "frontend_authorization")
         self.assertEqual([a["resourceKey"] for a in page["controlledActions"]], ["orders_list"])
-        backend = next(c["expected"] for c in registry["orders:controller"]["acceptance_checks"] if c["kind"] == "backend_authorization")
+        controller = registry["orders:controller"]
+        self.assertNotIn("backend_authorization", [c["kind"] for c in controller["acceptance_checks"]])
+        self.assertEqual([c["kind"] for c in controller["business_acceptance_checks"]], ["backend.endpoint_contract"])
+        backend = controller["source_refs"]["authorization"]["endpoints"][0]
         self.assertEqual(backend["semantics"], "ANY_OF")
         self.assertEqual(backend["operationResourceKeys"], ["orders_list"])
-        self.assertEqual(backend["authConstants"], [{"name": "ORDERS_LIST_RESOURCE", "resourceKey": "orders_list"}])
-        self.assertEqual(backend["endpointIdentity"], {"apiContractId": "orders-api", "endpointId": "orders.list", "httpMethod": "GET", "path": "/orders"})
+        self.assertEqual(controller["source_refs"]["authorization"]["authConstants"],
+                         [{"name": "ORDERS_LIST_RESOURCE", "resourceKey": "orders_list"}])
+        identity_fields = ("apiContractId", "endpointId", "httpMethod", "path")
+        self.assertEqual(tuple(backend[key] for key in identity_fields), ("orders-api", "orders.list", "GET", "/orders"))
         self.assertNotIn("authorization", registry["orders:api"]["source_refs"])
 
     def test_preserved_confirmed_contract_is_not_recompiled_for_another_scope(self) -> None:

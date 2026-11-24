@@ -46,13 +46,13 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                 tasks=[missing], code_change_set=changes, workspace_root=folder)[0]
             self.assertEqual(result["status"], "failed", result)
 
-    def test_backend_endpoint_permission_requires_one_exact_any_of_annotation(self) -> None:
-        """后端受控 Endpoint 只能在精确 Controller Method 上使用平台常量。"""
+    def test_controller_permission_is_not_an_engineering_check(self) -> None:
+        """Controller 的任务提交不再为权限接入读取或定位 Java 方法。"""
 
         task = {
             "id": "endpoint-orders-approve",
             "owner": "backend",
-            "unit_id": "backend:endpoint:orders_api:orders.approve",
+            "unit_id": "backend:module:orders_api",
             "source_refs": {
                 "backend_stage": "controller",
                 "authorization": {
@@ -61,7 +61,7 @@ class EngineeringAcceptanceTests(unittest.TestCase):
                             "apiContractId": "orders_api",
                             "endpointId": "orders.approve",
                             "httpMethod": "POST",
-                            "path": "/orders/approve",
+                            "path": "/api/orders/approve",
                             "operationResourceKeys": ["orders_approve", "orders_recheck"],
                             "semantics": "ANY_OF",
                         }
@@ -84,51 +84,18 @@ class EngineeringAcceptanceTests(unittest.TestCase):
             ],
         }
         compiled = compile_engineering_acceptance([task])[0]
-        self.assertIn("backend_authorization", [item["kind"] for item in compiled["acceptance_checks"]])
-        with tempfile.TemporaryDirectory() as workspace:
-            root = Path(workspace)
-            controller = root / "backend/src/main/java/example/OrdersController.java"
-            controller.parent.mkdir(parents=True)
-            controller.write_text(
-                "@RestController\n@RequestMapping(\"/orders\")\nclass OrdersController {\n"
-                "  @PostMapping(\"/approve\")\n"
-                "  @RequireAnyResource({AuthConstants.ORDERS_APPROVE_RESOURCE, AuthConstants.ORDERS_RECHECK_RESOURCE})\n"
-                "  public void approve() {}\n}\n",
-                encoding="utf-8",
-            )
-            _, errors = verify_engineering_acceptance(
-                task=compiled,
-                status="completed",
-                code_change_set={"files": [{"path": controller.relative_to(root).as_posix(), "changeType": "added"}]},
-                workspace_root=workspace,
-            )
-            controller.write_text(
-                "@RestController\n@RequestMapping(\"/orders\")\nclass OrdersController {\n"
-                "  @PostMapping(\"/approve\")\n"
-                "  @RequireAnyResource({AuthConstants.ORDERS_APPROVE_RESOURCE})\n"
-                "  public void approve() {}\n}\n",
-                encoding="utf-8",
-            )
-            _, mismatch_errors = verify_engineering_acceptance(
-                task=compiled,
-                status="completed",
-                code_change_set={"files": [{"path": controller.relative_to(root).as_posix(), "changeType": "added"}]},
-                workspace_root=workspace,
-            )
-            warning_evidence, warning_errors = verify_engineering_acceptance(
-                task=compiled,
-                status="completed",
-                code_change_set={"files": [{"path": controller.relative_to(root).as_posix(), "changeType": "added"}]},
-                workspace_root=workspace,
-                authorization_checks_as_warning=True,
-            )
-
-        self.assertFalse(errors, errors)
-        self.assertTrue(any("常量集合不匹配" in error for error in mismatch_errors), mismatch_errors)
-        self.assertFalse(warning_errors, warning_errors)
-        warning = next(item for item in warning_evidence if item["kind"] == "backend_authorization")
-        self.assertEqual(warning["status"], "warning")
-        self.assertIn("常量集合不匹配", warning["error"])
+        self.assertEqual({item["kind"] for item in compiled["acceptance_checks"]}, {"file_operation", "scope_boundary"})
+        controller_path = task["deliverables"][0]["paths"][0]
+        result = verify_task_file_changes(
+            results=[{"task_id": task["id"], "status": "completed"}],
+            tasks=[compiled],
+            code_change_set={"files": [{"path": controller_path, "changeType": "added"}]},
+            authorization_checks_as_warning=True,
+            authorization_checks_only=True,
+        )[0]
+        self.assertEqual(result["status"], "completed", result)
+        self.assertEqual(result["changed_files"], [controller_path])
+        self.assertFalse(result.get("acceptance_evidence"))
 
     def test_frontend_action_permission_uses_platform_resource_key(self) -> None:
         """页面受控操作必须唯一映射到平台切片给定的 Permission。"""

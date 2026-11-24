@@ -30,17 +30,19 @@ class AuthorizationPlatformProjectionTests(unittest.TestCase):
         self.assertEqual(first["summary"]["files"], 1)
         self.assertEqual(second["summary"]["files"], 0)
 
-    def test_edd_reports_resource_drift_without_rewrite(self) -> None:
-        """EDD 仅报告权限资源漂移，不能通过重写掩盖失败。"""
+    def test_edd_reports_frontend_resource_drift_without_checking_backend(self) -> None:
+        """收尾继续报告前端漂移，后端常量和 Controller 不再参与 EDD。"""
 
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             self._write_template(workspace)
             plan = self._plan()
             apply_platform_projections(workspace, plan)
+            self.assertEqual(verify_authorization_edd(workspace, plan), [])
             resource_file = workspace / "frontend/src/constants/resources.ts"
             resource_file.write_text("// drift", encoding="utf-8")
             errors = verify_authorization_edd(workspace, plan)
+            self.assertEqual(resource_file.read_text(encoding="utf-8"), "// drift")
 
         self.assertTrue(any("权限共享投影 EDD 失败" in error for error in errors), errors)
 

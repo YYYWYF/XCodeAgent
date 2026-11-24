@@ -115,7 +115,6 @@ def _compile_task(
         checks.extend(_page_structure_checks(task))
         checks.extend(_frontend_api_boundary_checks(task))
         checks.extend(_frontend_authorization_checks(task))
-        checks.extend(_backend_authorization_checks(task))
     compiled["acceptance_checks"] = checks
     if (
         compiled.get("status") == "already_satisfied"
@@ -341,69 +340,6 @@ def _frontend_api_boundary_checks(task: dict[str, Any]) -> list[dict[str, Any]]:
             expected={},
         )
     ]
-
-
-def _backend_authorization_checks(task: dict[str, Any]) -> list[dict[str, Any]]:
-    """为共享 Controller 任务的每个 Endpoint 编译独立的 ANY-OF 注解检查。"""
-
-    source_refs = _dict_value(task.get("source_refs"))
-    if task.get("owner") != "backend" or source_refs.get("backend_stage") != "controller":
-        return []
-    authorization = _dict_value(source_refs.get("authorization"))
-    constants = {
-        str(item.get("resourceKey") or "").strip(): str(item.get("name") or "").strip()
-        for item in _dict_items(authorization.get("authConstants"))
-    }
-    return [
-        check
-        for endpoint in _dict_items(authorization.get("endpoints"))
-        if (check := _backend_endpoint_authorization_check(task, endpoint, constants)) is not None
-    ]
-
-
-def _backend_endpoint_authorization_check(
-    task: dict[str, Any], endpoint: dict[str, Any], constants: dict[str, str],
-) -> dict[str, Any] | None:
-    """只检查当前 Endpoint 交付物中的 Controller 文件和资源常量。"""
-
-    endpoint_id = str(endpoint.get("endpointId") or "").strip()
-    http_method = str(endpoint.get("httpMethod") or "").strip().upper()
-    path = str(endpoint.get("path") or "").strip()
-    resource_keys = _string_list(endpoint.get("operationResourceKeys"))
-    if not endpoint_id or not http_method or not path.startswith("/") or endpoint.get("semantics") != "ANY_OF":
-        return None
-    if any(not constants.get(key) for key in resource_keys):
-        return None
-    paths = [
-        _normalize_path(path)
-        for deliverable in _dict_items(task.get("deliverables"))
-        if str(deliverable.get("kind") or "") == "backend.endpoint_controller"
-        and deliverable.get("target_id") == endpoint_id
-        for path in _string_list(deliverable.get("paths"))
-        if _normalize_path(path).casefold().endswith(".java")
-    ]
-    if not paths:
-        return None
-    return _check(
-        task,
-        kind="backend_authorization",
-        description="Controller 目标 Endpoint 必须且只能以一个 RequireAnyResource 使用平台给定常量实现 ANY-OF。",
-        target_paths=_dedupe(paths),
-        expected={
-            "endpointIdentity": {
-                "apiContractId": str(endpoint.get("apiContractId") or "").strip(),
-                "endpointId": endpoint_id,
-                "httpMethod": http_method,
-                "path": path,
-            },
-            "operationResourceKeys": resource_keys,
-            "semantics": "ANY_OF",
-            "authConstants": [
-                {"name": constants[key], "resourceKey": key}
-                for key in resource_keys
-            ],
-        },
-    )
 
 
 def _scope_boundary_check(task: dict[str, Any]) -> dict[str, Any]:

@@ -31,7 +31,7 @@ def apply_authorization_constants_projection(
 
     items = _projection_items(projection)
     if not items:
-        return {"applied": False, "reason": "authorization_disabled_or_no_operation_resources"}
+        return {"applied": False, "changed": False, "reason": "authorization_disabled_or_no_operation_resources"}
     workspace_path = Path(workspace).expanduser().resolve()
     if not has_capability(load_template_state(workspace_path), "authorization"):
         raise AuthorizationConstantsProjectionError("权限常量投影要求 TemplateState.effective 含 authorization。")
@@ -40,31 +40,10 @@ def apply_authorization_constants_projection(
     start, end = _managed_bounds(content)
     body_start = start + len(AUTH_CONSTANTS_START)
     updated = content[:body_start] + "\n" + _render_projection(items) + content[end:]
-    if updated != content:
+    changed = updated != content
+    if changed:
         _write_text_atomically(target, updated)
-    return {"applied": True, "path": str(target.relative_to(workspace_path)), "count": len(items)}
-
-
-def verify_authorization_constants_projection(
-    workspace: str | Path,
-    projection: Any,
-) -> dict[str, Any]:
-    """只读验证 AuthConstants 托管区与确认投影完全一致，不写入任何文件。"""
-
-    items = _projection_items(projection)
-    if not items:
-        return {"verified": False, "reason": "authorization_disabled_or_no_operation_resources"}
-    workspace_path = Path(workspace).expanduser().resolve()
-    if not has_capability(load_template_state(workspace_path), "authorization"):
-        raise AuthorizationConstantsProjectionError("权限常量投影要求 TemplateState.effective 含 authorization。")
-    target = _auth_constants_path(workspace_path)
-    content = target.read_text(encoding="utf-8")
-    start, end = _managed_bounds(content)
-    body_start = start + len(AUTH_CONSTANTS_START)
-    expected = content[:body_start] + "\n" + _render_projection(items) + content[end:]
-    if content != expected:
-        raise AuthorizationConstantsProjectionError("AuthConstants 托管区与确认投影不一致。")
-    return {"verified": True, "path": str(target.relative_to(workspace_path)), "count": len(items)}
+    return {"applied": True, "changed": changed, "path": str(target.relative_to(workspace_path)), "count": len(items)}
 
 
 def _projection_items(value: Any) -> list[dict[str, str]]:

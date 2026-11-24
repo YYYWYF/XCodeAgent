@@ -1,37 +1,25 @@
-"""读取真实生成代码，验证步骤 6 的权限投影与接入证据。"""
+"""读取生成的前端代码，验证步骤 6 的前端权限投影与接入。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from app.services.authorization_constants_projection import verify_authorization_constants_projection
 from app.services.authorization_frontend_projection import verify_authorization_frontend_projection
 
 
 def verify_authorization_edd(workspace: str | Path, build_task_plan: dict[str, Any]) -> list[str]:
-    """在 Build 完成后验证共享投影、页面 Permission 与 Controller ANY-OF 证据。"""
+    """在 Build 完成后只读验证前端共享投影和业务源码。"""
 
     frontend_projection = build_task_plan.get("authorization_frontend_projection")
-    constants_projection = build_task_plan.get("authorization_constants_projection")
-    if frontend_projection is None and constants_projection is None:
-        # Route Projector 的模板正确性由模板仓库验证；无权限时没有剩余 EDD 目标。
+    if frontend_projection is None:
         return []
     errors: list[str] = []
-    # EDD 必须是纯只读阶段：只核对权限资源和业务源码，不得重放任何投影。
     try:
         verify_authorization_frontend_projection(workspace, frontend_projection)
-        verify_authorization_constants_projection(workspace, constants_projection)
     except (ValueError, OSError) as exc:
         return [f"权限共享投影 EDD 失败：{exc}"]
     root = Path(workspace).expanduser().resolve()
-    backend_sources = _source_texts(root / "backend" / "src", {".java"})
-    for item in constants_projection if isinstance(constants_projection, list) else []:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or "")
-        if name and not any("@RequireAnyResource" in text and name in text for text in backend_sources):
-            errors.append(f"操作资源常量 {name} 缺少真实 Controller RequireAnyResource 证据。")
     for path, text in _source_items(root / "frontend" / "src", {".ts", ".tsx"}):
         if "/pages/" in path.as_posix() and ("fetch(" in text or "axios." in text or "service." in text):
             errors.append(f"页面源码存在禁止的直接 HTTP 调用：{path.relative_to(root)}。")
@@ -67,9 +55,3 @@ def _source_items(root: Path, suffixes: set[str]) -> list[tuple[Path, str]]:
             except OSError:
                 continue
     return result
-
-
-def _source_texts(root: Path, suffixes: set[str]) -> list[str]:
-    """返回 EDD 所需的源码文本列表。"""
-
-    return [text for _path, text in _source_items(root, suffixes)]
