@@ -20,6 +20,8 @@ type Props = {
       场景有值；为空时按"全部是本轮新增"展示。pages 子 tab 用它做
       "本次变更 vs 未变更内容"分区显示。 */
   specDiff?: JsonRecord
+  /** 上一轮需求草稿，供页面风格按各维度实际内容比较。 */
+  specBaseline?: JsonRecord
   workspaceRoot?: string
 }
 
@@ -38,6 +40,7 @@ export default function RequirementDocPanel({
   productPlan,
   spec,
   specDiff,
+  specBaseline,
   workspaceRoot
 }: Props): ReactElement {
   const [activeSection, setActiveSection] = useState<RequirementSectionKey>('overview')
@@ -79,6 +82,7 @@ export default function RequirementDocPanel({
           productPlan={productPlan}
           sectionKey="page-design-overview"
           spec={spec}
+          specBaseline={specBaseline}
           specDiff={specDiff}
         />
       ) : null}

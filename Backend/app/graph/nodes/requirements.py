@@ -995,8 +995,16 @@ def _request_for_requirement_node(
             generated_resume_envelope = (
                 "原始需求：" in resume_request and "用户补充确认：" in resume_request
             )
+            # 联合修订的冻结请求才是本次迭代事实源；旧 spec.source_request 只描述应用最初创建需求。
+            changeset_context = state.get("requirement_changeset_context") or {}
+            original_request = str(
+                changeset_context.get("request")
+                or spec.get("source_request")
+                or state.get("request")
+                or ""
+            )
             return requirement_clarification_request(
-                str(spec.get("source_request") or state.get("request") or ""),
+                original_request,
                 state.get("clarification") or {},
                 interaction.get("answers") or {},
                 "" if generated_resume_envelope else resume_request,

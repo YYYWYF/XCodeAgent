@@ -82,8 +82,8 @@ def _technical_plan_transaction_baseline(state: ProjectState, workspace: str) ->
     """取 TechnicalPlan **事务恢复基线**：优先 state 中的上一版，缺失时回退读磁盘。
 
     这份基线用于 boundary 摘要、续跑和冷进入判定，回答“本次生成从哪一版继续修改”。
-    它不等于审阅差异用的迭代初始基线：二次修订时上一版已经包含本迭代新增内容，
-    如果也拿它做变更对比，会把较早新增的对象错误显示为未变更。
+    冷进入的首次审阅使用迭代 carryover；续用当前草稿时，本基线同时作为该轮审阅差异基线，
+    让上一轮新增内容在本轮显示未变更。开发全量变更仍由 change snapshot 独立对比 carryover。
 
     **不能直接返回 `state["technical_plan"]`**：换分支派生新迭代时，checkpoint 里可能
     残留更早一轮的旧技术规划，它描述的是别的分支的现状，拿来当基线会把整份计划标错。
@@ -119,12 +119,11 @@ def _technical_plan_review_baseline(
     *,
     transaction_baseline: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """取本轮变更审阅的**迭代初始基线**，与 RequirementSpec 保持同口径。
+    """取冷进入后首次审阅的迭代初始基线。
 
-    `technical-plan-carryover.json` 在新迭代开始时冻结，之后本轮多次设计修订、
-    技术修订和开发续接都不会推进它。因此第一次新增的页面与第二次新增的页面，
-    相对同一个上迭代基线都会标 added，而不会出现第二次修订把第一次新增洗成
-    unchanged 的不一致。没有交接记录时回退到事务基线，保持首轮创建行为。
+    `technical-plan-carryover.json` 只供新迭代第一次生成比较；续用当前草稿的后续修订，
+    由 begin/generate 改用事务基线，确保每次修改都与上一轮已展示内容比较。
+    没有交接记录时回退到事务基线，保持首轮创建行为。
     """
 
     carried = read_technical_plan_carryover(workspace)
@@ -232,8 +231,7 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
         raise ValueError("TechnicalPlan revise 必须提供明确的修改要求。")
     validate_application_planning_baseline(boundary, state.get("technical_plan"))
 
-    # 事务基线与审阅基线分开：前者跟随上一版计划用于恢复，后者在本迭代开始时冻结，
-    # 保证多次修订的变更标记始终相对同一个上迭代版本计算。
+    # 冷进入先取迭代 carryover；续用当前草稿时，下方把审阅基线推进到本轮修改前的上一版。
     transaction_baseline = _technical_plan_transaction_baseline(state, workspace)
     technical_plan_baseline = _technical_plan_review_baseline(
         state, workspace, transaction_baseline=transaction_baseline,
@@ -257,6 +255,9 @@ async def technical_planning_begin(state: ProjectState) -> dict[str, Any]:
         )
         else ""
     )
+    if technical_plan_baseline_origin == "resumed":
+        # 每次修订只展示相对上一版草稿的变化；整轮开发范围仍由 change snapshot 独立对比 carryover。
+        technical_plan_baseline = transaction_baseline
 
     change_id = str(state.get("change_id") or "").strip()
     repair_source = str(state.get("technical_plan_repair_source_run_id") or "")
@@ -371,16 +372,35 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         and state.get("technical_plan")
         else None
     )
-    # 首轮和上游重生成保留生成入口；直接修订只能来自当前草稿上的 ChangeSet。
+    # 首轮无基线才整份生成；待确认卡修订与携带上一版基线的新迭代都走原子 ChangeSet。
     workspace = workspace_from_state(state)
-    baseline = _technical_plan_review_baseline(state, workspace) or None
+    # 后续修订与上一版草稿比较；仅新迭代第一次生成使用冻结的 carryover。
+    baseline = (
+        drop_generated_fields(deepcopy(existing_plan))
+        if existing_plan is not None
+        else (_technical_plan_review_baseline(state, workspace) or None)
+    )
     generation_fragments = {}
-    direct_revision = existing_plan is not None and boundary.operation in {
-        ApplicationPlanningOperation.REVISE, ApplicationPlanningOperation.REPAIR,
-    }
+    revision_base = existing_plan or baseline
+    new_iteration_revision = (
+        existing_plan is None
+        and revision_base is not None
+        and bool(request)
+        and bool(read_technical_plan_carryover(workspace))
+    )
+    direct_revision = revision_base is not None and (
+        new_iteration_revision
+        or (
+            existing_plan is not None
+            and boundary.operation in {
+                ApplicationPlanningOperation.REVISE, ApplicationPlanningOperation.REPAIR,
+            }
+        )
+    )
     if direct_revision:
+        # carryover 不只是事后 diff 的参照，也是本轮唯一事务基线；未显式操作的旧子树不经过模型重写。
         plan, errors = generate_technical_plan_revision(
-            state, technical_requirement, existing_plan, request,
+            state, technical_requirement, revision_base, request,
         )
         if plan is None:
             return _technical_generation_failure(state, errors, generation_fragments)

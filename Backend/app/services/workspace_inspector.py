@@ -574,6 +574,7 @@ def _render_tree_entries(
 
 
 def _frontend_facts(workspace_root: Path, files: list[str]) -> dict[str, Any]:
+    """提取前端组件、页面及业务 API 客户端等工程事实。"""
     components = []
     api_clients = []
     ipc_calls = []
@@ -586,7 +587,11 @@ def _frontend_facts(workspace_root: Path, files: list[str]) -> dict[str, Any]:
         if not content:
             continue
         components.extend(_find_react_components(relative, content))
-        if re.search(r"\b(fetch|axios)\s*\(", content):
+        # 模板业务 API 模块统一封装在 frontend/src/apis/ 下并委托给 ./service，
+        # 不直接调用 fetch/axios；必须同时按目录识别，否则增量迭代规划看不到已有 API 文件。
+        if re.search(r"^(?:Frontend|frontend)/src/apis/", relative) or re.search(
+            r"\b(fetch|axios)\s*\(", content
+        ):
             api_clients.append({"path": relative, "kind": "http_client"})
         if "ipcRenderer" in content or ".invoke(" in content:
             ipc_calls.append({"path": relative})

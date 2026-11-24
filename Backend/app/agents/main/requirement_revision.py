@@ -14,10 +14,13 @@ from app.agents.model_factory import create_chat_model, thinking_disabled_kwargs
 from app.agents.model_operations import observe_model_operation
 from app.config import Settings
 from app.domain.application_planning_recovery import application_planning_sha256
-from app.domain.technical_plan_changeset import TechnicalPlanChangeSet
+from app.domain.technical_plan_changeset import RevisionOperationBatch, TechnicalPlanChangeSet
 from app.services.technical_plan_changeset import apply_document_changeset, verify_revision_effects
+from app.services.requirement_clarification import without_redundant_original_prefix
 from app.services.requirement_spec import validate_authorization_requirements, validate_requirement_spec_confirmation_readiness
-from app.services.requirement_spec_merger import requirement_revision_diff, strip_change_status
+from app.services.requirement_spec_merger import (
+    requirement_revision_diff, strip_change_status, with_page_design_overview_diff,
+)
 from app.services.product_plan import _authorization_targets, requirement_spec_sha256, validate_product_plan
 from app.tools.ask_user import AskUserInput, build_ask_user_payload
 
@@ -44,21 +47,24 @@ def requirement_revision_document(spec: dict, product: dict | None) -> dict:
 
 @observe_model_operation("revise_requirements", business_stage="requirements")
 def plan_requirement_changeset(document: dict, request: str, feedback: list[str]) -> TechnicalPlanChangeSet | AskUserInput:
-    """原生工具输出只能是完整 ChangeSet 或澄清问题，禁止候选重写与混合部分修改。"""
+    """模型只输出有序操作或澄清问题，完整原文由平台绑定到内部 ChangeSet。"""
 
     model = create_chat_model(Settings.from_env(), extra_model_kwargs=thinking_disabled_kwargs())
     prompt = (
-        "把需求文档的全部修改意见翻译为唯一 ChangeSet。只调用一个结构化工具："
-        "TechnicalPlanChangeSet（通用变更集）或 AskUserInput（确有歧义时提问）。不要生成代码、"
+        "把需求文档的全部修改意见翻译为唯一操作批次。只调用一个结构化工具："
+        "RevisionOperationBatch（通用有序操作批次）或 AskUserInput（确有歧义时提问）。不要生成代码、"
         "重写整份文档或同时提交问题和部分操作。\n"
-        "ChangeSet 固定 schemaVersion=1、baseSha256、intents[{id,sourceText,operations}]。"
-        "所有 sourceText 为连续原文，合起来覆盖整次请求；每项有实际修改，不能只 test 或无变化。"
+        "RevisionOperationBatch 固定 schemaVersion=1、baseSha256、operations。不要输出 intents、"
+        "sourceText 或子需求 ID；平台会把全部操作绑定到完整原始请求。所有子要求的操作必须按执行顺序"
+        "放入 operations，每项都有实际修改，不能只 test 或无变化。"
         "op 只能 add/remove/replace/move/test；add=value，remove=expectedBefore，"
         "replace=expectedBefore+value，move=from+expectedBefore，test=value；不要多余字段。\n"
         "path/from 使用稳定身份逻辑路径：对象按键；数组按 id/pageId/actionId/stepId/"
         "endpoint_id/endpointId/itemId/ruleId/resourceKey/name/key，参数用 in.name；禁止数字下标。"
         "无 name/id 的实体字段可使用唯一 label 作为身份；无稳定身份的字符串/顺序数组 replace 整个数组。~ 转义 ~0，/ 转义 ~1。"
-        "同一意图的关联操作按顺序执行，expectedBefore 符合当步旧值，不同意图不得互相覆盖。\n"
+        "同一请求的关联操作按顺序执行，expectedBefore 必须符合执行到该步时的旧值。\n"
+        "数组路径段只写身份值本身，禁止数字下标、[0]、id=xxx、[id=xxx]、name=xxx、[name=xxx]。"
+        "正确示例：/requirement_spec/pages/personnel_detail_list/path；不要给身份值加方括号或键名前缀。\n"
         "可编辑根为 requirement_spec、product_plan。用户看到的是联合需求文档，若 ProductPlan"
         "已存在，必须把页面信息项、操作、流程与验收要求的关联修改一起放进同一个 ChangeSet，"
         "不要只改需求概述让产品内容仍保留旧字段。所有未涉及子树保持原样。删除、改名要显式"
@@ -71,14 +77,14 @@ def plan_requirement_changeset(document: dict, request: str, feedback: list[str]
         f"用户原始请求：\n{request}\n当前业务文档：\n{json.dumps(document, ensure_ascii=False)}\n"
         f"本轮平台诊断（不能撤销原要求）：\n{json.dumps(feedback, ensure_ascii=False)}"
     )
-    response = model.bind_tools([TechnicalPlanChangeSet, AskUserInput], tool_choice="auto").invoke(prompt)
+    response = model.bind_tools([RevisionOperationBatch, AskUserInput], tool_choice="auto").invoke(prompt)
     check_output_finish(response)
     calls = getattr(response, "tool_calls", None) or []
     if len(calls) != 1:
-        raise ValueError("需求修订必须提交一个完整 ChangeSet 或一组澄清问题，不能用正文冒充修改。")
+        raise ValueError("需求修订必须提交一个完整操作批次或一组澄清问题，不能用正文冒充修改。")
     call = calls[0]
-    if call["name"] == "TechnicalPlanChangeSet":
-        return TechnicalPlanChangeSet.model_validate(call["args"])
+    if call["name"] == "RevisionOperationBatch":
+        return RevisionOperationBatch.model_validate(call["args"]).bind_request(request)
     if call["name"] == "AskUserInput":
         return AskUserInput.model_validate(call["args"])
     raise ValueError("需求修订返回了不支持的工具。")
@@ -153,7 +159,8 @@ def new_iteration_revision_state(
         # 上一轮正式产品文件已在发起迭代时清理，本轮只能写新的草稿路径。
         "product_plan_path": "",
         "product_plan_json_path": "",
-        "requirement_changeset_context": {},
+        # 澄清回答后的失败重试会再次识别新迭代，未完成的冻结事务不能在这里被清空。
+        "requirement_changeset_context": deepcopy(state.get("requirement_changeset_context") or {}),
     }
 
 
@@ -161,7 +168,8 @@ def generate_requirement_revision(state: dict, existing_spec: dict, request: str
     """执行联合原子修改，澄清保留事务基线，失败不写文件也不进入下游。"""
 
     context = state.get("requirement_changeset_context") or {}
-    continuing = (state.get("application_planning_interaction") or {}).get("action") == "answer" and bool(context)
+    # 原生失败重试会清空一次性 interaction；只要冻结事务仍存在，就必须沿原基线和原请求继续。
+    continuing = bool(context)
     spec = deepcopy(context["spec"] if continuing else existing_spec)
     product = deepcopy(context.get("product") if continuing else state.get("product_plan"))
     if not continuing:
@@ -179,7 +187,11 @@ def generate_requirement_revision(state: dict, existing_spec: dict, request: str
             product_markdown = edited_product_plan_markdown(state, product)
             if product_markdown is not None:
                 product = sync_product_plan_from_markdown(product, spec, product_markdown)
-    request = (context["request"] + "\n" + request) if continuing and context["request"] not in request else request
+    request = without_redundant_original_prefix(request)
+    if continuing:
+        # 重试可能带着已形成的多层信封；先折叠，再只在冻结原文缺席时补回，避免继续膨胀。
+        frozen_request = without_redundant_original_prefix(str(context["request"]))
+        request = (frozen_request + "\n" + request) if frozen_request not in request else request
     document = requirement_revision_document(spec, product)
     feedback: list[str] = []
     for _attempt in range(3):
@@ -218,10 +230,43 @@ def generate_requirement_revision(state: dict, existing_spec: dict, request: str
                 feedback = errors[:12]
                 continue
             verify_revision_effects(requirement_revision_document(candidate, product_candidate), effects)
+            display = requirement_revision_diff(spec, candidate)
+            deleted_page_ids = {
+                str(page.get("pageId") or "")
+                for page in display.get("pages") or []
+                if isinstance(page, dict) and page.get("_change_status") == "deleted"
+            }
+            if deleted_page_ids:
+                # 两份审阅候选都保留删除墓碑，联合确认才能核对页面集合；已在上方按存活页面完成校验。
+                current_pages = {
+                    str(page.get("pageId") or ""): page
+                    for page in candidate.get("pages") or []
+                    if isinstance(page, dict)
+                }
+                candidate["pages"] = [
+                    deepcopy(page) if page.get("_change_status") == "deleted"
+                    else deepcopy(current_pages[str(page.get("pageId") or "")])
+                    for page in display.get("pages") or []
+                    if isinstance(page, dict) and (
+                        page.get("_change_status") == "deleted"
+                        or str(page.get("pageId") or "") in current_pages
+                    )
+                ]
+            if product_candidate is not None:
+                # 页面级路由/说明变化不能直接决定交互与布局徽标，两个区域按实际 ProductPlan 子树比较。
+                display = with_page_design_overview_diff(display, product, product_candidate)
+                if deleted_page_ids:
+                    from app.agents.main.product_planner import _append_deleted_pages
+
+                    # 候选校验完成后补回完整删除墓碑：展示与开发清理需要它，但不能算作用户保留页面。
+                    product_candidate = _append_deleted_pages(
+                        product_candidate, display, product, deleted_page_ids,
+                    )
+                    product_candidate["requirement_spec_sha256"] = requirement_spec_sha256(candidate)
             return {
                 "requirement_spec": candidate,
                 "requirement_spec_baseline": spec,
-                "requirement_spec_diff": requirement_revision_diff(spec, candidate),
+                "requirement_spec_diff": display,
                 "requirement_revision_product_candidate": product_candidate or {},
                 "requirement_changeset_context": {},
                 "requirements_confirmed": False,

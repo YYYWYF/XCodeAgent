@@ -51,7 +51,7 @@ def create_integration_repair_agent(
         user_skills_backend=user_skills_backend, agent_memory_backend=agent_memory_backend,
     ), limit_context=True, unit_test_code_only=unit_test)
     filesystem = FilesystemMiddleware(
-        backend=backend, permissions=create_workspace_permissions(
+        backend=backend, _permissions=create_workspace_permissions(
             workspace_root, mode="small_task", include_builtin_skills=True,
             include_user_skills=True, include_agent_memory=True,
         ),

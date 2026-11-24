@@ -224,6 +224,71 @@ test('真实 Backend failureDiagnostic 使用公开字段后仍能生成当前 I
   assert.equal(workbenchRecoveryIncident(projected)?.failureMessage, undefined)
 })
 
+test('Build 自动修复耗尽退出（buildSummary.status=needs_repair）仍提取真实任务报错而非 Build 等待确认', () => {
+  const projected = executionRecoveryForSession(
+    lifecycleWithCandidates([
+      candidate({
+        sourceRunId: 'run-build-needs-repair',
+        threadId: 'thread-build-1',
+        executionStatus: 'failed',
+        recoveryActionPlan: {
+          schemaVersion: 'recovery-action-plan.v1',
+          incidentId: 'incident-build-1',
+          sourceRunId: 'run-build-needs-repair',
+          threadId: 'thread-build-1',
+          executionKind: 'workbench',
+          status: 'recoverable',
+          reasonCode: 'BUSINESS_NODE_RETRY_READY',
+          message: '读取当前文件，重新执行失败的业务步骤。',
+          primaryAction: {
+            actionId: 'retry:incident-build-1',
+            kind: 'retry_business_node',
+            targetNode: 'build',
+            label: '重试',
+            description: '读取当前文件，重新执行失败的业务步骤。',
+            requiresConfirmation: false
+          },
+          alternateActions: []
+        }
+      })
+    ]),
+    'session-A'
+  )
+  const workflow = {
+    runId: 'run-build-needs-repair',
+    threadId: 'thread-build-1',
+    summary: {
+      status: 'failed',
+      message: 'Build 等待确认。',
+      buildSummary: { status: 'needs_repair', completed: 0, failed: 1 }
+    },
+    events: [
+      {
+        type: 'workflow.node.completed',
+        nodeName: 'build',
+        status: 'failed',
+        data: {
+          detail: {
+            buildSummary: { status: 'needs_repair', completed: 0, failed: 1 },
+            buildExecutionSlice: {
+              tasks: [
+                {
+                  id: 'frontend:api-client::personnel_detail_contract::api-module::1',
+                  status: 'failed',
+                  failure_reason: '工作区差异未包含正式 API 模块的新增操作。'
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  } as unknown as WorkflowRunPayload
+
+  const incident = workbenchRecoveryIncident(projected, workflow)
+  assert.ok(incident?.failureMessage?.includes('工作区差异未包含正式 API 模块的新增操作'))
+})
+
 /** 即使连接健康、没有候选且旧执行还在运行，也能显示同步入口且拒绝旧动作。 */
 test('恢复读取错误提供底部兜底且禁止旧候选执行', () => {
   const lifecycle = { extensions: { executionRecovery: {

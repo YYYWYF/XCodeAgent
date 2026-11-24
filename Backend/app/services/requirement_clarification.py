@@ -13,6 +13,15 @@ def _answer_text(value: object, options: dict[str, str]) -> str:
     return "" if text == "__other__" else options.get(text, text)
 
 
+def without_redundant_original_prefix(request: str) -> str:
+    """折叠连续重复的原始需求前缀，使多轮恢复与澄清保持幂等。"""
+    original = request.strip()
+    prefix = "原始需求：\n"
+    while original.startswith(prefix + prefix):
+        original = original[len(prefix):]
+    return original
+
+
 def requirement_clarification_request(
     original_request: str, clarification: dict, answers: dict, request: str = ""
 ) -> str:
@@ -39,7 +48,9 @@ def requirement_clarification_request(
         prompt = str(question.get("question") or "")
         label = f"{title}（{prompt}）" if prompt and prompt != title else title
         lines.append(f"{label}：{answer}")
-    parts = [f"原始需求：\n{original_request.strip()}"] if original_request.strip() else []
+    original = without_redundant_original_prefix(original_request)
+    # 冻结请求可能已是上一轮完整恢复信封；直接续写答案，不能把整段内容再次包成原始需求。
+    parts = [original if original.startswith("原始需求：") else f"原始需求：\n{original}"] if original else []
     if request.strip():
         parts.append(f"本轮补充说明：\n{request.strip()}")
     if lines:

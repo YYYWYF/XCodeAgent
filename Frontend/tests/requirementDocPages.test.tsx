@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { RequirementPagesSection } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocSections'
+import { RequirementFlowsSection, RequirementOverviewSection, RequirementPagesSection } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocSections'
 import type { JsonRecord } from '../src/renderer/src/components/AiChatPanel/components/DocPanel/RequirementDocPanelData'
 import ProductPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/ProductPlanDocPanel'
+import PageDesignOverviewSection from '../src/renderer/src/components/AiChatPanel/components/DocPanel/PageDesignOverviewSection'
 import TechnicalPlanDocPanel from '../src/renderer/src/components/AiChatPanel/components/DocPanel/TechnicalPlanDocPanel'
 import './technicalPlanTypes.test'
 
@@ -107,6 +108,103 @@ test('空产品规划展示现有空态，待确认状态仍可见', () => {
   for (const text of ['未命名应用', '待确认', '暂无页面规划', '暂无产品级验收标准']) {
     assert.ok(html.includes(text), `空产品规划缺少内容：${text}`)
   }
+})
+
+test('页面概览按交互和布局子区域打标，不继承路由导致的页面级修改', () => {
+  const specDiff = {
+    pages: [{ pageId: 'hello_world', _change_status: 'modified' }],
+    _page_design_overview: {
+      hello_world: { interaction: 'unchanged', layout: 'unchanged' }
+    }
+  }
+  const routeOnly = renderToStaticMarkup(
+    <PageDesignOverviewSection
+      productPlan={productPlan()}
+      sectionKey="page-design-overview"
+      spec={{}}
+      specDiff={specDiff}
+    />
+  )
+  assert.equal(routeOnly.split('is-modified').length - 1, 0, '只改路由时两个子区域都不能标修改')
+
+  const interactionChanged = renderToStaticMarkup(
+    <PageDesignOverviewSection
+      productPlan={productPlan()}
+      sectionKey="page-design-overview"
+      spec={{}}
+      specDiff={{
+        ...specDiff,
+        _page_design_overview: {
+          hello_world: { interaction: 'modified', layout: 'unchanged' }
+        }
+      }}
+    />
+  )
+  assert.equal(interactionChanged.split('is-modified').length - 1, 1, '真实交互变化仍须标修改')
+})
+
+test('页面风格按维度内容比较，应用摘要新增业务功能不误标修改', () => {
+  const baseline = { app_info: { summary: '桌面端，侧边栏导航，表格。' } }
+  const specDiff = { _app_change_status: 'modified', pages: [] }
+  const sameStyle = renderToStaticMarkup(
+    <PageDesignOverviewSection
+      productPlan={{ pages: [] }}
+      sectionKey="page-design-overview"
+      spec={{ app_info: { summary: '桌面端，侧边栏导航，表格。新增问候页。' } }}
+      specBaseline={baseline}
+      specDiff={specDiff}
+    />
+  )
+  assert.equal(sameStyle.split('is-modified').length - 1, 0, '相同风格维度必须保持未变更')
+
+  const changedStyle = renderToStaticMarkup(
+    <PageDesignOverviewSection
+      productPlan={{ pages: [] }}
+      sectionKey="page-design-overview"
+      spec={{ app_info: { summary: '移动端，侧边栏导航，表格。新增问候页。' } }}
+      specBaseline={baseline}
+      specDiff={specDiff}
+    />
+  )
+  assert.equal(changedStyle.split('is-modified').length - 1, 1, '真实终端风格变化仍须标修改')
+})
+
+test('删除页面及其模块和流程继续以墓碑形式展示在各需求页签', () => {
+  const deletedPage = {
+    pageId: 'greeting_page', name: '问候展示页', path: '/page/greeting',
+    description: '展示晚上好', _change_status: 'deleted'
+  }
+  const deletedModule = {
+    id: 'greeting_module', name: '问候展示', description: '问候功能', _change_status: 'deleted'
+  }
+  const deletedFlow = {
+    id: 'greeting_flow', name: '问候流程', description: '展示问候',
+    steps: ['打开问候页'], _change_status: 'deleted'
+  }
+  const specDiff = {
+    pages: [deletedPage], feature_modules: [deletedModule], business_flows: [deletedFlow],
+    _page_design_overview: {
+      greeting_page: { interaction: 'deleted', layout: 'deleted' }
+    }
+  }
+  const views = [
+    renderToStaticMarkup(<RequirementOverviewSection sectionKey="overview" spec={{}} specDiff={specDiff} />),
+    renderToStaticMarkup(<RequirementPagesSection productPlan={{}} sectionKey="pages" spec={{}} specDiff={specDiff} />),
+    renderToStaticMarkup(<RequirementFlowsSection sectionKey="flows" spec={{}} specDiff={specDiff} />),
+    renderToStaticMarkup(
+      <PageDesignOverviewSection
+        productPlan={{}}
+        sectionKey="page-design-overview"
+        spec={{}}
+        specDiff={specDiff}
+      />
+    )
+  ]
+  for (const [index, expected] of ['问候展示', '问候展示页', '问候流程', '问候展示页'].entries()) {
+    assert.ok(views[index].includes(expected), `第 ${index + 1} 个页签缺少删除条目`)
+    assert.ok(views[index].includes('待删除'), `第 ${index + 1} 个页签缺少删除徽标`)
+  }
+  assert.ok(views[1].includes('/page/greeting'), '删除页应保留原路由供识别')
 })
 
 test('技术规划沿用计划阶段的章节导航与无接口空态', () => {

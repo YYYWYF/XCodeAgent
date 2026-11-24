@@ -2,7 +2,10 @@ import type { WorkflowRunPayload } from '../typings'
 
 /** 从当前失败 Build 的任务事实归因，防止权限初始化等上游文案污染恢复提示。 */
 export function currentBuildFailureMessage(workflow?: WorkflowRunPayload): string | undefined {
-  if (workflow?.summary.status !== 'failed' || workflow.summary.buildSummary?.status !== 'failed')
+  if (
+    workflow?.summary.status !== 'failed' ||
+    !['failed', 'needs_repair'].includes(String(workflow.summary.buildSummary?.status || ''))
+  )
     return undefined
   const event = [...workflow.events]
     .reverse()

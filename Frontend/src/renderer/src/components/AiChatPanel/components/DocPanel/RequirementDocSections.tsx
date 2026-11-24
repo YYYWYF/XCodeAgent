@@ -10,6 +10,7 @@ import { cx } from '../../../../utils'
 import {
   asRecord,
   behaviorTypeLabel,
+  mergeDeletedRecords,
   modulePriorityLabel,
   recordItems,
   requirementFlowRows,
@@ -39,7 +40,7 @@ export function RequirementOverviewSection({
   specDiff?: JsonRecord
 } & SectionProps): ReactElement {
   const appInfo = asRecord(spec.app_info)
-  const modules = recordItems(spec.feature_modules)
+  const modules = mergeDeletedRecords(spec.feature_modules, specDiff?.feature_modules, 'id')
   const moduleStatusMap = useMemo(
     () => buildChangeStatusMap(specDiff, 'feature_modules', 'id'),
     [specDiff]
@@ -314,7 +315,11 @@ export function RequirementPagesSection({
   specDiff,
   sectionKey
 }: { productPlan: JsonRecord; spec: JsonRecord; specDiff?: JsonRecord } & SectionProps): ReactElement {
-  const pages = requirementPageRows(productPlan, recordItems(spec.pages))
+  const pages = requirementPageRows(
+    productPlan,
+    recordItems(spec.pages),
+    recordItems(specDiff?.pages)
+  )
   // 把 specDiff 里每页的 _change_status 注入到 rows：以 pageId 为键。
   // 没拿到 specDiff（首轮创建）时全部按"unchanged"处理，UI 上不分区。
   const changeStatusByPageId = useMemo(() => {
@@ -419,7 +424,10 @@ export function RequirementFlowsSection({
   specDiff,
   sectionKey
 }: { spec: JsonRecord; specDiff?: JsonRecord } & SectionProps): ReactElement {
-  const flows = requirementFlowRows(spec)
+  const flows = requirementFlowRows({
+    ...spec,
+    business_flows: mergeDeletedRecords(spec.business_flows, specDiff?.business_flows, 'id')
+  })
   const flowStatusMap = useMemo(
     () => buildChangeStatusMap(specDiff, 'business_flows', 'id'),
     [specDiff]

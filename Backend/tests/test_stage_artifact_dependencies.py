@@ -49,6 +49,28 @@ class StageArtifactDependencyTests(unittest.TestCase):
             self.assertEqual(fields["requirement_spec"], {"draft": True})
             self.assertEqual(fields["product_plan"], {})
 
+    def test_requirements_revise_does_not_pollute_planning_inputs_for_next_iteration(self):
+        """联合需求卡修改只在本轮读取产品草稿，不能原地污染全局依赖集合阻断后续新迭代。"""
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            self.write(first, "application.json", '{"id":"app-1"}')
+            self.write(first, "drafts/specs/requirement-spec.json", '{"draft":true}')
+            self.write(first, "drafts/plans/product-plan.json", '{"draft_product":true}')
+            revise_fields = load_stage_artifacts(
+                {
+                    "workspace": first,
+                    "application_planning_interaction": {"action": "revise"},
+                },
+                "requirements",
+            )
+            self.assertEqual(revise_fields["product_plan"], {"draft_product": True})
+
+            # 新迭代起点只有 specs/requirement-spec.json 与 carryover，plans/product-plan.json 已清空。
+            self.write(second, "application.json", '{"id":"app-2"}')
+            self.write(second, "specs/requirement-spec.json", '{"confirmation_status":"confirmed"}')
+            iteration_fields = load_stage_artifacts({"workspace": second}, "requirements")
+            self.assertEqual(iteration_fields["requirement_spec"], {"confirmation_status": "confirmed"})
+            self.assertEqual(iteration_fields["product_plan"], {})
+
     def test_required_upstream_corruption_is_not_silently_discarded(self):
         """真正消费的前置文档损坏仍报错，不以空输入伪造成功或绕过确认。"""
         with tempfile.TemporaryDirectory() as root:

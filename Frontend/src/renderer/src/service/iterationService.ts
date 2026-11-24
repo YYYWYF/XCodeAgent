@@ -11,8 +11,10 @@ export type StartIterationPayload = {
 
 export type StartIterationInput = {
   workspaceRoot: string
-  /** 新迭代所在的分支名，仅用于写 AGENTS.md 的迭代标题。 */
+  /** 新迭代所在的分支名，用于登记本轮迭代记录。 */
   branchName: string
+  /** 发起新迭代所基于的来源分支名；基于历史版本迭代时显式传入。 */
+  sourceBranchName?: string
   description: string
 }
 

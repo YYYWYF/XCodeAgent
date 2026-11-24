@@ -52,6 +52,29 @@ class WorkflowFailureMessageTests(unittest.TestCase):
                                  "build_summary": {"status": "failed"}})
         self.assertEqual(result["message"], "代码构建失败，请查看构建任务详情后重试。")
 
+    def test_build_needs_repair_terminal_failure_extracts_task_reason_instead_of_await_confirm(self):
+        """自动修复耗尽退出时 build_summary.status 为 needs_repair，仍必须提取真实任务失败原因。"""
+        state = {
+            "phase": "build",
+            "status": "failed",
+            "message": "Build 等待确认。",
+            "error": "",
+            "build_summary": {"status": "needs_repair", "failed": 1, "repairable_failures": 1},
+            "build_execution_slice": {
+                "tasks": [
+                    {
+                        "id": "frontend:api-client::personnel_detail_contract::api-module::1",
+                        "status": "failed",
+                        "failure_reason": "工作区差异未包含正式 API 模块的新增操作。",
+                    }
+                ]
+            },
+        }
+        result = handle_failure(state)
+        self.assertNotIn("Build 等待确认", result["message"])
+        self.assertIn("工作区差异未包含正式 API 模块的新增操作", result["message"])
+        self.assertEqual(_workflow_summary({**state, **result}, [])["message"], result["error"])
+
     def test_other_nodes_do_not_inherit_old_build_finalization_error(self):
         """单测等后续节点的真实错误不能被历史 Build 摘要覆盖。"""
         result = handle_failure({"phase": "unit_test", "status": "failed", "error": "测试生成失败。", "build_summary": {"status": "failed", "finalization_error": "旧模板错误。"}})

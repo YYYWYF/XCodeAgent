@@ -45,6 +45,54 @@ test('恢复卡显示具体原因和可复制诊断，不显示代码位置', ()
   assert.match(errorDiagnosticText('具体错误', diagnostic), /关联任务：run-A/)
 })
 
+test('长错误摘要最多显示十行，复制按钮仍复制完整原文', async () => {
+  const longError = Array.from({ length: 30 }, (_, index) => `第 ${index + 1} 行错误详情`).join(
+    '\n'
+  )
+  const markup = renderToStaticMarkup(createElement(AgentErrorCard, { error: longError }))
+  assert.match(markup, /-webkit-line-clamp:10/)
+  assert.match(markup, /aria-label="复制完整错误"/)
+  assert.match(markup, /第 30 行错误详情/, '复制数据源必须保留被视觉省略的完整原文')
+
+  const originalWindow = globalThis.window
+  const copied: string[] = []
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    writable: true,
+    value: {
+      devAgentStudio: {
+        clipboard: {
+          writeText: async (text: string): Promise<void> => {
+            copied.push(text)
+          }
+        }
+      }
+    }
+  })
+  let renderer: ReturnType<typeof create> | undefined
+  let state: ReturnType<typeof useDiagnosticClipboard>
+  function Probe({ text }: { text: string }): null {
+    state = useDiagnosticClipboard(text)
+    return null
+  }
+  try {
+    await act(async () => {
+      renderer = create(createElement(Probe, { text: longError }))
+    })
+    await act(async () => {
+      await state.copyDiagnostic()
+    })
+    assert.deepEqual(copied, [longError])
+  } finally {
+    act(() => renderer?.unmount())
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      writable: true,
+      value: originalWindow
+    })
+  }
+})
+
 /** 渲染复制 Hook 验证原生调用，内容更新和失败都不能显示错误的成功反馈。 */
 test('诊断复制使用当前可见文本，失败保留手动复制入口', async () => {
   const originalWindow = globalThis.window

@@ -626,7 +626,13 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
     # 此处只接回原联合确认门，不再调用整份生成器或按旧页面内容合并覆盖。
     revised_product = state.get("requirement_revision_product_candidate")
     if isinstance(revised_product, dict) and revised_product:
-        errors = validate_product_plan(revised_product, requirement_spec)
+        # 删除墓碑只用于展示与开发清理，校验页面一一对应时必须沿需求 diff 排除它们。
+        deleted_page_ids = _deleted_page_ids_from_diff(
+            requirement_spec, state.get("requirement_spec_diff"),
+        )
+        errors = validate_product_plan(
+            revised_product, requirement_spec, deleted_page_ids=deleted_page_ids,
+        )
         if errors:
             raise ValueError("联合需求修订产品候选未通过校验：" + "；".join(errors[:12]))
         plan_view = _inherit_page_change_status(

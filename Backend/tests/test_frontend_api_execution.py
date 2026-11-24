@@ -239,6 +239,17 @@ class FrontendApiExecutionTests(unittest.TestCase):
                                        old_string="'/wrong'", new_string="'/orders'"))
         self.assertEqual(result["status"], "completed", result)
 
+    def test_preexisting_target_with_add_scope_accepts_incremental_modify(self):
+        """跨迭代或重试前磁盘已有 API 模块时，Agent 用 edit_file 增量修改应通过差异验收。"""
+        _create_file(self.root, TARGET, VALID_SOURCE.replace("'/orders'", "'/legacy'"))
+        self.assertEqual(self.task["change_scope"][0]["operation"], "add")
+        result, changes, _ = self._run(
+            _tool("edit_file", "edited", file_path=f"/{TARGET}",
+                  old_string="'/legacy'", new_string="'/orders'")
+        )
+        self.assertEqual(changes["files"][0]["changeType"], "modified")
+        self.assertEqual(result["status"], "completed", result)
+
     def test_missing_business_checks_cannot_complete(self):
         """任务缺少 API 契约检查时仍被平台阻断，不能通过空集合完成。"""
         self.task["business_acceptance_checks"] = []

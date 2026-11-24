@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -66,6 +66,64 @@ class RequirementChangeSetTests(unittest.TestCase):
         self.assertEqual(result["requirement_spec_diff"]["pages"][0]["_change_status"], "modified")
         self.assertEqual(result["requirement_spec"]["confirmation_status"], "pending_user_confirmation")
 
+    def test_page_overview_diff_tracks_interaction_and_layout_independently(self):
+        """只改路由时交互与布局均未变，修改操作结果时仅交互标修改。"""
+        old_path = self.spec["pages"][0]["path"]
+        document = requirement_revision_document(self.spec, self.product)
+        route_request = "人员明细列表路由改成 /page/detail"
+        route_changes = change(document, route_request, [
+            {"op": "replace", "path": f"/requirement_spec/pages/{self.page_id}/path", "expectedBefore": old_path, "value": "/page/detail"},
+            {"op": "replace", "path": f"/product_plan/pages/{self.page_id}/path", "expectedBefore": old_path, "value": "/page/detail"},
+        ])
+        with patch("app.agents.main.requirement_revision.plan_requirement_changeset", return_value=route_changes):
+            route_result = generate_requirement_revision(self.state, self.spec, route_request)
+        route_overview = route_result["requirement_spec_diff"]["_page_design_overview"][self.page_id]
+        self.assertEqual(route_overview, {"interaction": "unchanged", "layout": "unchanged"})
+
+        action = {
+            "actionId": "load_list", "name": "加载列表", "description": "加载人员明细列表。",
+            "requiresConfirmation": False,
+            "behavior": {"type": "business", "expectedResult": "展示人员明细列表。"},
+        }
+        self.product["pages"][0]["actions"] = [action]
+        action_document = requirement_revision_document(self.spec, self.product)
+        old_result = action["behavior"]["expectedResult"]
+        action_request = "修改分页操作的预期结果"
+        action_changes = change(action_document, action_request, [{
+            "op": "replace",
+            "path": f"/product_plan/pages/{self.page_id}/actions/{action['actionId']}/behavior/expectedResult",
+            "expectedBefore": old_result,
+            "value": "分页数据已经刷新。",
+        }])
+        with patch("app.agents.main.requirement_revision.plan_requirement_changeset", return_value=action_changes):
+            action_result = generate_requirement_revision(self.state, self.spec, action_request)
+        action_overview = action_result["requirement_spec_diff"]["_page_design_overview"][self.page_id]
+        self.assertEqual(action_overview, {"interaction": "modified", "layout": "unchanged"})
+
+    def test_model_operations_are_bound_to_full_request_by_requirement_planner(self):
+        """设计阶段模型只返回操作，平台而不是模型复制用户完整原文。"""
+
+        from app.agents.main.requirement_revision import plan_requirement_changeset
+        from app.domain.technical_plan_changeset import RevisionOperationBatch
+
+        document = requirement_revision_document(self.spec, self.product)
+        request = "我想在人员实体添加姓名和岗位的字段，列表中显示姓名、岗位信息，另外新增弹框也需要填写姓名和岗位信息"
+        old = self.spec["pages"][0]["description"]
+        response = MagicMock(response_metadata={}, tool_calls=[{
+            "name": "RevisionOperationBatch",
+            "args": {"schemaVersion": 1, "baseSha256": application_planning_sha256(document),
+                "operations": [{"op": "replace", "path": f"/requirement_spec/pages/{self.page_id}/description",
+                    "expectedBefore": old, "value": old + " 包含姓名和岗位。"}]},
+        }])
+        model = MagicMock()
+        model.bind_tools.return_value.invoke.return_value = response
+        with patch("app.agents.main.requirement_revision.create_chat_model", return_value=model):
+            result = plan_requirement_changeset(document, request, [])
+        self.assertEqual(result.intents[0].source_text, request)
+        self.assertEqual(result.intents[0].operations[0].value, old + " 包含姓名和岗位。")
+        tools = model.bind_tools.call_args.args[0]
+        self.assertEqual(tools, [RevisionOperationBatch, AskUserInput])
+
     def test_clarification_keeps_original_baseline_and_answer_is_not_confirmation(self):
         """提问不应用部分操作，回答后仍回到同一文档基线并再次等待联合确认。"""
 
@@ -85,6 +143,56 @@ class RequirementChangeSetTests(unittest.TestCase):
         self.assertFalse(result["requirements_confirmed"])
         self.assertEqual(result["requirement_spec_baseline"], self.spec)
         self.assertEqual(result["requirement_changeset_context"], {})
+
+    def test_retry_continues_frozen_request_after_interaction_is_cleared(self):
+        """失败重试清空一次性交互后，仍须把冻结的新需求与澄清答案一起交给模型。"""
+        original = (
+            "本次迭代的新需求：实现一个前端页面，调用接口并展示字符串“React前端编程！”。"
+        )
+        frozen = {"spec": self.spec, "product": self.product, "request": original}
+        state = {
+            **self.state,
+            "application_planning_interaction": {},
+            "requirement_changeset_context": frozen,
+        }
+        retry_request = "原始需求：\n请为新应用「人员明细」完成规划。\n\n用户补充确认：\n回答：新增独立页面"
+        question = AskUserInput(questions=[{"header": "继续澄清", "question": "请补充页面信息。", "type": "text"}])
+
+        with patch("app.agents.main.requirement_revision.plan_requirement_changeset", return_value=question) as planner:
+            pending = generate_requirement_revision(state, self.spec, retry_request)
+
+        model_request = planner.call_args.args[1]
+        self.assertIn(original, model_request)
+        self.assertIn("新增独立页面", model_request)
+        self.assertEqual(pending["requirement_changeset_context"]["spec"], self.spec)
+        self.assertEqual(pending["requirement_changeset_context"]["product"], self.product)
+
+    def test_new_iteration_retry_preserves_pending_changeset_context(self):
+        """重新识别新迭代基线时不得清空上一轮尚未完成的联合修订事务。"""
+        from app.agents.main.requirement_revision import new_iteration_revision_state
+        from app.domain.application_lifecycle import ApplicationLifecycleStage
+
+        with tempfile.TemporaryDirectory() as workspace:
+            confirmed = {**deepcopy(self.spec), "confirmation_status": "confirmed"}
+            frozen = {"spec": self.spec, "product": self.product, "request": "新增独立页面并展示 React前端编程！"}
+            state = {
+                "workspace": workspace,
+                "workflow_scope": "application_planning",
+                "application_planning_interaction": {},
+                "requirement_spec_loaded_from_disk": True,
+                "requirement_changeset_context": frozen,
+            }
+            lifecycle = MagicMock()
+            lifecycle.initialization.stage = ApplicationLifecycleStage.ANALYZING_REQUIREMENT
+            with (
+                patch("app.services.requirement_spec_carryover.read_requirement_spec_carryover", return_value={"spec": confirmed}),
+                patch("app.services.application_lifecycle.load_application_lifecycle", return_value=lifecycle),
+                patch("app.services.product_plan_carryover.read_product_plan_iteration_baseline", return_value=self.product),
+            ):
+                result = new_iteration_revision_state(state, confirmed, "回答：新增独立页面")
+
+            self.assertIsNotNone(result)
+            self.assertEqual(result["requirement_changeset_context"], frozen)
 
     def test_noop_invalid_target_and_whole_document_removal_preserve_disk(self):
         """空效果或任一无效操作失败后不得写需求或产品草稿。"""
@@ -255,6 +363,46 @@ class RequirementChangeSetTests(unittest.TestCase):
             self.assertEqual(pending["clarification"]["mode"], "requirement_document_confirmation")
             self.assertEqual(pending["product_plan"]["pages"][0]["_change_status"], "modified")
             self.assertEqual(pending["requirement_revision_product_candidate"], {})
+
+    def test_deleted_page_keeps_product_tombstone_for_review_and_development(self):
+        """删除页面从当前清单移除后仍保留完整产品墓碑，供展示与代码清理。"""
+        removed_spec = self.spec["pages"][-1]
+        removed_product = self.product["pages"][-1]
+        page_id = removed_spec["pageId"]
+        document = requirement_revision_document(self.spec, self.product)
+        request = f"删除页面 {page_id}"
+        changeset = change(document, request, [
+            {"op": "remove", "path": f"/requirement_spec/pages/{page_id}", "expectedBefore": removed_spec},
+            {"op": "remove", "path": f"/product_plan/pages/{page_id}", "expectedBefore": removed_product},
+        ])
+        with patch("app.agents.main.requirement_revision.plan_requirement_changeset", return_value=changeset):
+            result = generate_requirement_revision(self.state, self.spec, request)
+
+        diff_page = next(page for page in result["requirement_spec_diff"]["pages"] if page["pageId"] == page_id)
+        self.assertEqual(diff_page["_change_status"], "deleted")
+        product_page = next(
+            page for page in result["requirement_revision_product_candidate"]["pages"]
+            if page["pageId"] == page_id
+        )
+        self.assertEqual(product_page["_change_status"], "deleted")
+        self.assertEqual(product_page["name"], removed_product["name"])
+        self.assertEqual(product_page["actions"], removed_product["actions"])
+        self.assertEqual(result["requirement_spec_diff"]["_page_design_overview"][page_id], {
+            "interaction": "deleted", "layout": "deleted",
+        })
+        from app.agents.main.requirement_revision import write_joint_revision_drafts
+        from app.workspace.spec_documents import requirement_spec_draft_json_path
+        from app.workspace.product_plan_documents import product_plan_draft_json_path
+
+        with tempfile.TemporaryDirectory() as workspace:
+            revision_state = {**self.state, "workspace": workspace}
+            written = write_joint_revision_drafts(revision_state, result)
+            spec_disk = json.loads(requirement_spec_draft_json_path(revision_state).read_text())
+            product_disk = json.loads(product_plan_draft_json_path(revision_state).read_text())
+            self.assertIn(page_id, [page["pageId"] for page in spec_disk["pages"]])
+            self.assertIn(page_id, [page["pageId"] for page in product_disk["pages"]])
+            review = product_planning({**revision_state, **written})
+        self.assertIn(page_id, [page["pageId"] for page in review["product_plan"]["pages"]])
 
     def test_diff_uses_absence_not_model_deleted_pages_declaration(self):
         """删除标记只来自真实前后内容，旧模型 deleted_pages 声明不再参与修订。"""

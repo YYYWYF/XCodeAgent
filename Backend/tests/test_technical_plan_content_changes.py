@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 from pydantic import TypeAdapter, ValidationError
 
 from app.domain.application_planning_recovery import application_planning_sha256
-from app.domain.technical_plan_changeset import LogicalOperation, TechnicalPlanChangeSet
+from app.domain.technical_plan_changeset import LogicalOperation, RevisionOperationBatch, TechnicalPlanChangeSet
 from app.services.technical_plan_changeset import apply_technical_plan_changeset, revision_document, verify_revision_effects
 from app.services.technical_plan_content_changes import technical_plan_content_errors
 from app.services.technical_plan_logical_patch import apply_logical_operation
@@ -83,19 +83,17 @@ class ChangeSetTests(unittest.TestCase):
             with self.subTest(edit=edit), self.assertRaises(ValidationError):
                 TechnicalPlanChangeSet.model_validate(invalid)
 
-    def test_multiple_intents_change_request_base_path_and_remove_endpoint(self) -> None:
-        """同一事务跨类型、分组与接口修改，所有未涉及子树完全不变。"""
+    def test_multiple_changes_share_platform_bound_request(self) -> None:
+        """多项修改共用一个平台绑定事务，所有未涉及子树完全不变。"""
 
         request = "修改请求体；修改基础路径；删除无关接口"
-        sources = request.split("；")
         operations = [
-            [{"op": "add", "path": "/api_contracts/greeting_contract/schemas/NewRequest", "value": {"type": "object", "properties": {}}},
-             {"op": "add", "path": f"/api_contracts/greeting_contract/endpoints/{_ENDPOINT_ID}/request_schema_ref", "value": "NewRequest"}],
-            [{"op": "replace", "path": "/api_contracts/greeting_contract/base_path", "expectedBefore": "/api/greetings", "value": "/api/new"}],
-            [{"op": "remove", "path": f"/api_contracts/greeting_contract/endpoints/{_OTHER_ENDPOINT_ID}", "expectedBefore": _endpoint(self.plan, _OTHER_ENDPOINT_ID)}],
+            {"op": "add", "path": "/api_contracts/greeting_contract/schemas/NewRequest", "value": {"type": "object", "properties": {}}},
+            {"op": "add", "path": f"/api_contracts/greeting_contract/endpoints/{_ENDPOINT_ID}/request_schema_ref", "value": "NewRequest"},
+            {"op": "replace", "path": "/api_contracts/greeting_contract/base_path", "expectedBefore": "/api/greetings", "value": "/api/new"},
+            {"op": "remove", "path": f"/api_contracts/greeting_contract/endpoints/{_OTHER_ENDPOINT_ID}", "expectedBefore": _endpoint(self.plan, _OTHER_ENDPOINT_ID)},
         ]
-        changeset = _changeset(self.plan, request, operations[0])
-        changeset["intents"] = [{"id": f"i-{i}", "sourceText": source, "operations": ops} for i, (source, ops) in enumerate(zip(sources, operations))]
+        changeset = _changeset(self.plan, request, operations)
         original = deepcopy(self.document)
         after, _effects = apply_technical_plan_changeset(self.document, changeset, request=request)
         self.assertEqual(self.document, original)
@@ -159,6 +157,69 @@ class ChangeSetTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 apply_logical_operation(self.document, op)
 
+    def test_identity_prefix_error_explains_bare_identity_path(self):
+        """id=/name= 前缀必须给出明确纠正，不能误报成旧应用缺少目标节点。"""
+        path = "/api_contracts/id=greeting_contract/schemas/MorningGreetingResponse/properties/morningGreetingText"
+        operation = {
+            "op": "remove", "path": path,
+            "expectedBefore": {"type": "string", "description": "早上好"},
+        }
+        with self.assertRaisesRegex(ValueError, "只写身份值本身.*greeting_contract"):
+            apply_technical_plan_changeset(
+                self.document, _changeset(self.plan, "删除响应字段", [operation]), request="删除响应字段",
+            )
+
+    def test_bracketed_identity_and_index_paths_get_actionable_errors(self):
+        """方括号身份和数字下标不得再退化为缺少节点的模糊错误。"""
+        for segment in ("[id=greeting_contract]", "[0]"):
+            with self.subTest(segment=segment):
+                path = f"/api_contracts/{segment}/schemas/MorningGreetingResponse/properties/morningGreetingText"
+                operation = {
+                    "op": "remove", "path": path,
+                    "expectedBefore": {"type": "string", "description": "早上好"},
+                }
+                with self.assertRaisesRegex(ValueError, "身份值本身|数字下标"):
+                    apply_technical_plan_changeset(
+                        self.document, _changeset(self.plan, "删除响应字段", [operation]), request="删除响应字段",
+                    )
+
+    def test_changeset_error_does_not_embed_full_original_request(self):
+        """超长迭代上下文不得淹没真正的路径错误，界面诊断应保持简短可读。"""
+        request = "原始需求：\n" + "旧应用上下文" * 2000
+        operation = {
+            "op": "remove", "path": "/entities/id=greeting/fields/email",
+            "expectedBefore": {"name": "email", "type": "string"},
+        }
+        with self.assertRaises(ValueError) as raised:
+            apply_technical_plan_changeset(
+                self.document, _changeset(self.plan, request, [operation]), request=request,
+            )
+        message = str(raised.exception)
+        self.assertLess(len(message), 500)
+        self.assertIn("只写身份值本身", message)
+        self.assertNotIn("旧应用上下文", message)
+
+    def test_revision_prompt_shows_bare_identity_and_response_only_scope(self):
+        """提示词必须给出正确路径示例，并防止只删响应字段时连带删除实体。"""
+        from app.agents.main.technical_plan_revision import _changeset_prompt
+
+        prompt = _changeset_prompt({}, self.document, "删除响应体 list 中的 phone 字段", [])
+        self.assertIn("只写身份值本身，禁止写成 id=", prompt)
+        self.assertIn("/api_contracts/personnel_detail_contract/schemas/PersonnelDetailListItem/properties/phone", prompt)
+        self.assertIn("只删除接口响应体字段时，不要删除实体字段", prompt)
+
+    def test_response_schema_field_delete_preserves_entity(self):
+        """按正确稳定路径删除响应字段时，实体字段保持原样。"""
+        properties = _contract(self.document)["schemas"]["MorningGreetingResponse"]["properties"]
+        properties["phone"] = {"type": "string", "description": "联系电话"}
+        path = "/api_contracts/greeting_contract/schemas/MorningGreetingResponse/properties/phone"
+        operation = {"op": "remove", "path": path, "expectedBefore": properties["phone"]}
+        after, _effects = apply_technical_plan_changeset(
+            self.document, _changeset(self.document, "只删除响应 phone", [operation]), request="只删除响应 phone",
+        )
+        self.assertNotIn("phone", _contract(after)["schemas"]["MorningGreetingResponse"]["properties"])
+        self.assertEqual(after["entities"], self.document["entities"])
+
     def test_move_and_test_use_atomic_existing_values(self) -> None:
         """字段改名使用 move，前置 test 失败与移动失败均不暴露半修改。"""
 
@@ -170,17 +231,47 @@ class ChangeSetTests(unittest.TestCase):
         self.assertIn("greetingText", _contract(after)["schemas"]["MorningGreetingResponse"]["properties"])
         self.assertNotIn("morningGreetingText", _contract(after)["schemas"]["MorningGreetingResponse"]["properties"])
 
+    def test_platform_binds_full_multi_requirement_request_after_model_operations(self) -> None:
+        """模型无需复制自然语言，多项字段、列表和弹框修改仍绑定同一完整请求。"""
+
+        request = "我想在人员实体添加姓名和岗位的字段，列表中显示姓名、岗位信息，另外新增弹框也需要填写姓名和岗位信息"
+        batch = RevisionOperationBatch.model_validate({
+            "schemaVersion": 1,
+            "baseSha256": application_planning_sha256(self.document),
+            "operations": [
+                {"op": "replace", "path": "/architecture/frontend", "expectedBefore": "前端 React 应用", "value": "前端包含姓名和岗位"},
+                {"op": "replace", "path": "/architecture/backend", "expectedBefore": "后端 Springboot 服务", "value": "后端保存姓名和岗位"},
+                {"op": "replace", "path": "/architecture/data", "expectedBefore": "MySQL8 数据库", "value": "人员记录包含姓名和岗位"},
+            ],
+        })
+        bound = batch.bind_request(request)
+        self.assertEqual(len(bound.intents), 1)
+        self.assertEqual(bound.intents[0].id, "current-request")
+        self.assertEqual(bound.intents[0].source_text, request)
+        after, _effects = apply_technical_plan_changeset(self.document, bound, request=request)
+        self.assertEqual(after["architecture"]["frontend"], "前端包含姓名和岗位")
+        self.assertEqual(after["architecture"]["backend"], "后端保存姓名和岗位")
+        self.assertEqual(after["architecture"]["data"], "人员记录包含姓名和岗位")
+
     def test_native_structured_output_is_validated_not_full_candidate_fallback(self) -> None:
-        """模型使用现有结构化工具，格式失败不回退整份生成。"""
+        """模型只输出操作批次，平台校验后绑定完整请求，不回退整份生成。"""
 
         from app.agents.main.technical_plan_revision import plan_technical_plan_changeset
         model = MagicMock()
-        changeset = TechnicalPlanChangeSet.model_validate(_changeset(self.plan, "改说明", [{"op": "replace", "path": self.path, "expectedBefore": "基线说明", "value": "新说明"}]))
-        model.with_structured_output.return_value.invoke.return_value = {"raw": MagicMock(response_metadata={}), "parsed": changeset, "parsing_error": None}
+        changeset = _changeset(self.plan, "改说明", [{"op": "replace", "path": self.path, "expectedBefore": "基线说明", "value": "新说明"}])
+        batch = RevisionOperationBatch.model_validate({
+            "schemaVersion": changeset["schemaVersion"], "baseSha256": changeset["baseSha256"],
+            "operations": changeset["intents"][0]["operations"],
+        })
+        model.with_structured_output.return_value.invoke.return_value = {"raw": MagicMock(response_metadata={}), "parsed": batch, "parsing_error": None}
         with patch("app.agents.main.technical_plan_revision.create_chat_model", return_value=model):
             result = plan_technical_plan_changeset({}, self.document, "改说明")
-        self.assertEqual(result, changeset)
-        model.with_structured_output.assert_called_once_with(TechnicalPlanChangeSet, include_raw=True)
+        expected = TechnicalPlanChangeSet.model_validate({
+            "schemaVersion": changeset["schemaVersion"], "baseSha256": changeset["baseSha256"],
+            "intents": [{"id": "current-request", "sourceText": "改说明", "operations": changeset["intents"][0]["operations"]}],
+        })
+        self.assertEqual(result, expected)
+        model.with_structured_output.assert_called_once_with(RevisionOperationBatch, include_raw=True)
 
 
 if __name__ == "__main__":

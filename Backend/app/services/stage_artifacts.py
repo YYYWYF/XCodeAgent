@@ -68,7 +68,7 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
     root = Path(workspace) / WORKSPACE_ARTIFACT_DIR
     required = (
         set(_ARTIFACTS) if node in _TECHNICAL_STAGES | _RUNTIME_STAGES
-        else _PLANNING_INPUTS.get(node, set())
+        else set(_PLANNING_INPUTS.get(node, set()))
     )
     if node == "requirements" and (
         (state.get("application_planning_interaction") or {}).get("action") == "revise"

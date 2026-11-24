@@ -149,6 +149,95 @@ class StartIterationCleanupTests(unittest.TestCase):
             self.assertFalse((root / "plans/product-plan.json").exists())
             self.assertEqual(read_product_plan_iteration_baseline(workspace), plan)
 
+    def test_historical_iteration_records_explicit_source_branch_and_passes_stage_prerequisites(self) -> None:
+        """基于历史版本发起迭代时，carryover 记录真实历史来源分支，且清理后进入需求节点不报错。"""
+
+        from app.services.product_plan import create_product_plan
+        from app.services.requirement_spec import create_requirement_spec
+        from app.services.stage_artifacts import load_stage_artifacts
+
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            _bootstrapped_workspace(workspace)
+            root = workspace / ".devagentstudio"
+            # 模拟未入库的 application.json 仍停留在 v1_1，用户基于历史分支 v1_0 切出 v1_2。
+            (root / "application.json").write_text(
+                json.dumps({"id": "app-1", "branchName": "v1_1"}), encoding="utf-8"
+            )
+            spec = create_requirement_spec("创建一个人员明细系统")
+            spec["confirmation_status"] = "confirmed"
+            plan = create_product_plan(spec)
+            plan["confirmation_status"] = "confirmed"
+            (root / "specs/requirement-spec.json").write_text(json.dumps(spec), encoding="utf-8")
+            (root / "plans/product-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            (root / "plans/technical-plan.json").write_text(
+                json.dumps({"confirmation_status": "confirmed", "entities": [{"id": "person"}]}),
+                encoding="utf-8",
+            )
+            (root / "specs/ui-designs.json").write_text(
+                json.dumps(
+                    {
+                        "pages": [
+                            {
+                                "pageId": spec["pages"][0]["pageId"],
+                                "page_key": "PersonList",
+                                "status": "confirmed",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "plans/endpoints").mkdir(parents=True, exist_ok=True)
+            (root / "plans/endpoints/endpoint--person--list.json").write_text(
+                json.dumps({"endpointId": "person.list", "confirmation_status": "confirmed"}),
+                encoding="utf-8",
+            )
+            (root / "plans/endpoints/endpoint--person--list.md").write_text(
+                "# Endpoint\n",
+                encoding="utf-8",
+            )
+
+            start_iteration(
+                StartIterationRequest(
+                    action="start_iteration",
+                    workspaceRoot=str(workspace),
+                    branchName="v1_2",
+                    sourceBranchName="v1_0",
+                    description="历史基线说明",
+                )
+            )
+
+            for carryover_name in (
+                "requirement-spec-carryover.json",
+                "product-plan-carryover.json",
+                "technical-plan-carryover.json",
+                "ui-design-carryover.json",
+                "endpoint-design-carryover.json",
+            ):
+                payload = json.loads((root / carryover_name).read_text(encoding="utf-8"))
+                self.assertEqual(payload["sourceBranch"], "v1_0", carryover_name)
+
+            # 模拟同一后端进程此前执行过联合需求卡 revise，随后进入新迭代 requirements。
+            with tempfile.TemporaryDirectory() as prev_ws:
+                prev_root = Path(prev_ws) / ".devagentstudio"
+                (prev_root / "drafts/specs").mkdir(parents=True, exist_ok=True)
+                (prev_root / "drafts/plans").mkdir(parents=True, exist_ok=True)
+                (prev_root / "application.json").write_text('{"id":"prev"}', encoding="utf-8")
+                (prev_root / "drafts/specs/requirement-spec.json").write_text("{}", encoding="utf-8")
+                (prev_root / "drafts/plans/product-plan.json").write_text("{}", encoding="utf-8")
+                load_stage_artifacts(
+                    {"workspace": prev_ws, "application_planning_interaction": {"action": "revise"}},
+                    "requirements",
+                )
+
+            fields = load_stage_artifacts(
+                {"workspace": str(workspace), "workflow_scope": "application_planning"},
+                "requirements",
+            )
+            self.assertTrue(fields["requirement_spec_loaded_from_disk"])
+            self.assertEqual(fields["product_plan"], {})
+
     def test_clears_previous_planning_artifacts(self) -> None:
         """上一轮的规划产物与 lifecycle 快照不能带进新迭代。"""
 

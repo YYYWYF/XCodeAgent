@@ -54,6 +54,36 @@
   overflow-wrap: anywhere;
 }
 
+.@{class-prefix}-agent-error-card-message-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.@{class-prefix}-agent-error-card-message-preview-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-agent-error-card-message-preview-copy.ant-btn {
+  flex: 0 0 auto;
+  margin-top: -4px;
+  margin-right: -10px;
+}
+
+.@{class-prefix}-agent-error-card-message-preview-copy-status.ant-typography {
+  flex: 1 0 100%;
+  color: var(--wb-text-secondary, var(--modal-text-secondary));
+  font-size: 12px;
+}
+
 .@{class-prefix}-agent-error-card-hint.ant-typography {
   grid-column: 1 / -1;
   color: var(--wb-text-secondary, var(--modal-text-secondary));

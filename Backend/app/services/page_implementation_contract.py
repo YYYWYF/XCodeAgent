@@ -144,6 +144,8 @@ def technical_action_binding_issues(
     }
     issues: list[dict[str, Any]] = []
     for product_page in _dict_items(product_plan.get("pages")):
+        if product_page.get("_change_status") == "deleted":
+            continue
         page_id = str(product_page.get("pageId") or "").strip()
         issues.extend(
             _technical_action_binding_issues_for_page(
@@ -588,26 +590,31 @@ def validate_page_implementation_contracts(
     if technical_plan.get("artifact_type") != TECHNICAL_PLAN_ARTIFACT_TYPE:
         raise ValueError("只接受当前 TechnicalPlan。")
 
-    expected_pages = {
-        str(page.get("pageId") or "").strip()
-        for page in _dict_items(product_plan.get("pages"))
-        if page.get("pageId")
-    }
-    contracts = build_page_implementation_contracts(
-        technical_plan,
-        product_plan,
-        ui_designs or {},
-    )
-    actual_pages = [str(item.get("pageId") or "").strip() for item in contracts]
-    errors: list[str] = []
-    if set(actual_pages) != expected_pages or len(actual_pages) != len(set(actual_pages)):
-        errors.append("TechnicalPlan 必须为每个 ProductPlan 页面生成唯一 PageImplementationContract。")
-    endpoint_ids = set(_endpoint_catalog(technical_plan))
     product_pages = {
         str(page.get("pageId") or "").strip(): page
         for page in _dict_items(product_plan.get("pages"))
         if page.get("pageId")
     }
+    # 删除墓碑只供展示与清理，不参与本轮 PageImplementationContract 的页面和动作闭包。
+    expected_pages = {
+        page_id
+        for page_id, page in product_pages.items()
+        if page.get("_change_status") != "deleted"
+    }
+    contracts = [
+        contract
+        for contract in build_page_implementation_contracts(
+            technical_plan,
+            product_plan,
+            ui_designs or {},
+        )
+        if product_pages.get(str(contract.get("pageId") or ""), {}).get("_change_status") != "deleted"
+    ]
+    actual_pages = [str(item.get("pageId") or "").strip() for item in contracts]
+    errors: list[str] = []
+    if set(actual_pages) != expected_pages or len(actual_pages) != len(set(actual_pages)):
+        errors.append("TechnicalPlan 必须为每个 ProductPlan 页面生成唯一 PageImplementationContract。")
+    endpoint_ids = set(_endpoint_catalog(technical_plan))
     for contract in contracts:
         page_id = str(contract.get("pageId") or "")
         required_endpoint_ids = set(_text_items(contract.get("requiredEndpointIds")))

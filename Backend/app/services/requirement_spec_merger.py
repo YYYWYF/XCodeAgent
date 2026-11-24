@@ -39,6 +39,13 @@ _LIST_MERGE_KEYS: dict[str, str] = {
 # 页面级标记回答不了这类问题（风格维度就取自需求全文），因此单独记录。
 # 与 `_change_status` 一样只是展示视图，写正式产物前必须剥离。
 APP_CHANGE_STATUS_FIELD = "_app_change_status"
+PAGE_DESIGN_OVERVIEW_FIELD = "_page_design_overview"
+
+# 页面概览的交互与布局只比较各自实际渲染的 ProductPlan 内容，路由等其它页面字段不扩散标记。
+_PAGE_DESIGN_AREA_FIELDS = {
+    "interaction": ("name", "actions", "navigation_targets"),
+    "layout": ("name", "goal", "information_items"),
+}
 
 # 参与应用级比对的内容字段：只比业务表述，不比生成/同步元数据。
 _APP_LEVEL_FIELDS = ("app_info",)
@@ -108,6 +115,40 @@ def requirement_revision_diff(base_spec: dict[str, Any], candidate: dict[str, An
                 current.append({**deepcopy(old), CHANGE_STATUS_FIELD: "deleted"})
         display[field] = current
     display[APP_CHANGE_STATUS_FIELD] = _app_change_status(base, candidate)
+    return display
+
+
+def with_page_design_overview_diff(
+    display: dict[str, Any],
+    base_product: dict[str, Any] | None,
+    candidate_product: dict[str, Any],
+) -> dict[str, Any]:
+    """给展示版附加逐页交互/布局状态，业务文档与页面级 diff 保持原语义。"""
+
+    previous = {
+        str(row.get("pageId") or ""): row
+        for row in _list_items((base_product or {}).get("pages"))
+    }
+    current = {
+        str(row.get("pageId") or ""): row
+        for row in _list_items(candidate_product.get("pages"))
+    }
+    overview: dict[str, dict[str, str]] = {}
+    for identity in sorted(previous.keys() | current.keys()):
+        old, new = previous.get(identity), current.get(identity)
+        area_status: dict[str, str] = {}
+        for area, fields in _PAGE_DESIGN_AREA_FIELDS.items():
+            if old is None:
+                status = "added"
+            elif new is None:
+                status = "deleted"
+            else:
+                before = {key: old.get(key) for key in fields}
+                after = {key: new.get(key) for key in fields}
+                status = "unchanged" if _deep_equal(before, after) else "modified"
+            area_status[area] = status
+        overview[identity] = area_status
+    display[PAGE_DESIGN_OVERVIEW_FIELD] = overview
     return display
 
 

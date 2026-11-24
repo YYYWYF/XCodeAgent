@@ -134,8 +134,8 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                         with self.assertRaisesRegex(error, "baseline"):
                             await call
 
-    async def test_second_revision_keeps_iteration_review_baseline(self) -> None:
-        """二次修订仍相对上迭代基线展示变更，事务续跑则沿用当前上一版。"""
+    async def test_second_revision_uses_current_plan_as_review_baseline(self) -> None:
+        """二次修订与上一版草稿比较，首次新增内容不得在本轮继续显示新增。"""
 
         current = deepcopy(self.harness.candidate)
         carried = {
@@ -154,9 +154,9 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
 
         result = await technical_planning_begin(state)
 
-        self.assertEqual(result["technical_plan_baseline"], carried)
+        self.assertEqual(result["technical_plan_baseline"], drop_generated_fields(current))
         self.assertEqual(result["technical_plan_baseline_origin"], "resumed")
-        self.assertNotEqual(result["technical_plan_baseline"], current)
+        self.assertNotEqual(result["technical_plan_baseline"], carried)
         self.assertNotIn("technical_plan", result, "续跑的当前计划不应被当成冷进入旧数据清空")
 
     async def _retry_failed_begin(self, *, has_candidate: bool, before_handoff: bool = False) -> None:
@@ -468,6 +468,7 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(model.call_args.args[1], revision_document(baseline))
             after = await harness.graph.aget_state(config)
             self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_confirmation")
+            self.assertEqual(after.values["technical_plan_baseline"], baseline)
             revised = after.values["technical_plan"]["api_contracts"][0]["endpoints"][0]
             self.assertEqual(revised["path"], new_path)
             self.assertEqual(revised["_change_status"], "modified")
@@ -531,7 +532,7 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('"type":"RUN_ERROR"', stream)
 
     def test_generation_scope_uses_transaction_baseline_and_survives_repair(self) -> None:
-        """当前草稿的精确接口在修订和重试均可修改，初始基线只用于差异展示。"""
+        """当前草稿的精确接口可修改，前次已改内容在本轮差异中显示未变更。"""
 
         from tests.test_technical_plan_content_changes import _base_plan, _endpoint, _OTHER_ENDPOINT_ID
         original = _base_plan()
@@ -570,8 +571,147 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                 model.assert_called_once()
                 self.assertEqual(_endpoint(result["technical_plan_candidate"])["summary"], "本次修订")
                 self.assertEqual(_endpoint(result["technical_plan_candidate"], _OTHER_ENDPOINT_ID)["summary"], "前次修订")
-                self.assertEqual(_endpoint(result["technical_plan_diff"], _OTHER_ENDPOINT_ID)["_change_status"], "modified")
+                self.assertEqual(_endpoint(result["technical_plan_diff"])["_change_status"], "modified")
+                self.assertEqual(_endpoint(result["technical_plan_diff"], _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
                 self.assertEqual(result["application_planning_recovery_boundary"]["boundary"], "candidate_committed")
+
+    def test_new_iteration_with_carryover_uses_changeset_instead_of_full_regeneration(self) -> None:
+        """新迭代只提交新增页面操作，旧接口说明和约束不得被整份生成器重写。"""
+        from tests.test_technical_plan_content_changes import _base_plan, _endpoint
+
+        baseline = _base_plan()
+        request = "新增独立页面，调用接口并展示字符串“晚上好！”"
+        new_page = {"pageId": "evening_greeting", "references": {"endpoint_dependencies": [], "action_implementations": []}}
+        changeset = _changeset(baseline, request, [{"op": "add", "path": "/pages/evening_greeting", "value": new_page}])
+        state = {
+            "request": request,
+            "technical_plan": {},
+            "requirement_spec": self.harness.requirement_spec,
+            "application_planning_recovery_boundary": application_planning_boundary_payload(
+                operation_id="new-iteration-changeset-test", operation=ApplicationPlanningOperation.INITIAL,
+                boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+                request=request, baseline=baseline,
+            ),
+        }
+        with (
+            patch("app.graph.nodes.application_technical_planning.read_technical_plan_carryover", return_value=baseline),
+            patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=baseline),
+            patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={
+                "application_config": {"auth": {"enable": False}, "authorization": {"enabled": False}},
+                "confirmed_product_plan": {},
+            }),
+            patch("app.graph.nodes.planning._generate_valid_technical_plan", side_effect=AssertionError("新迭代不能整份重生成")) as old_generator,
+            patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset) as planner,
+            patch("app.graph.nodes.planning._attach_technical_plan_contracts", side_effect=lambda _state, plan: plan),
+            patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
+        ):
+            result = technical_planning_generate(state)
+
+        old_generator.assert_not_called()
+        planner.assert_called_once()
+        self.assertEqual(planner.call_args.args[1], revision_document(baseline))
+        self.assertEqual(planner.call_args.args[2], request)
+        candidate = result["technical_plan_candidate"]
+        self.assertEqual(_endpoint(candidate)["summary"], "基线说明")
+        self.assertEqual(_endpoint(candidate)["error_codes"], ["INTERNAL_SERVER_ERROR"])
+        self.assertEqual(candidate["entities"], baseline["entities"])
+        self.assertEqual(candidate["pages"][0], baseline["pages"][0])
+        self.assertEqual(candidate["pages"][1], new_page)
+        self.assertEqual(result["technical_plan_diff"]["pages"][0]["_change_status"], "unchanged")
+        self.assertEqual(result["technical_plan_diff"]["pages"][1]["_change_status"], "added")
+
+    def test_materialize_revision_preserves_deleted_page_before_contract_validation(self) -> None:
+        """删除页在内部校验前就有墓碑，不能按缺失业务 action 实现拒绝删除。"""
+        from app.agents.main.technical_plan_revision import _materialize_revision
+        from app.services.page_implementation_contract import validate_page_implementation_contracts
+        from tests.test_technical_plan_content_changes import _base_plan, _endpoint
+
+        baseline = _base_plan()
+        endpoint_id = _endpoint(baseline)["id"]
+        baseline["pages"][0]["references"]["action_implementations"] = [
+            {"actionId": "load_greeting", "endpointId": endpoint_id}
+        ]
+        document = {
+            **baseline,
+            "pages": [],
+            "api_contracts": [],
+        }
+        product = {
+            "pages": [{
+                "pageId": "home", "name": "问候页", "_change_status": "deleted",
+                "actions": [{"actionId": "load_greeting", "behavior": {"type": "business"}}],
+            }]
+        }
+        requirement = {
+            "application_config": {"auth": {"enable": False}, "authorization": {"enabled": False}},
+            "confirmed_product_plan": product,
+        }
+        with patch("app.graph.nodes.planning._attach_technical_plan_contracts", side_effect=lambda _state, plan: plan):
+            candidate = _materialize_revision({}, requirement, baseline, document)
+
+        self.assertEqual(candidate["pages"][0]["_change_status"], "deleted")
+        self.assertEqual(validate_page_implementation_contracts(candidate, product, {}), [])
+        from app.services.technical_plan_changeset import revision_document
+        cleaned = {**candidate, **revision_document(candidate)}
+        self.assertEqual(validate_page_implementation_contracts(cleaned, product, {}), [])
+
+    def test_delete_page_and_unused_contracts_passes_full_revision_validation(self) -> None:
+        """完整修订生成删除页面及无用契约后，不再要求实现已删除业务 action。"""
+        from app.agents.main.technical_plan_revision import generate_technical_plan_revision
+        from app.services.application_config import read_application_config
+        from app.services.technical_plan_changeset import revision_document
+        from tests.test_technical_plan_content_changes import _changeset
+
+        baseline = deepcopy(self.harness.candidate)
+        product = deepcopy(self.harness.product_plan)
+        deleted_page = product["pages"][-1]
+        deleted_page["_change_status"] = "deleted"
+        page_id = deleted_page["pageId"]
+        document = revision_document(baseline)
+        page = next(page for page in document["pages"] if page["pageId"] == page_id)
+        remaining_pages = [page for page in document["pages"] if page["pageId"] != page_id]
+        remaining_endpoints = {
+            str(item.get("endpoint_id") or item.get("endpointId") or "")
+            for page in remaining_pages
+            for key in ("endpoint_dependencies", "action_implementations")
+            for item in (page.get("references") or {}).get(key, [])
+        }
+        operations = [{"op": "remove", "path": f"/pages/{page_id}", "expectedBefore": page}]
+        for contract in document["api_contracts"]:
+            used = [
+                endpoint for endpoint in contract.get("endpoints", [])
+                if endpoint.get("id") in remaining_endpoints
+            ]
+            if not used:
+                operations.append({
+                    "op": "remove", "path": f"/api_contracts/{contract['id']}", "expectedBefore": contract,
+                })
+            elif len(used) != len(contract.get("endpoints") or []):
+                operations.append({
+                    "op": "replace", "path": f"/api_contracts/{contract['id']}/endpoints",
+                    "expectedBefore": contract["endpoints"], "value": used,
+                })
+        request = f"删除页面 {page_id} 并清理无用接口"
+        changeset = _changeset(document, request, operations)
+        requirement = {
+            **self.harness.requirement_spec,
+            "pages": product["pages"],
+            "confirmed_product_plan": product,
+            "application_config": read_application_config(self.harness.workspace),
+        }
+        state = {
+            "workspace": str(self.harness.workspace), "workflow_scope": "application_planning",
+            "requirement_spec": self.harness.requirement_spec,
+            "product_plan": product, "ui_designs": self.harness.ui_designs,
+        }
+        with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset):
+            candidate, errors = generate_technical_plan_revision(state, requirement, baseline, request)
+
+        self.assertIsNotNone(candidate, errors)
+        self.assertTrue(any(
+            page.get("pageId") == page_id and page.get("_change_status") == "deleted"
+            for page in candidate["pages"]
+        ))
 
     def test_named_schema_revision_survives_generation_node_and_marks_document_endpoint(self) -> None:
         """直接点名类型字段的原有修改经过生产生成节点后生效且关联接口显示修改。"""

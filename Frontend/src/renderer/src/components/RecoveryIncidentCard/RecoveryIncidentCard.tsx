@@ -7,6 +7,7 @@ import { cx } from '../../utils'
 import '../ApplicationPlanningRecoveryIncidentCard/ApplicationPlanningRecoveryIncidentCard.less'
 import RetryEntryNotice from '../RetryEntryNotice'
 import AgentErrorCard from '../AgentErrorCard'
+import ErrorMessagePreview from '../AgentErrorCard/ErrorMessagePreview'
 import DiagnosticDetails, { recoveryDiagnosticText } from './RecoveryDiagnosticDetails'
 
 const { Text } = Typography
@@ -110,9 +111,7 @@ function FailureSummary({
           <Text className={cx('application-planning-recovery-incident-failure-label')}>
             错误说明
           </Text>
-          <Text className={cx('application-planning-recovery-incident-message')}>
-            {diagnosticMessage}
-          </Text>
+          <ErrorMessagePreview text={diagnosticMessage} />
         </div>
       ) : null}
     </div>

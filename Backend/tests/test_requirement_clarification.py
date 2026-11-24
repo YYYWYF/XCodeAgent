@@ -110,6 +110,76 @@ class RequirementClarificationTests(unittest.TestCase):
         self.assertNotIn("本轮补充说明", second_request)
         self.assertEqual(second_request.count("原始需求："), 1)
 
+    def test_successive_revision_clarifications_do_not_nest_original_request(self):
+        """连续成功的澄清只累积答案，不能把上一轮恢复信封重复包成原始需求。"""
+        request = "新增问候展示页"
+        rounds = [
+            ({"id": "page", "header": "页面关系", "question": "如何处理页面？"}, {"page": {"selected": ["新增独立页面"]}}),
+            ({"id": "module", "header": "模块归属", "question": "归属哪个模块？"}, {"module": {"selected": ["新增问候模块"]}}),
+            ({"id": "contract", "header": "接口契约", "question": "使用哪个契约？"}, {"contract": {"selected": ["新增独立契约"]}}),
+        ]
+        for question, answers in rounds:
+            state = {
+                "workflow_scope": "application_planning",
+                "requirement_spec": {"source_request": "旧人员明细应用"},
+                "requirement_changeset_context": {"request": request},
+                "clarification": {"questions": [question]},
+            }
+            interaction = {
+                "action": "answer",
+                "request": "原始需求：\n旧人员明细应用\n\n用户补充确认：\n旧回答",
+                "answers": answers,
+            }
+            request = _request_for_requirement_node(state, interaction)
+
+        self.assertEqual(request.count("原始需求："), 1)
+        for expected in ("新增问候展示页", "新增独立页面", "新增问候模块", "新增独立契约", "页面关系", "模块归属", "接口契约"):
+            self.assertIn(expected, request)
+
+    def test_already_nested_request_is_flattened_before_next_answer(self):
+        """已形成的多层信封在下一次恢复或回答时也必须收敛为一层。"""
+        nested = "原始需求：\n原始需求：\n原始需求：\n新增问候展示页"
+        result = requirement_clarification_request(
+            nested,
+            {"questions": [{"id": "contract", "header": "接口契约", "question": "使用哪个契约？"}]},
+            {"contract": {"selected": ["新增独立契约"]}},
+        )
+        self.assertEqual(result.count("原始需求："), 1)
+        self.assertIn("新增问候展示页", result)
+        self.assertIn("新增独立契约", result)
+
+    def test_revision_clarification_uses_frozen_new_iteration_request(self):
+        """联合修订澄清必须基于本次迭代请求，不能退回旧应用的 source_request。"""
+        original = (
+            "以下是上一迭代的应用现状总结。\n\n本次迭代的新需求：\n"
+            "实现一个前端页面，页面上一个接口返回字符串“React前端编程！”，前端展示这个字符串"
+        )
+        state = {
+            "workflow_scope": "application_planning",
+            "request": "原始需求：\n请为新应用「人员明细」完成规划。\n\n用户补充确认：\n- 需求归属\n  回答：已选：新增独立页面",
+            "requirement_spec": {
+                "source_request": "请为新应用「人员明细」完成规划。",
+                "confirmation_status": "pending_user_input",
+            },
+            "requirement_changeset_context": {"request": original},
+            "clarification": {"questions": [{
+                "id": "ownership", "header": "需求归属", "question": "新需求与现有页面是什么关系？",
+                "options": [{"value": "new_page", "label": "新增独立页面", "description": "保留人员明细并增加新页面"}],
+            }]},
+        }
+        interaction = {
+            "action": "answer",
+            "request": state["request"],
+            "answers": {"ownership": {"selected": ["new_page"]}},
+        }
+
+        result = _request_for_requirement_node(state, interaction)
+
+        self.assertIn(original, result)
+        self.assertIn("新增独立页面", result)
+        self.assertIn("保留人员明细并增加新页面", result)
+        self.assertNotIn("请为新应用「人员明细」完成规划。", result)
+
     def test_non_answer_requests_keep_existing_behavior(self):
         """正式确认、修改、普通请求及其他工作流不经过澄清文本转换。"""
         for action in ("confirm", "revise", "design_change"):

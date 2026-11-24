@@ -695,6 +695,7 @@ function WorkbenchPage({
       await startIteration({
         workspaceRoot: workspaceApplication.workspaceRoot,
         branchName: targetBranchName,
+        sourceBranchName: viewedBranch.name,
         description: viewedBranch.description || ''
       })
       // 2.5 清空环境数据目录中该工作区的全部会话历史，
@@ -837,6 +838,7 @@ function WorkbenchPage({
       await startIteration({
         workspaceRoot,
         branchName: targetBranchName,
+        sourceBranchName,
         description: sourceBranch?.description || ''
       })
       // 3.5 清空该工作区的会话历史，避免上一轮对话串入新迭代。

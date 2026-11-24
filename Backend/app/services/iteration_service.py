@@ -46,8 +46,10 @@ class StartIterationRequest(BaseModel):
 
     action: Literal["start_iteration"]
     workspace_root: str = Field(alias="workspaceRoot", min_length=1)
-    # 发起新迭代所基于的分支名，仅用于写 AGENTS.md 的迭代标题。
+    # 新迭代所在的分支名，用于登记本轮迭代记录。
     branch_name: str = Field(alias="branchName", min_length=1, max_length=255)
+    # 发起新迭代所基于的来源分支名；基于历史版本迭代时由调用方显式指定，未传时回退读取工作区当前配置分支。
+    source_branch_name: str = Field(default="", alias="sourceBranchName", max_length=255)
     description: str = Field(default="")
 
 
@@ -127,6 +129,7 @@ def start_iteration(request: StartIterationRequest) -> StartIterationResult:
         devagentstudio_dir,
         workspace_root=workspace_root,
         branch_name=request.branch_name,
+        source_branch_name=request.source_branch_name,
     )
     # 清理完成后再恢复上一轮已确认的字段映射：`plans/endpoints/` 刚才被清空，
     # 现在按交接记录放回规范位置。是否仍然有效由读取方按接口契约内容重新判定。
@@ -209,6 +212,7 @@ def _clear_iteration_artifacts(
     *,
     workspace_root: Path,
     branch_name: str,
+    source_branch_name: str = "",
 ) -> bool:
     """删除本轮的规划与运行态产物，**未列名的一律保留**。
 
@@ -226,13 +230,27 @@ def _clear_iteration_artifacts(
     必须在删除 `specs/` 之前读 manifest，否则登记不到任何东西。
     """
 
+    resolved_source_branch = (
+        source_branch_name.strip() or read_workspace_branch_name(workspace_root)
+    )
+
     # 先登记继承来源与新一轮的开始，再清空 —— 顺序不能反：manifest 与上一轮
     # ProductPlan 都在即将被清掉的目录里。
-    _register_ui_design_carryover(workspace_root, devagentstudio_dir)
-    _register_product_plan_carryover(workspace_root, devagentstudio_dir)
-    _register_requirement_spec_carryover(workspace_root, devagentstudio_dir)
-    _register_technical_plan_carryover(workspace_root, devagentstudio_dir)
-    _register_endpoint_design_carryover(workspace_root, devagentstudio_dir)
+    _register_ui_design_carryover(
+        workspace_root, devagentstudio_dir, source_branch=resolved_source_branch
+    )
+    _register_product_plan_carryover(
+        workspace_root, devagentstudio_dir, source_branch=resolved_source_branch
+    )
+    _register_requirement_spec_carryover(
+        workspace_root, devagentstudio_dir, source_branch=resolved_source_branch
+    )
+    _register_technical_plan_carryover(
+        workspace_root, devagentstudio_dir, source_branch=resolved_source_branch
+    )
+    _register_endpoint_design_carryover(
+        workspace_root, devagentstudio_dir, source_branch=resolved_source_branch
+    )
     begin_iteration_round(workspace_root, branch_name)
     carried_keys = carried_page_keys(workspace_root)
 
@@ -252,7 +270,12 @@ def _clear_iteration_artifacts(
     return cleared_any
 
 
-def _register_ui_design_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+def _register_ui_design_carryover(
+    workspace_root: Path,
+    devagentstudio_dir: Path,
+    *,
+    source_branch: str,
+) -> None:
     """把上一轮状态为 confirmed 的页面登记为下一轮的继承来源。
 
     只登记 `confirmed`：只有真正产出并通过校验的设计稿才值得继承，
@@ -288,12 +311,17 @@ def _register_ui_design_carryover(workspace_root: Path, devagentstudio_dir: Path
 
     write_ui_design_carryover(
         workspace_root,
-        source_branch=read_workspace_branch_name(workspace_root),
+        source_branch=source_branch,
         pages=pages,
     )
 
 
-def _register_product_plan_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+def _register_product_plan_carryover(
+    workspace_root: Path,
+    devagentstudio_dir: Path,
+    *,
+    source_branch: str,
+) -> None:
     """登记上一轮完整 ProductPlan 与页面定义，供新迭代联合修订及开发差异使用。
 
     完整 `plan` 是联合 ChangeSet 的产品基线；`definition` 继续为开发快照和无完整基线的
@@ -339,13 +367,18 @@ def _register_product_plan_carryover(workspace_root: Path, devagentstudio_dir: P
 
     write_product_plan_carryover(
         workspace_root,
-        source_branch=read_workspace_branch_name(workspace_root),
+        source_branch=source_branch,
         pages=pages,
         plan=plan,
     )
 
 
-def _register_requirement_spec_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+def _register_requirement_spec_carryover(
+    workspace_root: Path,
+    devagentstudio_dir: Path,
+    *,
+    source_branch: str,
+) -> None:
     """登记上一轮 RequirementSpec，标记显式新迭代并提供差异展示基线。
 
     正式 requirement-spec.json 本身保留在 specs 目录，本交接记录用于区分首次创建与
@@ -375,12 +408,17 @@ def _register_requirement_spec_carryover(workspace_root: Path, devagentstudio_di
 
     write_requirement_spec_carryover(
         workspace_root,
-        source_branch=read_workspace_branch_name(workspace_root),
+        source_branch=source_branch,
         spec=cleaned_spec,
     )
 
 
-def _register_technical_plan_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+def _register_technical_plan_carryover(
+    workspace_root: Path,
+    devagentstudio_dir: Path,
+    *,
+    source_branch: str,
+) -> None:
     """登记本轮**已确认**的技术规划作为下一轮的"基线"，供计划阶段做变更对比。
 
     发起新迭代会清掉 `.devagentstudio/plans/`，上一轮的 `technical-plan.json` 随之消失。
@@ -393,13 +431,12 @@ def _register_technical_plan_carryover(workspace_root: Path, devagentstudio_dir:
     读不到文件或不是已确认版本时清掉旧记录 —— 否则会让新一轮对比到更早一轮的基线。
     """
 
-    branch_name = read_workspace_branch_name(workspace_root)
     try:
         plan = json.loads(
             (devagentstudio_dir / "plans" / "technical-plan.json").read_text(encoding="utf-8")
         )
     except (OSError, json.JSONDecodeError):
-        write_technical_plan_carryover(workspace_root, source_branch=branch_name, plan=None)
+        write_technical_plan_carryover(workspace_root, source_branch=source_branch, plan=None)
         return
 
     if (
@@ -407,18 +444,23 @@ def _register_technical_plan_carryover(workspace_root: Path, devagentstudio_dir:
         or plan.get("confirmation_status") != "confirmed"
         or not plan
     ):
-        write_technical_plan_carryover(workspace_root, source_branch=branch_name, plan=None)
+        write_technical_plan_carryover(workspace_root, source_branch=source_branch, plan=None)
         return
 
     write_technical_plan_carryover(
         workspace_root,
-        source_branch=branch_name,
+        source_branch=source_branch,
         # 剥掉每轮必然变化的派生字段，避免下一轮 diff 把它们全标成"修改"。
         plan=drop_generated_fields(plan),
     )
 
 
-def _register_endpoint_design_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
+def _register_endpoint_design_carryover(
+    workspace_root: Path,
+    devagentstudio_dir: Path,
+    *,
+    source_branch: str,
+) -> None:
     """登记本轮已确认的 Endpoint 字段映射，供下一轮恢复。
 
     `plans/endpoints/` 是用户在开发阶段逐项确认的正式成果，但它在 `plans/` 目录里，
@@ -432,7 +474,7 @@ def _register_endpoint_design_carryover(workspace_root: Path, devagentstudio_dir
     write_endpoint_design_carryover(
         workspace_root,
         files=collect_endpoint_design_files(devagentstudio_dir),
-        source_branch=read_workspace_branch_name(workspace_root),
+        source_branch=source_branch,
     )
 
 
@@ -443,12 +485,7 @@ def _dict_entries(value: Any) -> list[dict[str, Any]]:
         return []
     return [item for item in value if isinstance(item, dict)]
 
-    raw_pages = plan.get("pages") if isinstance(plan, dict) else None
-    pages: dict[str, dict[str, list[str]]] = {}
-    for page in raw_pages if isinstance(raw_pages, list) else []:
-        if not isinstance(page, dict):
-            continue
-        page_id = str(page.get("pageId") or "").strip()
+
 def _clear_ui_design_except(ui_design_dir: Path, keep_keys: set[str]) -> None:
     """清空 `ui-design/`，但保留 `pages/<keep_keys 中的 PageKey>/` 这些设计稿目录。"""
 

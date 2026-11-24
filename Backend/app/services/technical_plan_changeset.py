@@ -1,4 +1,4 @@
-"""技术规划 ChangeSet 的原子事务、事实源保护及每个子需求的后置核验。"""
+"""通用 ChangeSet 的原子事务、事实源保护及本次请求的后置效果核验。"""
 
 from __future__ import annotations
 
@@ -66,13 +66,6 @@ def _effects(before: Any, after: Any, path: str = "") -> dict[str, tuple[bool, A
     return effects
 
 
-def _overlaps(left: str, right: str) -> bool:
-    """判断两项逻辑路径是否相同或互为祖先，识别子需求间的覆盖冲突。"""
-
-    a, b = path_segments(left), path_segments(right)
-    return a[:len(b)] == b or b[:len(a)] == a
-
-
 def _validate_scope(operation: Any, editable_sections: tuple[str, ...], forbidden_value_keys: set[str]) -> None:
     """保护事实源而非按页签推断修改白名单，读取和写入均不可越过技术业务边界。"""
 
@@ -110,44 +103,27 @@ def apply_document_changeset(
     document: dict[str, Any], changeset: TechnicalPlanChangeSet | dict[str, Any], *, request: str,
     editable_sections: tuple[str, ...], forbidden_value_keys: set[str],
 ) -> tuple[dict[str, Any], dict[str, tuple[bool, Any]]]:
-    """在同一副本执行所有子需求，格式、基线、冲突、无变化任一失败均不提交。"""
+    """在同一副本按序执行本次请求，格式、基线、路径或无变化失败均不提交。"""
 
     changeset = TechnicalPlanChangeSet.model_validate(changeset)
     if changeset.base_sha256 != application_planning_sha256(document):
         raise ValueError("ChangeSet baseSha256 与当前草稿不一致，请基于最新草稿重新解析。")
-    # 每项原文需要覆盖整次请求；只忽略分隔符，不允许模型漏掉后半条调整。
-    covered = [False] * len(request)
-    for intent in changeset.intents:
-        start = request.find(intent.source_text)
-        if start < 0:
-            raise ValueError(f"子需求 {intent.id} 的 sourceText 必须来自用户原始请求，不能自行改写。")
-        for index in range(start, start + len(intent.source_text)):
-            covered[index] = True
-    separators = set(" ，,。；;、\n\r\t")
-    if any(not covered[index] and char not in separators for index, char in enumerate(request)):
-        raise ValueError("ChangeSet 子需求未覆盖用户完整原文，请保留每一项调整后重新提交。")
+    # 自然语言原文由平台在模型输出后完整绑定，执行器不再解析或猜测子句覆盖范围。
+    intent = changeset.intents[0]
+    if intent.source_text != request:
+        raise ValueError("ChangeSet 必须由平台绑定完整用户原始请求，不能由模型改写。")
     working = deepcopy(document)
-    claimed: list[tuple[str, str]] = []
-    final_effects = {}
-    for intent in changeset.intents:
-        if intent.source_text not in request:
-            raise ValueError(f"子需求 {intent.id} 的 sourceText 必须来自用户原始请求，不能自行改写。")
-        before = deepcopy(working)
-        for operation in intent.operations:
-            _validate_scope(operation, editable_sections, forbidden_value_keys)
-            if operation.op != "test":
-                for path in [operation.path, *([operation.from_path] if operation.op == "move" else [])]:
-                    if any(owner != intent.id and _overlaps(path, previous) for owner, previous in claimed):
-                        raise ValueError(f"子需求之间存在覆盖冲突：{intent.id}，{path}。请明确最终要求。")
-                    claimed.append((intent.id, path))
-            try:
-                apply_logical_operation(working, operation)
-            except ValueError as exc:
-                raise ValueError(f"子需求 {intent.id}（{intent.source_text}）未落实：{exc}") from exc
-        effects = _effects(before, working)
-        if not effects:
-            raise ValueError(f"子需求 {intent.id}（{intent.source_text}）未产生实际变化，不能当作修改成功。")
-        final_effects.update(effects)
+    before = deepcopy(working)
+    for operation in intent.operations:
+        _validate_scope(operation, editable_sections, forbidden_value_keys)
+        try:
+            apply_logical_operation(working, operation)
+        except ValueError as exc:
+            # 请求可能包含整份迭代上下文；异常只保留可操作原因，避免诊断被长文本截断。
+            raise ValueError(f"本次请求未落实：{exc}") from exc
+    final_effects = _effects(before, working)
+    if not final_effects:
+        raise ValueError("本次请求未产生实际变化，不能当作修改成功。")
     verify_revision_effects(working, final_effects)
     if canonical_json(document) == canonical_json(working):
         raise ValueError("本次要求未落实：执行前后内容完全一致。")

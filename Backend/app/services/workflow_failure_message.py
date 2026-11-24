@@ -6,7 +6,12 @@ from typing import Any
 def workflow_failure_message(state: dict[str, Any]) -> str | None:
     """当前 Build 优先使用收尾错误或本轮失败任务，其他节点保留自身错误。"""
     summary = state.get("build_summary")
-    if state.get("phase") == "build" and state.get("status") == "failed" and isinstance(summary, dict) and summary.get("status") == "failed":
+    if (
+        state.get("phase") == "build"
+        and state.get("status") == "failed"
+        and isinstance(summary, dict)
+        and summary.get("status") in {"failed", "needs_repair"}
+    ):
         reason = summary.get("finalization_error")
         if isinstance(reason, str) and reason.strip():
             return reason.strip()

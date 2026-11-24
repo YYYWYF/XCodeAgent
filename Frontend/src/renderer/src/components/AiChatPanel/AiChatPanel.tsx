@@ -1545,6 +1545,9 @@ export default function AiChatPanel({
   const requirementSpecDiffForDoc = requirementDocViewActive
     ? requirementSpecDiffFromWorkflow(planningDocumentWorkflow)
     : undefined
+  const requirementSpecBaselineForDoc = requirementDocViewActive
+    ? asWorkflowRecord(planningDocumentWorkflow?.state?.requirement_spec_baseline)
+    : undefined
   const requirementProductPlanForDoc = requirementDocViewActive
     ? productPlanMemory || productPlanFile
     : undefined
@@ -6227,6 +6230,7 @@ export default function AiChatPanel({
                 }
                 requirementSpec={requirementSpecForDoc}
                 requirementSpecDiff={requirementSpecDiffForDoc}
+                requirementSpecBaseline={requirementSpecBaselineForDoc}
                 technicalPlan={
                   requirementDocViewActive
                     ? requirementTechnicalPlanForDoc

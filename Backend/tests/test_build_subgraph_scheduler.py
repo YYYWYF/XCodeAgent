@@ -1737,6 +1737,109 @@ class BuildSubgraphSchedulerTests(unittest.TestCase):
         self.assertIn("当前没有可重试的构建任务", result["build_summary"]["retry_message"])
         self.assertIn("scheduler:retry:no_candidates", result["build_events"])
 
+    def test_stage_retry_resets_exhausted_repairable_task_from_disk_progress(self) -> None:
+        """自动修复耗尽后用户点击阶段重试，应重置原失败任务重新执行并保留已完成进度。"""
+
+        scope = {"type": "application", "targetId": "application"}
+        tasks = [
+            {
+                "id": "done-task",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"operation": "modify", "path": "frontend/src/apis/doneApi.ts"}],
+            },
+            {
+                "id": "api-task",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": [],
+                "change_scope": [{"operation": "modify", "path": "frontend/src/apis/personApi.ts"}],
+            },
+            {
+                "id": "page-task",
+                "owner": "frontend",
+                "status": "pending",
+                "dependencies": ["api-task"],
+                "change_scope": [{"operation": "modify", "path": "frontend/src/pages/PersonList/index.tsx"}],
+            },
+        ]
+        calls: list[list[str]] = []
+
+        def complete_runner(**kwargs):
+            ids = [str(item["id"]) for item in kwargs["tasks"]]
+            calls.append(ids)
+            for item in kwargs["tasks"]:
+                _write_workspace_file(kwargs.get("workspace"), item["change_scope"][0]["path"])
+            return [{"task_id": item_id, "owner": "frontend", "status": "completed"} for item_id in ids]
+
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_workspace_file(workspace, "frontend/src/apis/doneApi.ts")
+            _write_workspace_file(workspace, "frontend/src/apis/personApi.ts")
+            _write_workspace_file(workspace, "frontend/src/pages/PersonList/index.tsx")
+            entry = _ready_build_state(workspace, {
+                "workspace": workspace,
+                "project_plan": {"version": "1.0.0"},
+                "build_execution_scope": scope,
+                "build_task_plan": replace_build_task_plan_tasks({
+                    "schema_version": "build-dag.v4",
+                    "build_units": {"application:root": {"id": "application:root", "kind": "application", "task_ids": ["done-task", "api-task", "page-task"]}},
+                    "unit_graph": {"nodes": ["application:root"], "edges": []},
+                }, tasks),
+                "tasks": tasks,
+                "active_run_id": "retry-stage-next",
+                "active_thread_id": "thread-1",
+                "retry_failed_tasks": False,
+            })
+            _, binding, errors = _bound_build_task_plan_for_build(entry)
+            self.assertEqual(errors, [])
+            formal_tasks = tasks_from_build_task_plan(entry["build_task_plan"])
+            formal_by_id = {item["id"]: item for item in formal_tasks}
+            source_run_id = "run-exhausted-source"
+            progress = {
+                **binding,
+                "active_run_id": source_run_id,
+                "build_execution_scope": scope,
+                "tasks": [
+                    {**formal_by_id["done-task"], "status": "completed"},
+                    {**formal_by_id["api-task"], "status": "failed", "failure_category": "acceptance_verification_failed", "failure_reason": "前次验收失败"},
+                    formal_by_id["page-task"],
+                ],
+                "build_results": [
+                    {"task_id": "done-task", "owner": "frontend", "status": "completed"},
+                    {
+                        "task_id": "api-task",
+                        "owner": "frontend",
+                        "status": "failed",
+                        "failure_category": "acceptance_verification_failed",
+                        "failure_reason": "前次验收失败",
+                    },
+                ],
+                "build_summary": {"status": "needs_repair", "failed": 1, "repairable_failures": 1},
+                "repair_task_plan": {"source": "build_scheduler", "decision": "terminal_failure", "status": "terminal_failure", "tasks": []},
+                "repair_tasks": [],
+            }
+            write_build_execution_record(
+                entry,
+                {
+                    "execution_run_id": source_run_id,
+                    "thread_id": "thread-1",
+                    "build_execution_scope": scope,
+                    **binding,
+                    "progress": progress,
+                    "progress_source_run_id": source_run_id,
+                    "execution_stage": "finalized",
+                },
+            )
+            entry["retry_source_run_id"] = source_run_id
+            with (
+                patch("app.graph.subgraphs.build.generate_frontend_with_deep_agent", side_effect=complete_runner),
+                patch("app.graph.subgraphs.build._finalize_build", return_value=({}, {}, None, [], None)),
+            ):
+                result = run_build_scheduler(entry)
+            self.assertEqual(result["status"], "completed", result)
+            self.assertEqual(calls, [["api-task"], ["page-task"]])
+
     def test_explicit_retry_executes_ready_repair_plan_when_original_failure_is_repairable(self) -> None:
         """验收失败没有瞬时重试候选时，显式恢复应执行已有修复任务。"""
 

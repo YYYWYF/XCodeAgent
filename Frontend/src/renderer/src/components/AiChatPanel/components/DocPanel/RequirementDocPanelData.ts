@@ -11,6 +11,21 @@ export type { JsonRecord }
 
 export { asRecord, recordItems, stringItems, textValue }
 
+/** 将 diff 中的删除墓碑合并到当前清单，避免删除项因不再存在于业务草稿而完全不可见。 */
+export function mergeDeletedRecords(
+  current: unknown,
+  diff: unknown,
+  idKey: 'id' | 'pageId'
+): JsonRecord[] {
+  const rows = recordItems(current)
+  const present = new Set(rows.map((item) => textValue(item[idKey])).filter(Boolean))
+  const deleted = recordItems(diff).filter((item) => {
+    const identity = textValue(item[idKey])
+    return item._change_status === 'deleted' && identity && !present.has(identity)
+  })
+  return [...rows, ...deleted]
+}
+
 export type RequirementPageRow = {
   key: string
   pageId: string
@@ -46,7 +61,8 @@ const STATE_REQUIREMENT_LABELS: Record<string, string> = {
 /** 把产品规划页面拍平为右侧面板可直接渲染的行结构，缺失字段一律降级为空态文案。 */
 export function requirementPageRows(
   productPlan: JsonRecord,
-  requirementPages: JsonRecord[]
+  requirementPages: JsonRecord[],
+  diffPages: JsonRecord[] = []
 ): RequirementPageRow[] {
   const specPageMap = new Map<string, JsonRecord>()
   requirementPages.forEach((page, index) => {
@@ -56,7 +72,11 @@ export function requirementPageRows(
   // 需求草稿阶段（澄清中/待确认）还没有 ProductPlan：退回用 spec 的页面清单渲染，
   // 避免结构化视图在只有需求数据时显示 0 个页面。
   const planPages = recordItems(productPlan.pages)
-  const sourcePages = planPages.length ? planPages : requirementPages
+  const sourcePages = mergeDeletedRecords(
+    planPages.length ? planPages : requirementPages,
+    diffPages,
+    'pageId'
+  )
   return sourcePages.map((page, index) => {
     const pageId = textValue(page.pageId, `page-${index + 1}`)
     const specPage = specPageMap.get(pageId) || {}
@@ -191,8 +211,11 @@ export type RequirementInteractionRow = {
  * 操作类型（页面跳转/提交/数据变更/操作）以及预期结果，让用户一眼看清每个页面能做什么。
  * navigation_targets 存的是 pageId，这里映射成页面中文名展示给用户。
  */
-export function requirementInteractionRows(productPlan: JsonRecord): RequirementInteractionRow[] {
-  const pages = recordItems(productPlan.pages)
+export function requirementInteractionRows(
+  productPlan: JsonRecord,
+  diffPages: JsonRecord[] = []
+): RequirementInteractionRow[] {
+  const pages = mergeDeletedRecords(productPlan.pages, diffPages, 'pageId')
   if (!pages.length) return []
   // pageId → 页面中文名，用于把 navigation_targets 里的 pageId 翻译成可读名称。
   const pageNameMap = new Map<string, string>()
@@ -237,8 +260,11 @@ export type RequirementLayoutRow = {
  * 按页面聚合 ProductPlan 各页的布局：每个页面一张卡，展示页面目标与实际包含的业务信息项
  * （如"订单号、客户、金额、状态"），让用户看清每个页面要呈现什么内容。
  */
-export function requirementLayoutRows(productPlan: JsonRecord): RequirementLayoutRow[] {
-  const pages = recordItems(productPlan.pages)
+export function requirementLayoutRows(
+  productPlan: JsonRecord,
+  diffPages: JsonRecord[] = []
+): RequirementLayoutRow[] {
+  const pages = mergeDeletedRecords(productPlan.pages, diffPages, 'pageId')
   if (!pages.length) return []
   return pages.map((page, index) => {
     const pageId = textValue(page.pageId, `page-${index + 1}`)

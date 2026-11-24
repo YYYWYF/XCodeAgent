@@ -55,6 +55,26 @@ class WorkspaceCodeGraphScanTests(unittest.TestCase):
             self.assertEqual(snapshot["code_graph"]["provider"], "test")
             self.assertEqual(source_files_for_code_graph(root, ["main.py", "notes.txt"]), ["main.py"])
 
+    def test_frontend_facts_indexes_service_based_api_modules_under_src_apis(self) -> None:
+        """委托给 ./service 的前端业务 API 模块必须进入 frontend.api_clients，供增量规划识别已有文件。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            api_file = root / "frontend/src/apis/personnelDetailContractApi.ts"
+            api_file.parent.mkdir(parents=True, exist_ok=True)
+            api_file.write_text(
+                "import service from './service';\nexport const list = () => service.get('/personnel-details');\n",
+                encoding="utf-8",
+            )
+            snapshot, _, _ = inspect_workspace(
+                root,
+                cache_root=root / ".snapshot-cache",
+            )
+            self.assertIn(
+                {"path": "frontend/src/apis/personnelDetailContractApi.ts", "kind": "http_client"},
+                snapshot["frontend"]["api_clients"],
+            )
+
     def test_missing_explicit_workspace_does_not_invoke_code_graph(self) -> None:
         """没有 workspaceRoot 时不得把 DevAgent Studio 当前目录交给代码图。"""
 

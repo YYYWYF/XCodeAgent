@@ -44,10 +44,19 @@ def item_identity(value: Any) -> str:
 
 
 def _list_index(items: list[Any], segment: str, path: str) -> int | None:
-    """只按稳定身份寻址数组，拒绝数字下标和歧义，不以展示墓碑充当存活目标。"""
+    """只按稳定身份寻址数组，拒绝数字下标、键名前缀和歧义，不以展示墓碑充当存活目标。"""
 
-    if segment.isdigit():
-        raise ValueError(f"修改数组必须使用稳定身份，不能使用数字下标：{path}。")
+    bracketed = len(segment) > 1 and segment.startswith("[") and segment.endswith("]")
+    normalized = segment[1:-1] if bracketed else segment
+    for identity_key in (*_IDENTITY_KEYS, "in"):
+        prefix = f"{identity_key}="
+        if normalized.startswith(prefix):
+            identity = normalized[len(prefix):]
+            raise ValueError(
+                f"修改数组路径的身份段只写身份值本身，不能写 {segment}；请改为 {identity}：{path}。"
+            )
+    if normalized.isdigit():
+        raise ValueError(f"修改数组必须使用稳定身份，不能使用数字下标或方括号下标：{path}。")
     matches = [i for i, item in enumerate(items) if item_identity(item) == segment]
     if len(matches) > 1:
         raise ValueError(f"修改路径匹配到多个同身份节点：{path}。")

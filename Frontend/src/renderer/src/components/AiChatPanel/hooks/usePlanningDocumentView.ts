@@ -7,7 +7,7 @@ type DocumentRequest = { key: string; reference: unknown }
 type LoadedDocuments = { identity: string; values: Record<string, unknown>; error?: string }
 
 const DOCUMENT_KEYS: Record<DocumentKind, readonly string[]> = {
-  'requirement-doc': ['requirement_spec', 'product_plan'],
+  'requirement-doc': ['requirement_spec', 'product_plan', 'requirement_spec_baseline'],
   'technical-plan': ['technical_plan', 'product_plan', 'technical_plan_baseline']
 }
 

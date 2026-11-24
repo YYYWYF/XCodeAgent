@@ -595,6 +595,16 @@ def _execute_owner_tasks(
 
     try:
         with model_operation(build_task_operation(owner, owner_tasks), business_stage="build"):
+            before_files: set[str] = (
+                {
+                    _normalize_tool_activity_path(path)
+                    for task in owner_tasks
+                    for path in task.get("target_files", [])
+                    if (Path(workspace).expanduser() / str(path).lstrip("/")).is_file()
+                }
+                if workspace and owner == "frontend"
+                else set()
+            )
             captured = capture_agent_file_changes(
                 workspace=workspace,
                 source_tool=source_tool,
@@ -675,7 +685,13 @@ def _execute_owner_tasks(
             **({"frontend_build_task_plan": state["build_task_plan"]} if owner == "frontend" else {}),
         )
     sanitized_results = [
-        _require_api_creation_diff(result, task, owner_change_set, batch_tasks=owner_tasks)
+        _require_api_creation_diff(
+            result,
+            task,
+            owner_change_set,
+            batch_tasks=owner_tasks,
+            preexisting_targets=before_files,
+        )
         if task_kind(task) == API and task.get("change_scope")
         and all(change["operation"] == "add" for change in task["change_scope"]) else result
         for task, result in zip(owner_tasks, sanitized_results, strict=True)
@@ -691,9 +707,14 @@ def _execute_owner_tasks(
 
 
 def _require_api_creation_diff(
-    result: dict, task: dict, change_set: dict | None, *, batch_tasks: list[dict],
+    result: dict,
+    task: dict,
+    change_set: dict | None,
+    *,
+    batch_tasks: list[dict],
+    preexisting_targets: set[str] | None = None,
 ) -> dict:
-    """核对新建 API 的候选确实新增了唯一授权文件，沿用原工程失败分类。"""
+    """核对新建 API 的候选确实新增了唯一授权文件；若派发前已存在（重试或跨迭代增量），允许修改。"""
     if result["status"] != "completed":
         return result
     targets = task["target_files"]
@@ -704,11 +725,16 @@ def _require_api_creation_diff(
     if outside:
         return apply_batch_scope_violation([result], outside)[0]
     expected = {_normalize_tool_activity_path(path) for path in targets}
-    added = {
-        _normalize_tool_activity_path(item["path"]) for item in (change_set or {}).get("files", [])
-        if item["changeType"] == "added"
+    preexisting = preexisting_targets or set()
+    changes_by_path = {
+        _normalize_tool_activity_path(item["path"]): item.get("changeType")
+        for item in (change_set or {}).get("files", [])
+        if item.get("path")
     }
-    if added & expected == expected:
+    if all(
+        changes_by_path.get(path) in ({"added", "modified"} if path in preexisting else {"added"})
+        for path in expected
+    ):
         return result
     failed = {
         **result, "status": "failed", "failure_category": "acceptance_verification_failed",
@@ -2013,6 +2039,32 @@ def _run_build_scheduler(
                     reset_existing_repair_tasks=True,
                 )
                 recovery_mode = "repair"
+            elif (
+                (bool(disk_retry_source) or recovery is not None)
+                and not selected_retries
+            ):
+                # 阶段级恢复没有瞬时重试或待运行修复任务时，重置当前非确认类的失败任务重新执行，保留已完成进度。
+                latest_results = {
+                    str(item.get("task_id")): item
+                    for item in state.get("build_results", [])
+                    if isinstance(item, dict) and item.get("task_id")
+                }
+                stage_retry_ids = {
+                    str(task["id"])
+                    for task in retry_slice["tasks"]
+                    if task.get("status") == "failed"
+                    and task.get("kind") != "repair"
+                    and classify_task_result(
+                        latest_results.get(str(task["id"])) or task
+                    ).get("action") == "repair"
+                }
+                if stage_retry_ids:
+                    tasks = [task for task in tasks if task.get("kind") != "repair"]
+                    tasks = reset_failed_tasks_for_retry(tasks, stage_retry_ids)
+                    build_task_plan = replace_build_task_plan_tasks(build_task_plan, tasks)
+                    retry_task_ids = stage_retry_ids
+                    recovery_mode = "retry"
+                    incoming_repair_task_plan = {}
     elif ready_repair_task_ids(incoming_repair_task_plan):
         build_task_plan = append_repair_tasks_to_build_plan(
             build_task_plan=build_task_plan,
@@ -2496,7 +2548,9 @@ def _run_build_scheduler(
     result["message"] = result["error"] or (
         completion_message if workflow_status == "completed"
         else f"Build 等待处理：{build_summary.get('failed', 0)} 个任务失败，可重试失败任务。"
-        if build_summary.get("status") == "awaiting_task_retry" else "Build 等待确认。"
+        if build_summary.get("status") == "awaiting_task_retry"
+        else "Build 等待确认。" if workflow_status == "requires_user_input"
+        else "代码构建失败，请查看构建任务详情后重试。"
     )
     # 任务批次完成不等于 Build 完成；模板路由/授权等收尾结果也必须先落盘。
     if state.get("active_run_id") and state.get("active_thread_id"):

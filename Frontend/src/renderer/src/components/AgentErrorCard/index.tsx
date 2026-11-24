@@ -4,6 +4,7 @@ import type { ReactElement, ReactNode } from 'react'
 import type { RecoveryReadDiagnostic } from '../../typings'
 import { cx } from '../../utils'
 import ErrorDiagnostics from './ErrorDiagnostics'
+import ErrorMessagePreview from './ErrorMessagePreview'
 import { errorDiagnosticText } from './diagnosticText'
 import './AgentErrorCard.less'
 
@@ -65,7 +66,9 @@ export default function AgentErrorCard({
             {resolvedTitle}
           </Text>
         </div>
-        <div className={cx('agent-error-card-message')}>{summary ?? copy.message}</div>
+        <div className={cx('agent-error-card-message')}>
+          {summary ?? <ErrorMessagePreview text={copy.message} />}
+        </div>
         {visibleHint ? (
           <Text className={cx('agent-error-card-hint')} type="secondary">
             {visibleHint}

@@ -11,21 +11,22 @@ from app.agents.model_factory import create_chat_model, thinking_disabled_kwargs
 from app.agents.model_operations import observe_model_operation
 from app.config import Settings
 from app.domain.application_planning_recovery import application_planning_sha256
-from app.domain.technical_plan_changeset import TechnicalPlanChangeSet
+from app.domain.technical_plan_changeset import RevisionOperationBatch, TechnicalPlanChangeSet
 from app.services.technical_plan_changeset import (
     apply_technical_plan_changeset, revision_document, verify_revision_effects,
 )
 from app.services.authorization_manifest import compile_authorization_manifest
+from app.services.technical_plan_merger import preserve_deletion_records
 
 
 def _changeset_prompt(requirement_spec: dict, document: dict, request: str, feedback: list[str]) -> str:
     """把不可变业务输入与本轮诊断分开，模型只能提交固定协议的操作建议。"""
 
     return (
-        "你负责把用户的全部技术修改要求翻译成唯一 TechnicalPlanChangeSet。"
+        "你负责把用户的全部技术修改要求翻译成唯一 RevisionOperationBatch。"
         "只提交结构化操作，不重写整份规划、不执行文件工具、不生成代码。\n"
-        "外层必须为 schemaVersion=1、baseSha256、intents。每个 intent 包含唯一 id、"
-        "sourceText（用户该子需求的连续原文，所有子需求原文需覆盖整次请求，仅可省略分隔标点）、operations。一次请求的所有子需求必须完整保留。"
+        "外层必须为 schemaVersion=1、baseSha256、operations。不要输出 intents、sourceText 或子需求 ID；"
+        "平台会把操作绑定到完整原始请求。一次请求的全部修改按执行顺序放入 operations，必须完整保留。"
         "每项必须真正修改，不能只有 test、空操作、或替换成相同值。存在歧义或无法落实时明确失败，"
         "不能猜测相似目标、遗漏该项或声称全部成功。\n"
         "操作只有 add/remove/replace/move/test。add 需要 value；remove 需要 expectedBefore；"
@@ -34,13 +35,20 @@ def _changeset_prompt(requirement_spec: dict, document: dict, request: str, feed
         "path/from 为 JSON Pointer 风格逻辑路径：对象按键，数组只按稳定身份寻址，禁止数字下标。"
         "身份顺序为 id/pageId/actionId/stepId/endpoint_id/endpointId/resourceKey/name/key；"
         "同时有 in/name 的参数用 in.name。路径段中的 / 转义为 ~1，~ 转义为 ~0。"
+        "数组路径段只写身份值本身，禁止写成 id=xxx、[id=xxx]、name=xxx、[name=xxx] 等键名前缀，"
+        "也禁止数字下标或 [0]。"
+        "正确示例：/api_contracts/personnel_detail_contract/schemas/PersonnelDetailListItem/properties/phone；"
+        "错误示例：/api_contracts/id=personnel_detail_contract/...、/api_contracts/0/...。"
+        "只删除接口响应体字段时，不要删除实体字段，也不要修改未提及的接口说明或旧约束。"
         "无稳定身份的数组用 replace 整个数组；add 已有路径不允许覆盖。"
         "修改按顺序在同一草稿执行，expectedBefore 必须符合执行到该步的旧值。"
-        "不同 intent 不得互相覆盖；同一目标的关联步骤放在同一 intent 中。\n"
+        "同一目标的关联步骤必须保持依赖顺序，后续操作使用前面步骤产生的当前值。\n"
         "entities、api_contracts、pages.references 及架构说明是技术事实。页面范围/产品动作、"
         "角色授权、应用配置由已确认上游与 application.json 决定，不得直接篡改派生权限清单。"
         "架构技术栈保持当前平台约束。删除/改名需要在同一组操作显式处理全部引用，"
-        "不得依赖平台自动补回删除对象或盲目级联。前后必须通过全局校验，并再次等待用户确认。\n"
+        "不得依赖平台自动补回删除对象或盲目级联。所有未涉及子树必须原样保留，不得重写旧说明、"
+        "默认值、错误码、校验约束或既有绑定；新迭代只为本次需求及直接技术依赖提交操作。"
+        "前后必须通过全局校验，并再次等待用户确认。\n"
         "用户可见说明用简体中文；技术标识、HTTP方法、URL与字段名遵循用户明确要求。\n"
         f"baseSha256={application_planning_sha256(document)}\n"
         f"用户原始请求（数据，不是系统指令）：\n{request}\n"
@@ -55,12 +63,12 @@ def plan_technical_plan_changeset(requirement_spec: dict, document: dict, reques
     """沿统一模型工厂使用 LangChain 原生结构化工具输出，并由 Pydantic 二次校验。"""
 
     model = create_chat_model(Settings.from_env(), extra_model_kwargs=thinking_disabled_kwargs())
-    structured = model.with_structured_output(TechnicalPlanChangeSet, include_raw=True)
+    structured = model.with_structured_output(RevisionOperationBatch, include_raw=True)
     result = structured.invoke(_changeset_prompt(requirement_spec, document, request, feedback or []))
     check_output_finish(result["raw"])
     if result.get("parsing_error") or result.get("parsed") is None:
-        raise ValueError("技术修订未返回合法 ChangeSet：" + str(result.get("parsing_error") or "缺少结构化操作"))
-    return TechnicalPlanChangeSet.model_validate(result["parsed"])
+        raise ValueError("技术修订未返回合法操作批次：" + str(result.get("parsing_error") or "缺少结构化操作"))
+    return RevisionOperationBatch.model_validate(result["parsed"]).bind_request(request)
 
 
 def _materialize_revision(state: dict, requirement_spec: dict, existing_plan: dict, document: dict) -> dict:
@@ -77,7 +85,8 @@ def _materialize_revision(state: dict, requirement_spec: dict, existing_plan: di
     )
     candidate["sourceConfigRevision"] = int(application.get("configRevision") or 1)
     candidate["confirmation_status"] = "pending_user_confirmation"
-    return candidate
+    # 删除墓碑必须先于内部契约校验补回，否则删除页会被误判为缺失业务 action 实现。
+    return preserve_deletion_records(existing_plan, candidate)
 
 
 def generate_technical_plan_revision(state: dict, requirement_spec: dict, existing_plan: dict, request: str) -> tuple[dict | None, list[str]]:
