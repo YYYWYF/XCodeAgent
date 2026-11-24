@@ -12,6 +12,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from app.observability.telemetry_models import ExecutionTraceRecord, TelemetryEventRecord
+from app.services import user_context
 
 
 def now() -> str:
@@ -153,5 +154,9 @@ class TelemetryPipeline:
         if producer is not None:
             for key, value in defaults.items():
                 producer.setdefault(key, value)
+        identity = payload.setdefault("identity", {})
+        if identity is not None:
+            # 埋点在工作线程执行，不依赖线程/协程上下文，直接从本地凭据文件服务真实用户。
+            identity.setdefault("user_id", user_context.current_user()[0])
         json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
         return payload
