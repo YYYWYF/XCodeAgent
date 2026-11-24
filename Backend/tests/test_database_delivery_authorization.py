@@ -212,29 +212,108 @@ class AuthorizationDeliveryTests(unittest.TestCase):
             export_database_scripts(self.root)
         self.assertFalse((self.root / "backend/db").exists())
 
-    def test_all_managed_references_and_sources_are_read_only_and_strict(self) -> None:
-        """四个 PO 和三份多语句 XML 都核验；错误、重复或原始前缀及未知修改拒绝。"""
+    def test_managed_references_and_file_limits_remain_strict(self) -> None:
+        """七文件的错误前缀、缺失、超限和非法编码仍在交付前拒绝。"""
 
         self.enable()
         verify_projection(self.root, "12ab34cd56ef")
         for relative in (*PO_FILES, *XML_FILES):
             path = self.root / relative
-            original = path.read_text()
-            for prefix in ("", "98ab34cd56ef_", "12ab34cd56ef_12ab34cd56ef_"):
-                path.write_text(original.replace("12ab34cd56ef_", prefix))
-                with self.assertRaises(ValueError):
+            original = path.read_bytes()
+            invalid = [original.replace(b"12ab34cd56ef_", prefix.encode()) for prefix in
+                       ("", "98ab34cd56ef_", "12ab34cd56ef_12ab34cd56ef_")]
+            invalid.extend((b" " * (256 * 1024 + 1), b"\xff", None))
+            for content in invalid:
+                with self.subTest(path=relative, content_size=len(content) if content is not None else None):
+                    if content is None:
+                        path.unlink()
+                    else:
+                        path.write_bytes(content)
+                    try:
+                        with self.assertRaises(ValueError):
+                            export_database_scripts(self.root)
+                        self.assertFalse(self.history.exists())
+                        self.assertFalse((self.root / "backend/db").exists())
+                    finally:
+                        path.write_bytes(original)
+
+    def test_nonsemantic_source_changes_allow_read_only_delivery(self) -> None:
+        """七文件分别增加合法注释、调整格式或换行，交付仍成功且不改写源码。"""
+
+        self.enable()
+        for relative in (*PO_FILES, *XML_FILES):
+            path = self.root / relative
+            original = path.read_bytes()
+            comment = b"// delivery comment\n" if relative in PO_FILES else b"<!-- delivery comment -->\n"
+            for content in (comment + original, b"\n  " + original + b"\n", original.replace(b"\n", b"\r\n") + b"\r\n"):
+                with self.subTest(path=relative, content=content):
+                    path.write_bytes(content)
+                    try:
+                        export_database_scripts(self.root)
+                        self.assertEqual(path.read_bytes(), content)
+                    finally:
+                        path.write_bytes(original)
+                        for generated in (self.script("v1"), self.script("v1", "alter.sql"), self.history):
+                            generated.unlink(missing_ok=True)
+
+    def test_delivery_ignores_template_sources_and_installation_records(self) -> None:
+        """来源收据缺失、损坏、摘要漂移以及模板安装记录变化不再阻止交付。"""
+
+        self.enable()
+        receipt = self.root / SOURCE_RECEIPT
+        template = self.root / ".devagentstudio/template-state.json"
+        mismatch = json.loads(receipt.read_bytes())
+        for source in mismatch["files"].values():
+            source["digest"] = "sha256:wrong"
+        state = json.loads(template.read_bytes())
+        changed = json.loads(template.read_bytes())
+        for owner in changed["installedArtifacts"].values():
+            owner["installedRevision"] = "different-revision"
+        variants = (
+            (receipt, None), (receipt, b"{broken"),
+            (receipt, b'{"files": {}}'),
+            (receipt, json.dumps(mismatch).encode()),
+            (template, None), (template, b"{broken"),
+            (template, json.dumps({**state, "installedArtifacts": {}}).encode()),
+            (template, json.dumps(changed).encode()),
+        )
+        for path, content in variants:
+            with self.subTest(path=path.name, content=content):
+                original = path.read_bytes()
+                if content is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(content)
+                try:
                     export_database_scripts(self.root)
-            path.write_text(original + "\n// unknown change")
-            with self.assertRaises(ValueError):
-                export_database_scripts(self.root)
-            path.unlink()
-            with self.assertRaises(ValueError):
-                export_database_scripts(self.root)
-            path.write_text(original)
-        (self.root / SOURCE_RECEIPT).unlink()
-        with self.assertRaisesRegex(ValueError, "来源摘要"):
-            export_database_scripts(self.root)
-        self.assertFalse(self.history.exists())
+                    self.assertEqual(path.read_bytes() if path.exists() else None, content)
+                finally:
+                    path.write_bytes(original)
+                    for generated in (self.script("v1"), self.script("v1", "alter.sql"), self.history):
+                        generated.unlink(missing_ok=True)
+
+    def test_finalize_accepts_nonsemantic_changes_and_delivers_v1_0(self) -> None:
+        """验收后非语义改动可生成首版完整 SQL、空增量及快照，不执行数据库操作。"""
+
+        compiled = self.enable()
+        self.write_inputs("v1_0")
+        for relative in (*PO_FILES, *XML_FILES):
+            path = self.root / relative
+            comment = b"// delivery comment\r\n" if relative in PO_FILES else b"<!-- delivery comment -->\r\n"
+            path.write_bytes(comment + path.read_bytes().replace(b"\n", b"\r\n") + b"\r\n")
+        before = {self.root / relative: (self.root / relative).read_bytes() for relative in (*PO_FILES, *XML_FILES)}
+        result = finalize_project({"workspace": str(self.root), "accepted": True})
+        self.assertEqual(result["status"], "completed", result)
+        sql = self.script("v1_0").read_text()
+        self.assertIn("CREATE TABLE `12ab34cd56ef_order`", sql)
+        for name in table_mapping("12ab34cd56ef").values():
+            self.assertIn(f"CREATE TABLE `{name}`", sql)
+        self.assertTrue(sql.endswith("\n\n".join(compiled["sqls"])))
+        self.assertEqual(self.script("v1_0", "alter.sql").read_bytes(), b"")
+        snapshot = DatabaseDeliveries.model_validate_json(self.history.read_bytes())
+        self.assertEqual([version.branchName for version in snapshot.versions], ["v1_0"])
+        for path, content in before.items():
+            self.assertEqual(path.read_bytes(), content)
 
     def test_snapshot_validation_and_history_without_authorization_field(self) -> None:
         """未记录权限字段的业务快照仍可验证；越界 SQL、重复表、摘要损坏都拒绝。"""

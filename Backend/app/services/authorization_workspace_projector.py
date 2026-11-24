@@ -74,28 +74,11 @@ def _project_xml(text: str, mapping: dict[str, str]) -> str:
 
 
 def verify_projection(root: Path, datasource_key: str) -> None:
-    """只读核验七文件及安装来源；无 runtime 收据也可用精确反向摘要验证。"""
+    """只读核验权限 PO 与 Mapper 的物理表名一致性，不校验模板来源和完整文件摘要。"""
 
     mapping = table_mapping(datasource_key)
     store = WorkingCopyStoreV3(root)
-    # 先经过现有安全路径读取器，不让模板状态或来源收据绕过工作区边界。
-    store.entry((WORKSPACE_ARTIFACT_DIR / "template-state.json").as_posix())
-    template = load_template_state_v3(root)
-    owners = {artifact.target: artifact for artifact in template.installedArtifacts.values()}
-    receipt = store.entry(SOURCE_RECEIPT.as_posix()).original
-    if receipt is None:
-        raise ValueError("权限交付缺少模板安装来源摘要。")
-    source_record = json.loads(receipt)
-    if not isinstance(source_record, dict):
-        raise ValueError("权限模板安装来源摘要损坏。")
-    sources = source_record.get("files", {})
-    if not isinstance(sources, dict):
-        raise ValueError("权限模板安装来源摘要损坏。")
     for relative in (*PO_FILES, *XML_FILES):
-        owner, source = owners.get(relative), sources.get(relative)
-        if (owner is None or owner.capabilityId != "authorization" or not isinstance(source, dict)
-                or source.get("installedRevision") != owner.installedRevision):
-            raise ValueError("权限交付文件缺少当前模板受管来源。")
         content = store.entry(relative).original
         if content is None or len(content) > 256 * 1024:
             raise ValueError("权限交付受管文件缺失或超过大小上限。")
@@ -105,8 +88,6 @@ def verify_projection(root: Path, datasource_key: str) -> None:
             matches = list(re.finditer(r'@TableName\(\s*"([^"\n]+)"\s*\)', text))
             if len(matches) != 1 or matches[0][1] != mapping[logical]:
                 raise ValueError("权限 PO 的 TableName 与交付物理表名不一致。")
-            match = matches[0]
-            canonical = text[:match.start(1)] + logical + text[match.end(1):]
         else:
             try:
                 xml = ElementTree.fromstring(text)
@@ -135,9 +116,6 @@ def verify_projection(root: Path, datasource_key: str) -> None:
                         raise ValueError("权限 Mapper 表引用与交付物理表名不一致。")
             if _project_xml(text, mapping) != text:
                 raise ValueError("权限 Mapper 仍引用无前缀权限表。")
-            canonical = _project_xml(text, {physical: logical for logical, physical in mapping.items()})
-        if source_digest(canonical.encode("utf-8")) != source.get("digest"):
-            raise ValueError("权限交付文件存在未知修改或模板变更，请人工核对。")
 
 
 def ensure_projection(root: Path, key: str) -> None:
