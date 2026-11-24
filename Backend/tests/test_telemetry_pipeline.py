@@ -136,3 +136,38 @@ class TelemetryProtocolTests(unittest.TestCase):
                 self.assertEqual(custom["value"]["status"], "failed" if record else "completed")
                 self.assertNotIn("private-content", response.text)
             publish.assert_called_once()
+
+
+class ModelTimingPipelineTests(unittest.TestCase):
+    """首耗时字段沿既有验证和本地/上传协议完整保留。"""
+
+    def test_timing_fields_local_http_and_missing(self):
+        """本地保留 snake_case，HTTP 保留 camelCase，旧记录不补虚假零。"""
+        from app.observability.telemetry_models import ExecutionTraceRecord
+        model = {"ttft_ms": 2, "output_duration_ms": 8}
+        with TemporaryDirectory() as tmp, patch("app.observability.telemetry_sinks.local_root", return_value=Path(tmp)):
+            pipeline = TelemetryPipeline(LocalSink())
+            pipeline.submit({"data": {"span_kind": "model", "duration_ms": 10, "model": model}}, "execution_trace")
+            pipeline.close(2)
+            saved = json.loads(next(Path(tmp).glob("*/*.jsonl")).read_text())
+            self.assertEqual(saved["data"]["model"], model)
+            ExecutionTraceRecord.model_validate(saved)
+            self.assertEqual(pipeline.diagnostics()["written"], 1)
+        requests = []
+        client = httpx.Client
+
+        def respond(request):
+            """捕获既有 HTTP sink 的真实序列化结果，不访问外网。"""
+            requests.append(json.loads(request.content))
+            return httpx.Response(200)
+
+        with patch.dict("os.environ", {"DEVAGENTSTUDIO_OBSERVABILITY_MODE": "http",
+                                       "DEVAGENTSTUDIO_OBSERVABILITY_URL": "https://example.test/batches"}), patch.object(
+            httpx, "Client", side_effect=lambda **kw: client(transport=httpx.MockTransport(respond), **kw),
+        ):
+            pipeline = TelemetryPipeline(HttpSink())
+            pipeline.submit({"data": {"duration_ms": 10, "model": model}}, "execution_trace")
+            pipeline.submit({"data": {"duration_ms": 10, "model": {"name": "old"}}}, "execution_trace")
+            pipeline.close(2)
+        self.assertEqual(requests[0]["records"][0]["data"]["model"], {"ttftMs": 2, "outputDurationMs": 8})
+        self.assertNotIn("ttftMs", requests[0]["records"][1]["data"]["model"])

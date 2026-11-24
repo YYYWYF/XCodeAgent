@@ -352,3 +352,93 @@ class DataSourceAgentTraceTests(unittest.TestCase):
                 self.assertEqual(events["model_start"]["runId"], events["model_end"]["runId"])
                 self.assertIn(events["tool_end"]["outputRefs"][0], events["model_start"]["inputRefs"][0])
                 self.assertEqual(records[-1]["event"], "agent_end")
+
+
+class ModelTimingTraceTests(unittest.TestCase):
+    """验证详细日志独立采集，不新增逐 Token 事件或工具字段。"""
+
+    def test_timing_boundaries_and_no_token_io(self):
+        """固定纳秒时间保持 round 口径，消息引用继续复用。"""
+        from langchain_core.outputs import ChatGeneration, LLMResult
+        with TemporaryDirectory() as root:
+            trace = AgentExecutionTrace(Path(root) / "timing.log")
+            response = LLMResult(generations=[[ChatGeneration(message=AIMessage(content="same"))]])
+            with patch("app.observability.agent_execution_trace.time.monotonic_ns", return_value=0) as clock:
+                trace.on_chat_model_start({}, [[AIMessage(content="same")]], run_id="a")
+                trace.on_chat_model_start({}, [[]], run_id="b")
+                clock.return_value = 2_600_000
+                with patch.object(trace, "_write") as write:
+                    trace.on_llm_new_token("", run_id="b")
+                    trace.on_llm_new_token("a", run_id="a")
+                    clock.return_value = 8_000_000
+                    trace.on_llm_new_token("b", run_id="a")
+                    write.assert_not_called()
+                clock.return_value = 10_900_000
+                trace.on_llm_end(response, run_id="a")
+                trace.on_llm_error(CancelledError(), run_id="b")
+                trace.on_llm_new_token("late", run_id="a")
+                trace.on_tool_start({}, "", run_id="tool")
+                trace.on_tool_error(ValueError(), run_id="tool")
+            self.assertFalse(trace._model_timings)
+            trace.close()
+            events = read_events(trace.path)
+            end = next(row for row in events if row["event"] == "model_end")
+            self.assertEqual((end["durationMs"], end["ttftMs"], end["outputDurationMs"]), (11, 3, 8))
+            self.assertEqual(end["outputRefs"], ["m1"])
+            error = next(row for row in events if row["event"] == "model_error")
+            self.assertEqual(error["durationMs"], 11)
+            self.assertIsNone(error["ttftMs"])
+            tool_error = next(row for row in events if row["event"] == "tool_error")
+            self.assertNotIn("ttftMs", tool_error)
+            self.assertFalse(any(row["event"] == "model_token" for row in events))
+
+    def test_timing_failure_preserves_log_and_close_clears_state(self):
+        """新增采集出错不禁用日志，取消后保留首增量，close 清理在途调用。"""
+        with TemporaryDirectory() as root:
+            trace = AgentExecutionTrace(Path(root) / "timing.log")
+            with patch("app.observability.agent_execution_trace.time.monotonic_ns", return_value=0) as clock:
+                trace.on_chat_model_start({}, [[]], run_id="a")
+                with patch("app.observability.agent_execution_trace.ModelStreamTiming.observe", side_effect=ValueError()):
+                    trace.on_llm_new_token("a", run_id="a")
+                self.assertFalse(trace._failed)
+                clock.return_value = 2_600_000
+                trace.on_llm_new_token("a", run_id="a")
+                clock.return_value = 10_900_000
+                trace.on_llm_error(CancelledError(), run_id="a")
+                trace.on_chat_model_start({}, [[]], run_id="unfinished")
+            trace.close()
+            self.assertFalse(trace._model_timings)
+            error = next(row for row in read_events(trace.path) if row["event"] == "model_error")
+            self.assertEqual((error["durationMs"], error["ttftMs"], error["outputDurationMs"]), (11, 3, 8))
+
+    def test_stream_timing_switches_independent_and_together(self):
+        """两套观测各自开启或同时开启均独立采集，关闭时不产生记录。"""
+        for telemetry_on in (True, False):
+            for trace_on in (True, False):
+                with TemporaryDirectory() as root, patch.dict(os.environ, {"FRONTEND_AGENT_TRACE_ENABLED": str(trace_on)}), patch.object(
+                    observe.telemetry, "enabled", return_value=telemetry_on,
+                ), patch.object(observe.telemetry, "publish") as publish:
+                    parent = observe.Span(observe.BuildTrace({}, {}), "task", "node")
+                    token = observe._scope.set(parent if telemetry_on else None)
+                    try:
+                        with frontend_agent_trace(workspace=root, tasks=[]) as trace:
+                            callback = BuildModelUsageCallback("fake", "fake")
+                            callback.on_chat_model_start({}, [[]], run_id="a")
+                            if trace:
+                                trace.on_chat_model_start({}, [[]], run_id="a")
+                            callback.on_llm_new_token("a", run_id="a")
+                            if trace:
+                                trace.on_llm_new_token("a", run_id="a")
+                                trace.on_llm_error(CancelledError(), run_id="a")
+                            callback.on_llm_error(CancelledError(), run_id="a")
+                    finally:
+                        observe._scope.reset(token)
+                    self.assertEqual(publish.call_count, int(telemetry_on))
+                    if telemetry_on:
+                        model = publish.call_args.args[0]["data"]
+                        self.assertEqual(model["duration_ms"], model["model"]["ttft_ms"] + model["model"]["output_duration_ms"])
+                    logs = list((Path(root) / TRACE_DIR).glob("*.log"))
+                    self.assertEqual(len(logs), int(trace_on))
+                    if trace_on:
+                        error = next(item for item in read_events(logs[0]) if item["event"] == "model_error")
+                        self.assertEqual(error["durationMs"], error["ttftMs"] + error["outputDurationMs"])

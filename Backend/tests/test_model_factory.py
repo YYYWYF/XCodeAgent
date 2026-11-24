@@ -15,6 +15,7 @@ class ModelFactoryOverrideTests(unittest.TestCase):
     def setUp(self) -> None:
         """隔离模型和 HTTP 客户端构造，不建立网络连接或留下客户端资源。"""
 
+        self.enterContext(patch("app.observability.telemetry.enabled", return_value=False))
         self.settings = Settings(
             model_base_url="https://example.com/v1", model_api_key="test-key",
             model_name="test-model [display]", default_temperature=0.4,
@@ -147,3 +148,15 @@ class ModelFactoryOverrideTests(unittest.TestCase):
         self.model_factory.assert_not_called()
         self.sync_factory.assert_not_called()
         self.async_factory.assert_not_called()
+
+    def test_telemetry_callback_registration_is_independent_of_output_log(self):
+        """原有开关分别启用 Usage 和输出日志，不改变模型流式配置。"""
+        from app.observability.model_usage_callback import BuildModelUsageCallback
+        for enabled in (True, False):
+            for output_log in (True, False):
+                with patch("app.observability.telemetry.enabled", return_value=enabled):
+                    create_chat_model(replace(self.settings, model_output_log_enabled=output_log))
+                callbacks = self.model_factory.call_args.kwargs["callbacks"] or []
+                self.assertEqual(sum(isinstance(item, BuildModelUsageCallback) for item in callbacks), int(enabled))
+                self.assertEqual(self.handler_factory.return_value in callbacks, output_log)
+                self.assertTrue(self.model_factory.call_args.kwargs["streaming"])

@@ -62,8 +62,8 @@
           "total_tokens": null, // integer|null；可选；总 Token，完整时等于输入加输出
           "usage_source": "unavailable", // string；可选；provider/estimated/unavailable，实际返回/显式估算/未取得
           "usage_status": "unavailable", // string；可选；complete/partial/unavailable，全部已知/部分已知/全部未知
-          "ttft_ms": null, // integer|null；可选；调用开始到首个非空生成输出的毫秒数；非流式或未观测时 null
-          "output_duration_ms": null // integer|null；可选；首个到最后一个非空流式输出的间隔；未观测或无有效间隔时 null
+          "ttft_ms": null, // integer|null；可选；调用开始到首个有效模型增量（正文、公开推理或工具名称/参数）的毫秒数；非流式或未观测时 null
+          "output_duration_ms": null // integer|null；可选；首个有效模型增量至调用终态的客户端耗时；未观测时 null，零毫秒保留
         },
         "error": { // object|null；可选；实际技术异常，无异常时整个对象为 null
           "layer": "model", // string；对象非空时可选；model/tool/validation/transport/system

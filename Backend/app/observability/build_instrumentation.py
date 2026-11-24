@@ -69,7 +69,7 @@ def _start(name, kind, extra=None):
         return None
 
 
-def finish(span, status, *, metrics=None, model=None, timed=True):
+def finish(span, status, *, metrics=None, model=None, timed=True, ended_ns=None):
     """终态只发送结构化统计，任何观测失败留在此边界。"""
     try:
         if span is None:
@@ -88,7 +88,7 @@ def finish(span, status, *, metrics=None, model=None, timed=True):
             "data": {
                 "trace_id": trace.trace_id, "span_id": span.span_id,
                 "parent_span_id": span.parent, "span_kind": span.kind, "run_name": span.name,
-                "duration_ms": (monotonic_ns() - span.started) // 1_000_000 if timed else None,
+                "duration_ms": ((monotonic_ns() if ended_ns is None else ended_ns) - span.started) // 1_000_000 if timed else None,
                 "status": status, "metrics": metrics, "model": model,
                 **({"started_at": span.started_at, "ended_at": _check_span_time()} if span.started_at else {}),
             },

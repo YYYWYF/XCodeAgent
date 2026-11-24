@@ -10,6 +10,7 @@ from langchain_openai.chat_models.base import (
     _create_usage_metadata,
 )
 
+from app.observability.model_stream_timing import SYNTHETIC_TIMING_KEY
 from app.services.model_transmit_client import ModelTransmitError
 
 
@@ -75,7 +76,10 @@ def final_stream_chunk(value: dict[str, Any], *, had_chunks: bool,
         chunk = AIMessageChunk(content=message.content, additional_kwargs=message.additional_kwargs,
                                tool_calls=message.tool_calls, invalid_tool_calls=message.invalid_tool_calls,
                                response_metadata=message.response_metadata, usage_metadata=message.usage_metadata)
-        return ChatGenerationChunk(message=chunk, generation_info=result.generations[0].generation_info)
+        # 官方流式入口也会回调这个补全结果；仅标记观测来源，不改变内容和聚合顺序。
+        return ChatGenerationChunk(message=chunk, generation_info={
+            **(result.generations[0].generation_info or {}), SYNTHETIC_TIMING_KEY: True,
+        })
     choice = (value.get("choices") or [{}])[0]
     info = {"finish_reason": choice["finish_reason"], "model_name": value.get("model")} \
         if not had_finish and choice.get("finish_reason") is not None else {}

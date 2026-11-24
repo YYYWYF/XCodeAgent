@@ -8,6 +8,7 @@ from statistics import mean, median
 
 from pydantic import ValidationError
 
+from app.observability.build_model_timing_report import TIMING_FIELDS, model_timing_metrics, timing_pair
 from app.observability.telemetry_models import ExecutionTraceRecord
 
 _CONDITIONS = (
@@ -37,6 +38,7 @@ _SECTIONS = {
         "acceptance_coverage": "Task 验收覆盖率", "repair_count": "修复规划次数",
         "repair_attempts": "修复执行次数", "repair_ms": "修复规划与执行耗时合计",
     },
+    "D. 模型响应耗时": TIMING_FIELDS,
 }
 
 
@@ -219,6 +221,7 @@ def _sample(key, rows, manifest, problems):
         repair_count=len(repairs), repair_attempts=len(repair_attempts),
         repair_ms=_sum(row["data"]["duration_ms"] for row in repairs + repair_attempts),
     )
+    metrics.update(model_timing_metrics(models))
     return metrics
 
 
@@ -276,12 +279,14 @@ def _render_tree(lines, label, groups):
     """保留 BuildRun 到 Task/Attempt 和真实 Model/Tool 片段的可追溯标识。"""
     for (_, build_id), rows in groups.items():
         lines.append(f"\n#### {label} BuildRun `{build_id}`")
-        lines.append("\n| 片段 | Task | Attempt | 状态 | 毫秒 | Total Token | Span / Parent |")
-        lines.append("| --- | --- | --- | --- | ---: | ---: | --- |")
+        lines.append("\n| 片段 | Task | Attempt | 状态 | 毫秒 | TTFT ms | Output Duration ms | Total Token | Span / Parent |")
+        lines.append("| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |")
         for row in rows:
             data, extra = row["data"], row["context"]["extra"]
+            pair = timing_pair(row)
             columns = [data["run_name"], extra["task_id"] or ", ".join(extra["task_ids"] or []),
                        extra["attempt_id"], data["status"], _number(data["duration_ms"]),
+                       _number(pair[1] if pair else None), _number(pair[2] if pair else None),
                        _number(_token(row, "total_tokens")),
                        f'{data["span_id"]} / {data["parent_span_id"] or "—"}']
             lines.append("| " + " | ".join(str(col or "—").replace("|", "\\|").replace("\n", " ")
@@ -296,7 +301,9 @@ def render_report(baseline, after=None):
     later_manifest, later_manifest_problems = _load_manifest(after) if after else ({}, [])
     input_problems = before_problems + later_problems + before_manifest_problems + later_manifest_problems
     lines = ["# Build 性能 Baseline" if after is None else "# Build 性能同条件对比",
-             "\n每行按 BuildRun 统计平均数（中位数）。比率范围为 0–1。变化率为 (Baseline − After) / Baseline。"]
+             "\n每行按 BuildRun 统计平均数（中位数）。比率范围为 0–1。变化率为 (Baseline − After) / Baseline。",
+             "\nTTFT 为客户端观测，累计模型耗时含并发调用，不能等同 Build 墙钟。后续耗时截至终态（包括失败/取消），不代表纯解码耗时。",
+             "\nTTFT 仅统计三个非负整数且加和一致的配对；P95 使用 nearest-rank。不同覆盖率的耗时不能直接归因比较，TTFT 不参与质量门禁。"]
     if not before:
         lines.append("\n未获得真实 Baseline，缺少可归属的 Build 样本。")
     for problem in input_problems:
@@ -315,6 +322,9 @@ def render_report(baseline, after=None):
             lines.append("\n不可比较/数据不足。请核对采集完整性、清单条件与预设重复次数。")
         for error in errors:
             lines.append(f"\n- {error}")
+        for name, side in zip(("Baseline", "After"), samples):
+            lines.append(f"\n{name} TTFT 有效配对样本 / 总调用数："
+                         f"{sum(item['ttft_samples'] for item in side)} / {sum(item['model_calls'] for item in side)}。")
         aggregates = [{}, {}]
         for title, fields in _SECTIONS.items():
             lines += [f"\n### {title}\n", "| 指标 | Baseline | After | 差值（After − Baseline） | 变化率 |",
@@ -322,7 +332,10 @@ def render_report(baseline, after=None):
             for key, label in fields.items():
                 base, new = [_values(side, key) for side in samples]
                 aggregates[0][key], aggregates[1][key] = base[0], new[0]
-                delta = new[0] - base[0] if comparable and base[0] is not None and new[0] is not None else None
+                timing_comparable = key not in TIMING_FIELDS or (
+                    _values(samples[0], "ttft_coverage")[0] == _values(samples[1], "ttft_coverage")[0]
+                )
+                delta = new[0] - base[0] if comparable and timing_comparable and base[0] is not None and new[0] is not None else None
                 change = "N/A" if delta is None or base[0] <= 0 else f"{(base[0] - new[0]) / base[0]:.1%}"
                 display = [f"{_number(avg)}（{_number(mid)}）" if avg is not None else "N/A"
                            for avg, mid in (base, new)]

@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+模型 TTFT 由 `observability/model_stream_timing.py` 识别文本、推理及工具名称/参数增量，统一 Telemetry 与 `agent_execution_trace.py` 分别按原毫秒取整方式采集；两个分量共享起止边界并满足总耗时加和，缺失证据保留 null。Transmit 完整结果补全 Chunk 带最小观测标记，避免官方流式入口将其误采。`build_model_timing_report.py` 为 Baseline 提供有效配对、nearest-rank P95 和覆盖率统计，不参与原质量门禁。回归见 `tests.test_model_stream_timing`、`tests.test_build_observability`、`tests.test_frontend_agent_trace`。
+
 权限资源结果复用时，`services/build_unit_compiler.py` 仅在冻结的 `backend_auth_resources.applied` 为真时，识别固定平台任务 `backend-auth-resources` 的归属，按原跨 Unit 编译规则清除保留 Bootstrap 的旧执行依赖；不添加或重复执行权限资源任务。清单变化仍生成新的 pending 资源任务，缺少成功证据与其他未知缺失依赖仍阻断。生成与确认重验共用编译器。回归：`tests.test_backend_auth_resource_dependencies`。
 
 需求澄清回答由 `services/requirement_clarification.py` 在 `graph/nodes/requirements.py::_request_for_requirement_node` 的模型输入边界完整转换：保留原始需求、本轮补充说明、问题标题及题意，将单选/多选的稳定值还原为选项标签和描述，并保留“其他”补充。原结构化 `answers` 不变；仅作用于需求澄清 `answer`，正式确认、修改和其他文档动作保持原规则。独立回归 `tests.test_requirement_clarification` 校验模型实际入参包含全部问答，无需文档生成入口、checkpoint 或会话生命周期绑定。

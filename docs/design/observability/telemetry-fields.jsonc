@@ -71,8 +71,8 @@
           "total_tokens": null, // integer|null；必填；输入与输出 Token 之和
           "usage_source": "unavailable", // string；必填；provider/estimated/unavailable；Token 数据来源：模型返回/显式估算/未获得
           "usage_status": "unavailable", // string；必填；complete/partial/unavailable；完整/部分已知/全部未知
-          "ttft_ms": null, // integer|null；必填；当前逻辑模型调用开始到首个非空生成输出的时间
-          "output_duration_ms": null // integer|null；必填；流式首个非空输出到最后一个非空输出的实际间隔，采集器用单调时钟测量
+          "ttft_ms": null, // integer|null；必填；当前逻辑模型调用开始到首个有效模型增量（正文、公开推理或工具名称/参数）的时间
+          "output_duration_ms": null // integer|null；必填；首个有效模型增量至调用终态的客户端耗时；与 TTFT 之和等于总耗时，未观测时 null
         },
         "error": { // object|null；必填；实际技术异常
           "layer": "model", // string；必填；model/tool/validation/transport/system；错误所属层：model/tool/validation/transport/system

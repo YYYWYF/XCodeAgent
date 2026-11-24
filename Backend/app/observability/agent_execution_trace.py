@@ -23,6 +23,7 @@ from app.branding import (
     USER_DATA_DIRECTORY_NAMES,
     WORKSPACE_ARTIFACT_DIR,
 )
+from app.observability.model_stream_timing import ModelStreamTiming
 from app.observability.backend_log_redaction import LogRedactor
 from app.observability.build_instrumentation import current_build_attempt_identity
 
@@ -112,6 +113,7 @@ class AgentExecutionTrace(BaseCallbackHandler):
         self._redactor = LogRedactor()
         self._messages: dict[str, str] = {}
         self._starts: dict[str, float] = {}
+        self._model_timings: dict[str, ModelStreamTiming] = {}
         self._last_inputs: list[list[str]] = []
         self._sequence = 0
         self._failed = False
@@ -171,10 +173,32 @@ class AgentExecutionTrace(BaseCallbackHandler):
             current[:len(old)] == old for old, current in zip(previous, refs)
         )
         self._last_inputs = refs
-        self._starts[str(run_id)] = time.monotonic()
+        self._model_timings[str(run_id)] = ModelStreamTiming(time.monotonic_ns())
         self._write("model_start", runId=str(run_id), parentRunId=str(parent_run_id),
                     context="initial" if not previous else "append" if extends else "changed",
                     inputRefs=refs, model=(kwargs.get("invocation_params") or {}).get("model"))
+
+    def on_llm_new_token(self, token, *, chunk=None, run_id, **kwargs) -> None:
+        """首增量采集不做 I/O，失败只丢弃观测而不禁用原有日志。"""
+        try:
+            observed_ns = time.monotonic_ns()
+            with self._lock:
+                timing = self._model_timings.get(str(run_id))
+                if timing is not None and not self._failed:
+                    timing.observe(token, chunk, observed_ns=observed_ns)
+        except Exception:
+            pass
+
+    def _model_elapsed(self, run_id):
+        """弹出模型状态，保留详细 Trace 原有 round 毫秒口径。"""
+        ended_ns = time.monotonic_ns()
+        timing = self._model_timings.pop(str(run_id), None)
+        if timing is None:
+            return {"durationMs": None, "ttftMs": None, "outputDurationMs": None}
+        duration = round((ended_ns - timing.started_ns) / 1_000_000)
+        values = timing.finish(ended_ns, duration_ms=duration, rounded=True)
+        return {"durationMs": duration, "ttftMs": values["ttft_ms"],
+                "outputDurationMs": values["output_duration_ms"]}
 
     @_trace_event
     def on_llm_end(self, response: Any, *, run_id: Any, **kwargs: Any) -> None:
@@ -185,7 +209,7 @@ class AgentExecutionTrace(BaseCallbackHandler):
                     metadata=[{"reasoning": _reasoning(m),
                                "usage": getattr(m, "usage_metadata", None),
                                "response": getattr(m, "response_metadata", None)} for m in messages],
-                    durationMs=self._elapsed(run_id))
+                    **self._model_elapsed(run_id))
 
     @_trace_event
     def on_tool_start(self, serialized: Any, input_str: str, *, run_id: Any,
@@ -220,7 +244,8 @@ class AgentExecutionTrace(BaseCallbackHandler):
     def _error(self, event: str, error: BaseException, run_id: Any) -> None:
         """统一序列化失败原因并保留并发调用身份。"""
         self._write(event, runId=str(run_id), errorType=type(error).__name__,
-                    error=str(error), durationMs=self._elapsed(run_id))
+                    error=str(error), **(self._model_elapsed(run_id) if event == "model_error"
+                                         else {"durationMs": self._elapsed(run_id)}))
 
     def _elapsed(self, run_id: Any) -> int | None:
         """弹出调用开始时间并计算单调时钟耗时。"""
@@ -231,6 +256,8 @@ class AgentExecutionTrace(BaseCallbackHandler):
         """关闭执行独占的文件句柄，不覆盖原业务结果。"""
         with self._lock:
             self._failed = True
+            self._model_timings.clear()
+            self._starts.clear()
             try:
                 self._file.close()
             except Exception:

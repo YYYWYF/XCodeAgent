@@ -2,10 +2,14 @@
 
 from collections import OrderedDict
 from threading import Lock
+from dataclasses import dataclass
+from time import monotonic_ns
+
+from app.observability.model_stream_timing import ModelStreamTiming
 
 from langchain_core.callbacks import BaseCallbackHandler
 
-from app.observability.build_instrumentation import finish, record_prompt, start_model, _exception_status, _is_cancelled
+from app.observability.build_instrumentation import Span, finish, record_prompt, start_model, _exception_status, _is_cancelled
 
 
 def _usage(response, provider, name, stream_usage=None):
@@ -35,6 +39,15 @@ def _usage(response, provider, name, stream_usage=None):
             "usage_status": "complete" if present == 3 else "partial" if present else "unavailable"}
 
 
+@dataclass
+class ModelCallState:
+    """隔离每次模型调用的 Span、最新用量快照和首增量时钟。"""
+
+    span: Span
+    timing: ModelStreamTiming
+    stream_usage: dict | None = None
+
+
 class BuildModelUsageCallback(BaseCallbackHandler):
     """同一个 LangChain run_id 恰好产生一次终态片段。"""
 
@@ -54,10 +67,10 @@ class BuildModelUsageCallback(BaseCallbackHandler):
             if span is None:
                 return
             with self.lock:
-                self.inflight[run_id] = (span, None)
+                self.inflight[run_id] = ModelCallState(span, ModelStreamTiming(span.started))
                 evicted = self.inflight.popitem(last=False)[1] if len(self.inflight) > 1024 else None
             if evicted is not None:
-                finish(evicted[0], "interrupted", model=_usage(None, self.provider, self.name, evicted[1]))
+                self._publish(evicted, None, "interrupted", monotonic_ns())
             if span.trace.business_stage == "unit_test" and span.extra.get("model_round") == 1 and messages:
                 first_request = messages[0]
                 record_prompt(
@@ -69,6 +82,14 @@ class BuildModelUsageCallback(BaseCallbackHandler):
 
     def on_llm_new_token(self, token, *, chunk=None, run_id, **kwargs):
         """对累计 Usage 尾帧取最新快照，Anthropic 的分段用量沿用 SDK 聚合。"""
+        try:
+            observed_ns = monotonic_ns()
+            with self.lock:
+                current = self.inflight.get(run_id)
+                if current is not None:
+                    current.timing.observe(token, chunk, observed_ns=observed_ns)
+        except Exception:
+            pass
         if self.provider == "anthropic" or chunk is None:
             return
         try:
@@ -84,7 +105,7 @@ class BuildModelUsageCallback(BaseCallbackHandler):
                     keys = ("input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "total_tokens")
                     snapshot = {key: usage[key] for key in keys if type(usage.get(key)) is int}
                     if snapshot:
-                        self.inflight[run_id] = (current[0], snapshot)
+                        current.stream_usage = snapshot
         except Exception:
             pass
 
@@ -103,11 +124,18 @@ class BuildModelUsageCallback(BaseCallbackHandler):
                 current = self.inflight.pop(run_id, None)
             if current is None:
                 return
-            span, stream_usage = current
-            try:
-                usage = _usage(response, self.provider, self.name, stream_usage)
-            except Exception:
-                usage = _usage(None, self.provider, self.name)
-            finish(span, "cancelled" if status != "completed" and _is_cancelled(span) else status, model=usage)
+            self._publish(current, response, status, monotonic_ns())
         except Exception:
             pass
+
+    def _publish(self, current, response, status, ended_ns):
+        """锁外提交唯一终态，所有耗时共享同一结束时间。"""
+        span = current.span
+        try:
+            usage = _usage(response, self.provider, self.name, current.stream_usage)
+        except Exception:
+            usage = _usage(None, self.provider, self.name)
+        duration = (ended_ns - span.started) // 1_000_000
+        usage.update(current.timing.finish(ended_ns, duration_ms=duration))
+        finish(span, "cancelled" if status != "completed" and _is_cancelled(span) else status,
+               model=usage, ended_ns=ended_ns)

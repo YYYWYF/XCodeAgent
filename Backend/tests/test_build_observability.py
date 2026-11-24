@@ -287,3 +287,123 @@ class BuildReportTests(unittest.TestCase):
             self.assertIn("Span 不完整", report)
             self.assertIn("有无效、重复或未绑定", report)
             self.assertIn("未获得真实 Baseline", render_report(root / "missing"))
+
+
+class ModelTimingCallbackTests(unittest.TestCase):
+    """用固定时钟验证模型回调的终态、隔离和 Usage 保持。"""
+
+    def test_terminal_timing_usage_and_idempotence(self):
+        """含 Anthropic 的流式、非流式、失败和取消保持原始用量与唯一终态。"""
+        for provider in ("openai", "anthropic"):
+            for output, error in ((True, None), (False, None), (True, ValueError()),
+                                  (False, CancelledError()), (True, CancelledError())):
+                with self.subTest(provider=provider, output=output, error=error):
+                    callback = BuildModelUsageCallback(provider, "test")
+                    span = observe.Span(observe.BuildTrace({}, {}), "model_inference", "model", started=0)
+                    response = LLMResult(generations=[[ChatGeneration(message=AIMessage(
+                        content="final", usage_metadata={"input_tokens": 5, "output_tokens": 2, "total_tokens": 7}))]])
+                    with patch("app.observability.model_usage_callback.start_model", return_value=span), patch(
+                        "app.observability.model_usage_callback.monotonic_ns", return_value=2_600_000,
+                    ) as clock, patch.object(observe.telemetry, "publish") as publish:
+                        callback.on_chat_model_start({}, [], run_id="a")
+                        callback.on_llm_new_token("", run_id="a")
+                        if output:
+                            callback.on_llm_new_token("x", run_id="a")
+                        clock.return_value = 9_000_000
+                        callback.on_llm_new_token("", run_id="a", chunk=ChatGenerationChunk(message=AIMessageChunk(
+                            content="", usage_metadata={"input_tokens": 4, "output_tokens": 2, "total_tokens": 6})))
+                        clock.return_value = 10_900_000
+                        if error is None:
+                            callback.on_llm_end(response, run_id="a")
+                        else:
+                            callback.on_llm_error(error, run_id="a", response=response)
+                        callback.on_llm_new_token("late", run_id="a")
+                        callback.on_llm_end(response, run_id="a")
+                        callback.on_llm_error(ValueError(), run_id="a")
+                    publish.assert_called_once()
+                    data = publish.call_args.args[0]["data"]
+                    self.assertEqual(data["duration_ms"], 10)
+                    self.assertEqual(data["model"]["ttft_ms"], 2 if output else None)
+                    self.assertEqual(data["model"]["output_duration_ms"], 8 if output else None)
+                    self.assertEqual(data["model"]["total_tokens"], 7 if provider == "anthropic" else 6)
+                    self.assertEqual(data["status"], "completed" if error is None else "cancelled" if isinstance(error, CancelledError) else "failed")
+                    self.assertFalse(callback.inflight)
+
+    def test_concurrent_ids_eviction_and_observation_failure(self):
+        """并发 run 独立，淘汰用真实边界，观测错误不能丢弃 Usage。"""
+        callback = BuildModelUsageCallback("openai", "test")
+        span = observe.Span(observe.BuildTrace({}, {}), "model_inference", "model", started=0)
+        with patch("app.observability.model_usage_callback.start_model", return_value=span), patch(
+            "app.observability.model_usage_callback.monotonic_ns", return_value=3_000_000,
+        ) as clock, patch.object(observe.telemetry, "publish") as publish:
+            for key in range(1024):
+                callback.on_chat_model_start({}, [], run_id=key)
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                list(executor.map(lambda key: callback.on_llm_new_token("a", run_id=key), range(4)))
+            clock.return_value = 8_000_000
+            callback.on_chat_model_start({}, [], run_id=1024)
+            self.assertNotIn(0, callback.inflight)
+            self.assertEqual(len(callback.inflight), 1024)
+            self.assertEqual(publish.call_args.args[0]["data"]["model"]["ttft_ms"], 3)
+            self.assertEqual(publish.call_args.args[0]["data"]["model"]["output_duration_ms"], 5)
+            self.assertEqual(publish.call_args.args[0]["data"]["status"], "interrupted")
+            with patch("app.observability.model_usage_callback.ModelStreamTiming.observe", side_effect=ValueError()):
+                callback.on_llm_new_token("a", run_id=1024, chunk=ChatGenerationChunk(message=AIMessageChunk(
+                    content="", usage_metadata={"input_tokens": 2, "output_tokens": 1, "total_tokens": 3})))
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                list(executor.map(lambda key: callback.on_llm_end(None, run_id=key), [1, 2, 3, 1024]))
+            self.assertEqual(publish.call_count, 5)
+            values = [call.args[0]["data"]["model"] for call in publish.call_args_list]
+            self.assertEqual(sum(item["ttft_ms"] == 3 for item in values), 4)
+            self.assertTrue(any(item["total_tokens"] == 3 and item["ttft_ms"] is None for item in values))
+
+
+class ModelTimingReportTests(unittest.TestCase):
+    """独立检查旧记录、非法值和相同配对分母。"""
+
+    def test_timing_statistics_and_invalid_pairs(self):
+        """P95 固定 nearest-rank，bool、缺失和加和错误不算样本。"""
+        from app.observability.build_model_timing_report import model_timing_metrics
+
+        def row(duration, ttft=None, output=None):
+            """生成仅供离线统计使用的最小模型片段。"""
+            return {"data": {"span_kind": "model", "duration_ms": duration,
+                             "model": {"ttft_ms": ttft, "output_duration_ms": output}}}
+
+        rows = [row(10, 2, 8), row(20, 10, 10), row(9), row(10, True, 9), row(10, 3, 8)]
+        metrics = model_timing_metrics(rows)
+        self.assertEqual(metrics["model_duration_ms"], 59)
+        self.assertEqual(metrics["ttft_samples"], 2)
+        self.assertEqual(metrics["ttft_total_ms"], 12)
+        self.assertEqual(metrics["output_duration_total_ms"], 18)
+        self.assertEqual(metrics["ttft_mean_ms"], 6)
+        self.assertEqual(metrics["ttft_p50_ms"], 6)
+        self.assertEqual(metrics["ttft_p95_ms"], 10)
+        self.assertEqual(metrics["ttft_coverage"], .4)
+        self.assertEqual(metrics["ttft_ratio"], .4)
+        self.assertEqual(model_timing_metrics([row(3)])["ttft_coverage"], 0)
+        for key in ("ttft_total_ms", "output_duration_total_ms", "ttft_mean_ms", "ttft_p95_ms", "ttft_ratio"):
+            self.assertIsNone(model_timing_metrics([row(3)])[key])
+        self.assertIsNone(model_timing_metrics([])["ttft_coverage"])
+        self.assertEqual(model_timing_metrics([row(0, 0, 0)])["ttft_total_ms"], 0)
+
+    def test_render_mixed_records_coverage_and_original_gate(self):
+        """报告显示旧/新覆盖率、原失败状态；TTFT 缺失不改变已有优化结论。"""
+        with TemporaryDirectory() as root:
+            before, after = Path(root) / "before", Path(root) / "after"
+            write_sample(before, "before", tokens=100)
+            write_sample(after, "after", tokens=80)
+            path = after / "events.jsonl"
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            model = next(row for row in rows if row["data"]["span_kind"] == "model")
+            model["data"]["model"].update(ttft_ms=100, output_duration_ms=20)
+            model["data"]["status"] = "failed"
+            path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            report = render_report(before, after)
+            self.assertIn("Baseline TTFT 有效配对样本 / 总调用数：0 / 1", report)
+            self.assertIn("After TTFT 有效配对样本 / 总调用数：1 / 1", report)
+            self.assertIn("| TTFT 累计 ms | N/A | 100（100） | N/A | N/A |", report)
+            self.assertIn("failed | 120 | 100 | 20 |", report)
+            self.assertIn("质量、交付时间及修复成本符合预设门禁", report)
+            self.assertIn("nearest-rank", report)
+            self.assertIn("不能等同 Build 墙钟", report)

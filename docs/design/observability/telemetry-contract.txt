@@ -45,7 +45,7 @@ LangSmith id -> span_id；name -> run_name；start_time/end_time -> started_at/e
 LangSmith status=success/error 是技术状态；平台统一为 completed/failed，取消、等待用户及中断由平台生命周期提供，业务通过与否另看 result.outcome。
 原生 session_id 是 LangSmith Tracing Project ID，禁止映射为本合同 conversation_id 或 project_id。
 input_tokens/output_tokens/total_tokens 从模型 usage 元数据取得。只统计真正的 model Span，禁止同时累加父 Node/根 Span 的聚合用量。
-流式首输出证据 -> ttft_ms；输出间隔 output_duration_ms 需要采集器记录首/尾输出，不保证 LangSmith 导出自动包含该字段。
+流式首输出证据 -> ttft_ms；后续响应耗时 output_duration_ms 需要采集器记录首增量和调用终态，不保证 LangSmith 导出自动包含该字段。
 active_intervals、result、业务 Metadata、所有 Telemetry Event 均为本平台补充，不能标为 LangSmith 自动提供。
 模型错误时 usage 可能缺失；SDK 内部隐式重试可能未展开为独立 Trace，本合同不要求或承诺完整的物理请求/重试明细。
 官方依据：https://docs.langchain.com/langsmith/run-data-format
@@ -67,9 +67,9 @@ active_intervals、result、业务 Metadata、所有 Telemetry Event 均为本�
 页面/API数：主报表统计截至截止时点累计完成过的数量，含未发布应用。页面按 project_id + target.id，接口按 project_id + target.api_contract_id + target.id 去重；重复完成和后续删除/返工不改变累计数量。周期新增需先找全量可信记录中的首完成时间再筛周期；本期不要求当前存量清单快照。
 Token总量/模式分布：provider 来源的已知 Token 分量只汇总 model Span，每个 span_id 一次；失败调用返回的已知 usage 也计入。estimated 单列，缺失部分单列覆盖率；完整总 Token 只取 usage_status=complete。
 应用平均 Token：使用与首版本完成耗时相同的应用集合/首版本边界，汇总各应用创建后、首版本前结束的模型调用 Token；若有跨边界调用不随意按秒分摊，应单列。usage 不完整的应用不能当完整成本，给覆盖率。
-TTFT：逻辑模型调用开始到首个非空生成输出；非流式/未观测填 null，统计可用样本的分位数，不用平均总耗时代替。
+TTFT：逻辑模型调用开始到首个有效模型增量（正文、公开推理或工具名称/参数）；非流式/未观测填 null，统计可用样本的分位数，不用平均总耗时代替。
 输入/输出窗口 TPS：窗口内结束的模型调用 input_tokens/output_tokens 合计除以窗口秒数，是应用侧完成量吞吐，不是 Provider 输入预填充速度。
-单次流式输出 TPS：output_tokens / (output_duration_ms / 1000)，仅 provider usage、流式首尾证据且 duration > 0；不等于窗口吞吐，分开命名。
+单次流式输出 TPS：output_tokens / (output_duration_ms / 1000)，仅 provider usage、流式首增量及终态证据且 duration > 0；不等于窗口吞吐，分开命名。
 QPS：窗口内开始的逻辑 model Span 数 / 秒数。并发数：该时刻 started_at <= t < ended_at 的模型 Span 数。用户确认本期使用结束记录做事后报表，按真实开始时间回补 QPS、按已知区间回放历史并发；无需实时开始事件。SDK 隐藏重试不计为已观测 Provider QPS。
 生成/写入代码行数按真实计量事实汇总；代码入库结果及其时机、周期汇总和去重由用户已有算法提供，不在本方案设计本地/远端认定。code_committed 承接结果并关联真实提交，不额外规定每份结果都可相加；未知行数单列。
 代码入库率：直接上传用户已有算法的 code_inclusion_rate 结果；跨应用聚合同样沿用既有方式。本方案不定义或重算分子、分母、模板来源与权重；repository_code_lines/studio_code_lines 仅在原算法提供时记录。
@@ -169,8 +169,8 @@ model
   total_tokens [integer | null]：输入与输出 Token 之和；只有数量已知时填写。
   usage_source [string (provider / estimated / unavailable)]：Token 数据来源：provider 为模型返回，estimated 为显式估算，unavailable 为未获得；正式 Token 指标只使用 provider，估算单列。
   usage_status [string (complete / partial / unavailable)]：complete 为 input/output/total 均完整，partial 为仅部分分量可知，unavailable 为全部未知；未知数值为 null，不能填 0。
-  ttft_ms [integer | null]：当前逻辑模型调用开始到首个非空生成输出的时间；包含开始后实际发生的前置网络等待/重试。需要流式首输出证据，只有角色头/空 chunk 不算；非流式或缺失证据时 null。
-  output_duration_ms [integer | null]：流式首个非空输出到最后一个非空输出的实际间隔，采集器用单调时钟测量；不是 LangSmith 原生固定字段。未观测、非流式或没有有效间隔时为 null，不用总耗时冒充。
+  ttft_ms [integer | null]：当前逻辑模型调用开始到首个有效模型增量（正文、公开推理或工具名称/参数）的时间；包含开始后实际发生的前置网络等待/重试。需要流式首输出证据，只有角色头/空 chunk 不算；非流式或缺失证据时 null。
+  output_duration_ms [integer | null]：首个有效模型增量至调用终态的客户端耗时（含失败/取消、尾帧和回调收尾），用总耗时减 TTFT，采用相同单调时钟和取整口径；非流式或未观测首增量时为 null，正常零毫秒保留。
 
 error
   layer [string (model / tool / validation / transport / system)]：错误所属层：model/tool/validation/transport/system；由已知异常或业务结果确定。
