@@ -89,6 +89,28 @@ def merge_requirement_spec(
     return merged
 
 
+def requirement_revision_diff(base_spec: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    """直接修订只比较最终内容，缺失项生成展示删除记录，不补回业务事实。"""
+
+    display = deepcopy(strip_change_status(candidate))
+    base = strip_change_status(base_spec)
+    for field, id_key in _LIST_MERGE_KEYS.items():
+        previous = {str(row.get(id_key) or ""): row for row in _list_items(base.get(field))}
+        current = _list_items(display.get(field))
+        seen = set()
+        for row in current:
+            identity = str(row.get(id_key) or "")
+            seen.add(identity)
+            old = previous.get(identity)
+            row[CHANGE_STATUS_FIELD] = "added" if old is None else "unchanged" if _deep_equal(old, row) else "modified"
+        for identity, old in previous.items():
+            if identity not in seen:
+                current.append({**deepcopy(old), CHANGE_STATUS_FIELD: "deleted"})
+        display[field] = current
+    display[APP_CHANGE_STATUS_FIELD] = _app_change_status(base, candidate)
+    return display
+
+
 def _app_change_status(
     base_spec: dict[str, Any], new_spec: dict[str, Any]
 ) -> str:

@@ -1196,6 +1196,59 @@ class RequirementsConfirmationTests(unittest.TestCase):
             "pending_user_confirmation",
         )
 
+    def test_pending_revision_uses_pre_revision_draft_for_badges(self) -> None:
+        """待确认修订按修改前草稿标修改，不再沿用首轮全新增结论。"""
+
+        spec = create_requirement_spec("创建人员明细列表，展示姓名、性别、出生日期")
+        spec["confirmation_status"] = "pending_user_confirmation"
+        revised = json.loads(json.dumps(spec))
+        revised["pages"][0]["description"] += "，每条记录增加政治面貌"
+        revised["business_flows"][0]["steps"][0] += "，并展示政治面貌"
+
+        with tempfile.TemporaryDirectory() as workspace:
+            with patch(
+                "app.graph.nodes.requirements.analyze_requirements_with_chat_model",
+                return_value={
+                    "requirement_spec": revised,
+                    "clarification": clear_clarification(revised),
+                },
+            ):
+                result = requirements({
+                    "request": "人员明细记录中加上政治面貌",
+                    "workspace": workspace,
+                    "workflow_scope": "application_planning",
+                    "application_planning_interaction": {
+                        "action": "revise", "request": "人员明细记录中加上政治面貌",
+                    },
+                    "requirement_spec": spec,
+                    "timeline": [],
+                })
+                intermediate = json.loads(json.dumps(result["requirement_spec"]))
+                intermediate["confirmation_status"] = "pending_user_input"
+                continued = requirements({
+                    "request": "补充回答",
+                    "workspace": workspace,
+                    "workflow_scope": "application_planning",
+                    "application_planning_interaction": {
+                        "action": "answer", "request": "补充回答", "answers": {},
+                    },
+                    "design_change_submission": True,
+                    "design_change_generation_target": "requirements",
+                    "design_change_generation_request": "人员明细记录中加上政治面貌",
+                    "requirement_spec": intermediate,
+                    "requirement_spec_baseline": result["requirement_spec_baseline"],
+                    "requirement_spec_diff": result["requirement_spec_diff"],
+                    "clarification": {"questions": []},
+                    "timeline": [],
+                })
+
+        self.assertEqual(continued["requirement_spec_baseline"]["pages"], spec["pages"])
+        self.assertEqual(continued["requirement_spec_diff"]["pages"][0]["_change_status"], "modified")
+        self.assertIn("政治面貌", result["requirement_spec"]["business_flows"][0]["steps"][0])
+        self.assertEqual(result["requirement_spec_diff"]["pages"][0]["_change_status"], "modified")
+        self.assertEqual(result["requirement_spec_diff"]["business_flows"][0]["_change_status"], "modified")
+        self.assertEqual(result["requirement_spec_baseline"]["pages"], spec["pages"])
+
     def test_application_planning_confirm_does_not_need_confirmation_word(self) -> None:
         """结构化 confirm 不依赖请求文本中的确认关键词即可通过需求门。"""
 

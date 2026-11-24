@@ -14,7 +14,7 @@ SUMMARY_FIELDS = frozenset({
     "unitTestMaxRepairIterations", "integrationNextAction", "repairReturnNode",
     "repairIteration", "maxRepairIterations", "requiresUserInput", "intent",
 })
-DOCUMENT_FIELDS = frozenset({"requirement_spec", "product_plan", "technical_plan", "technical_plan_baseline", "project_plan", "pending_project_plan"})
+DOCUMENT_FIELDS = frozenset({"requirement_spec", "requirement_spec_baseline", "product_plan", "technical_plan", "technical_plan_baseline", "project_plan", "pending_project_plan"})
 INTERNAL_FIELDS = frozenset({
     "tasks", "build_task_plan", "buildTaskPlan", "build_context", "build_results", "build_events",
     "code_change_sets", "workspace_snapshot", "unit_test_generation_context", "code_graph_index",
@@ -54,6 +54,9 @@ def workflow_presentation(payload: dict[str, Any], *, workspace: str | None) -> 
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     state = {**result, **previous, **{key: item for key, item in summary.items() if key not in SUMMARY_FIELDS}}
+    state = {key: value for key, value in state.items() if key not in {
+        "requirement_changeset_context", "requirement_revision_product_candidate",
+    }}
     # 确认后 clarification 会切换阶段入口，公开页面仍需携带当前 ProductPlan 的中文名称。
     designs, product = state.get("ui_designs"), state.get("product_plan")
     if isinstance(designs, dict) and isinstance(product, dict):

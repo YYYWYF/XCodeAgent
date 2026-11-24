@@ -19,6 +19,7 @@ from app.services.product_plan_carryover import (
     carried_definition_for_page,
     product_plan_carryover_path,
     read_product_plan_carryover,
+    read_product_plan_iteration_baseline,
     reconcile_product_plan_ids,
     write_product_plan_carryover,
 )
@@ -326,10 +327,12 @@ class ProductPlanCarryoverStoreTests(unittest.TestCase):
     def test_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             workspace = Path(raw)
+            baseline = {**_plan(_OLD_ITEM_IDS), "app": {"name": "上一轮应用"}, "confirmation_status": "confirmed"}
             write_product_plan_carryover(
                 workspace,
                 source_branch="v1.1",
                 pages={_PAGE_ID: {"requirement": dict(_REQUIREMENT_PAGE), "definition": _definition()}},
+                plan=baseline,
             )
 
             carried = read_product_plan_carryover(workspace)
@@ -339,6 +342,7 @@ class ProductPlanCarryoverStoreTests(unittest.TestCase):
                 [item["itemId"] for item in carried[_PAGE_ID]["definition"]["information_items"]],
                 _OLD_ITEM_IDS,
             )
+            self.assertEqual(read_product_plan_iteration_baseline(workspace), baseline)
 
     def test_empty_pages_clears_stale_record(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

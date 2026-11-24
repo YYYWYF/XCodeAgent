@@ -30,6 +30,8 @@ from app.services.technical_plan_carryover import (
     drop_generated_fields,
     write_technical_plan_carryover,
 )
+from tests.test_technical_plan_content_changes import _changeset
+from app.services.technical_plan_changeset import revision_document
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -360,7 +362,13 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             proposed["endpoints"] = [item for item in proposed["endpoints"] if item["id"] != removed["id"]]
             proposed["endpoints"][1]["summary"] = "模型顺手改写但必须丢弃"
             pending = before.tasks[0].interrupts[0].value
-            with patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(candidate, [], None)) as model:
+            changeset = _changeset(baseline, request, [
+                {"op": "replace", "path": f"/api_contracts/{contract['id']}/endpoints/{change['id']}/summary",
+                 "expectedBefore": change["summary"], "value": "用户本次修改的接口说明"},
+                {"op": "remove", "path": f"/api_contracts/{contract['id']}/endpoints/{removed['id']}",
+                 "expectedBefore": removed},
+            ])
+            with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset) as model:
                 frames = [frame async for frame in build_workflow_ag_ui_stream(
                     graph=harness.graph,
                     payload={
@@ -431,9 +439,13 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             candidate["api_contracts"][0]["endpoints"][0]["path"] = new_path
             pending = before.tasks[0].interrupts[0].value
 
+            changeset = _changeset(baseline, request, [{
+                "op": "replace", "path": f"/api_contracts/{contract['id']}/endpoints/{endpoint['id']}/path",
+                "expectedBefore": old_path, "value": new_path,
+            }])
             with patch(
-                "app.graph.nodes.planning._generate_valid_technical_plan",
-                return_value=(candidate, [], None),
+                "app.agents.main.technical_plan_revision.plan_technical_plan_changeset",
+                return_value=changeset,
             ) as model:
                 frames = [frame async for frame in build_workflow_ag_ui_stream(
                     graph=harness.graph,
@@ -452,10 +464,8 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertTrue(frames)
             model.assert_called_once()
-            requirement = model.call_args.args[1]
-            scope = requirement["technical_plan_revision_scope"]["endpoints"][0]
-            self.assertEqual(scope["path"], old_path)
-            self.assertEqual(scope["new_path"], new_path)
+            self.assertEqual(model.call_args.args[2], request)
+            self.assertEqual(model.call_args.args[1], revision_document(baseline))
             after = await harness.graph.aget_state(config)
             self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_confirmation")
             revised = after.values["technical_plan"]["api_contracts"][0]["endpoints"][0]
@@ -483,7 +493,13 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             path = technical_plan_draft_json_path({"workspace": str(harness.workspace)})
             prior_bytes = path.read_bytes()
             request = "删除 /api/canteen-evaluations/canteens 接口"
-            with patch("app.graph.nodes.planning._generate_valid_technical_plan") as model:
+            changeset = _changeset(before.values["technical_plan"], request, [{
+                "op": "remove", "path": "/api_contracts/missing/endpoints/missing", "expectedBefore": None,
+            }])
+            with (
+                patch("app.graph.nodes.planning._generate_valid_technical_plan") as model,
+                patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset),
+            ):
                 frames = [frame async for frame in build_workflow_ag_ui_stream(
                     graph=harness.graph,
                     payload={
@@ -503,14 +519,14 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(tuple(after.next), ("technical_planning_review",))
             self.assertEqual(after.values["technical_plan_candidate"], {})
             self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_generation_error")
-            self.assertIn("未匹配", " ".join(after.values["technical_plan_repair_errors"]))
+            self.assertIn("不存在", " ".join(after.values["technical_plan_repair_errors"]))
             self.assertEqual(path.read_bytes(), prior_bytes)
             self.assertEqual(
                 drop_generated_fields(after.values["technical_plan"]),
                 drop_generated_fields(before.values["technical_plan"]),
             )
             stream = "".join(frames)
-            self.assertIn("未匹配", stream)
+            self.assertIn("不存在", stream)
             self.assertIn('"type":"RUN_FINISHED"', stream)
             self.assertNotIn('"type":"RUN_ERROR"', stream)
 
@@ -536,10 +552,17 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                         request=request, baseline=current,
                     ),
                 }
+                changeset = _changeset(current, request, [{
+                    "op": "replace", "path": f"/api_contracts/greeting_contract/endpoints/{_endpoint(current)['id']}/summary",
+                    "expectedBefore": "基线说明", "value": "本次修订",
+                }])
                 with (
                     patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=original),
-                    patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={}),
-                    patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(candidate, [], None)) as model,
+                    patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={
+                        "application_config": {"auth": {"enable": False}, "authorization": {"enabled": False}},
+                        "confirmed_product_plan": {},
+                    }),
+                    patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset) as model,
                     patch("app.graph.nodes.planning._attach_technical_plan_contracts", side_effect=lambda _state, plan: plan),
                     patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
                 ):
@@ -568,10 +591,18 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                 request=request, baseline=baseline,
             ),
         }
+        source = "/api_contracts/greeting_contract/schemas/MorningGreetingResponse/properties/morningGreetingText"
+        changeset = _changeset(baseline, request, [{
+            "op": "move", "from": source, "path": source.rsplit("/", 1)[0] + "/greetingText",
+            "expectedBefore": _contract(baseline)["schemas"]["MorningGreetingResponse"]["properties"]["morningGreetingText"],
+        }])
         with (
             patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=baseline),
-            patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={}),
-            patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(candidate, [], None)),
+            patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={
+                "application_config": {"auth": {"enable": False}, "authorization": {"enabled": False}},
+                "confirmed_product_plan": {},
+            }),
+            patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset),
             patch("app.graph.nodes.planning._attach_technical_plan_contracts", side_effect=lambda _state, plan: plan),
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
         ):
@@ -580,33 +611,40 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_endpoint(result["technical_plan_diff"])["_change_status"], "modified")
         self.assertEqual(_endpoint(result["technical_plan_diff"], _OTHER_ENDPOINT_ID)["_change_status"], "unchanged")
 
-    def test_ambiguous_and_unmatched_paths_stop_before_generation(self) -> None:
-        """当前事务路径匹配失败或 HTTP 方法歧义，均在调用模型之前结束。"""
+    def test_invalid_changeset_stops_without_full_candidate_generation(self) -> None:
+        """稳定身份歧义或缺失目标原子失败，旧候选生成器不会被当作兜底调用。"""
 
         from tests.test_technical_plan_content_changes import _base_plan, _contract, _endpoint
-        base = _base_plan()
-        _contract(base)["endpoints"].append({**_endpoint(base), "id": "other.post", "method": "POST"})
-        for request, expected in (("/api/greetings/morning 接口改响应", "歧义"), ("/api/greeting/morning 接口改响应", "未匹配")):
-            with self.subTest(request=request):
-                state = {
-                    "request": request, "technical_plan": base,
-                    "requirement_spec": self.harness.requirement_spec,
-                    "application_planning_recovery_boundary": application_planning_boundary_payload(
-                        operation_id="direct-match-test", operation=ApplicationPlanningOperation.REVISE,
-                        boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
-                        request=request, baseline=base,
-                    ),
-                }
-                with (
-                    patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=base),
-                    patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={}),
-                    patch("app.graph.nodes.planning._generate_valid_technical_plan") as model,
-                ):
-                    result = technical_planning_generate(state)
-                model.assert_not_called()
-                self.assertEqual(result["technical_plan_candidate"], {})
-                self.assertIn(expected, " ".join(result["clarification"]["errors"]))
-                self.assertEqual(result["application_planning_recovery_boundary"]["boundary"], "review_ready")
+        for duplicate, expected in ((True, "多个"), (False, "不存在")):
+            base = _base_plan()
+            if duplicate:
+                _contract(base)["endpoints"].append(deepcopy(_endpoint(base)))
+            request = "删除指定接口"
+            endpoint_id = _endpoint(base)["id"] if duplicate else "missing"
+            changeset = _changeset(base, request, [{
+                "op": "remove", "path": f"/api_contracts/greeting_contract/endpoints/{endpoint_id}",
+                "expectedBefore": _endpoint(base),
+            }])
+            state = {
+                "request": request, "technical_plan": base,
+                "requirement_spec": self.harness.requirement_spec,
+                "application_planning_recovery_boundary": application_planning_boundary_payload(
+                    operation_id="direct-match-test", operation=ApplicationPlanningOperation.REVISE,
+                    boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+                    request=request, baseline=base,
+                ),
+            }
+            with (
+                patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=base),
+                patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={}),
+                patch("app.graph.nodes.planning._generate_valid_technical_plan") as old_model,
+                patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset),
+            ):
+                result = technical_planning_generate(state)
+            old_model.assert_not_called()
+            self.assertEqual(result["technical_plan_candidate"], {})
+            self.assertIn(expected, " ".join(result["clarification"]["errors"]))
+            self.assertEqual(result["application_planning_recovery_boundary"]["boundary"], "review_ready")
 
     async def test_confirm_failure_stops_without_generating_another_confirmation(self) -> None:
         """已有草稿确认失败后，真实 AG-UI/SQLite 挂起错误门，不再调用模型或改写草稿。"""

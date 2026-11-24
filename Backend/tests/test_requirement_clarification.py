@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from app.graph.nodes.requirements import _request_for_requirement_node, requirements
 from app.services.requirement_clarification import requirement_clarification_request
+from app.services.requirement_spec import consolidated_requirement_text
 
 
 class ModelInputCaptured(Exception):
@@ -67,6 +68,47 @@ class RequirementClarificationTests(unittest.TestCase):
         self.assertNotIn("__other__", result)
         self.assertNotIn("__applicationPlanningAction", result)
         self.assertEqual(answers, before)
+
+    def test_generated_resume_envelope_does_not_replace_revision_history(self):
+        """后续答案不能覆盖原始修改和前几轮答案，协议恢复信封不得重复嵌套。"""
+
+        first_request = requirement_clarification_request(
+            "人员明细记录中加上政治面貌",
+            {"questions": [{
+                "id": "political", "header": "政治面貌", "question": "政治面貌如何使用？",
+                "options": [{"value": "display", "label": "仅作列表展示字段"}],
+            }]},
+            {"political": {"selected": ["display"]}},
+        )
+        first_source = consolidated_requirement_text(first_request)
+        state = {
+            "workflow_scope": "application_planning",
+            "requirement_spec": {
+                "source_request": first_source,
+                "confirmation_status": "pending_user_input",
+            },
+            "clarification": {"questions": [{
+                "id": "fields", "header": "字段范围", "question": "列表保留哪些字段？",
+                "options": [{"value": "four", "label": "四列：保留原有并新增"}],
+            }]},
+        }
+        interaction = {
+            "action": "answer",
+            "request": (
+                "请基于原始需求和以下用户补充确认，继续生成需求文档并推进后续 workflow。\n\n"
+                "原始需求：\n最初创建人员明细应用\n\n用户补充确认：\n- 字段范围\n  回答：已选：四列"
+            ),
+            "answers": {"fields": {"selected": ["four"]}},
+        }
+
+        second_request = _request_for_requirement_node(state, interaction)
+        second_source = consolidated_requirement_text(second_request)
+
+        for text in ("人员明细记录中加上政治面貌", "仅作列表展示字段", "四列：保留原有并新增"):
+            self.assertIn(text, second_request)
+            self.assertIn(text, second_source)
+        self.assertNotIn("本轮补充说明", second_request)
+        self.assertEqual(second_request.count("原始需求："), 1)
 
     def test_non_answer_requests_keep_existing_behavior(self):
         """正式确认、修改、普通请求及其他工作流不经过澄清文本转换。"""

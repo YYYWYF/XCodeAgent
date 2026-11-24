@@ -1797,6 +1797,18 @@ def _project_plan_validation_errors(
 ) -> list[str]:
     """汇总 ProjectPlan 通用错误及创建流程的 TechnicalPlan 页面契约错误。"""
 
+    content_errors = []
+    if project_plan.get("artifact_type") == TECHNICAL_PLAN_ARTIFACT_TYPE:
+        from app.services.technical_plan_changeset import revision_document
+        from app.services.technical_plan_content_changes import technical_plan_content_errors
+
+        content_errors = technical_plan_content_errors(
+            project_plan, state.get("product_plan") if state else None,
+        )
+        if content_errors:
+            return content_errors
+        # 删除记录只供开发清理与展示，完整业务校验必须针对最终存活内容。
+        project_plan = {**project_plan, **revision_document(project_plan)}
     validation_plan = project_plan
     if (
         state is not None

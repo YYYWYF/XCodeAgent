@@ -64,10 +64,9 @@ class StartIterationResult(BaseModel):
 # 发起新迭代时清空的 .devagentstudio 子目录（如果存在）。
 # 只登记**平台自己产生**的规划/运行态目录；未列名的一律保留。
 #
-# `specs/` 刻意不在清单里：里面的 `requirement-spec.json` 与 `product-plan.json` 是上一轮
-# 已确认的产物。新一轮需求收集会把它读出来作为 LLM 的 existing_spec 输入做增量合并
-# （见 `graph/nodes/requirements.py` 的种子加载分支），删掉它LLM 就只能从零推导，
-# 会让上一轮没确认的页面在新迭代里被丢失。
+# `specs/` 刻意不在清单里：`requirement-spec.json` 是上一轮已确认的需求基线。
+# 新一轮与 product-plan-carryover.json 中的完整 ProductPlan 组成联合 ChangeSet 输入，
+# 只执行用户明确要求的操作；删掉它会让上一轮未涉及的页面和业务事实无法可靠继承。
 _CLEARABLE_DIRS = {
     "plans",
     "drafts",
@@ -295,16 +294,16 @@ def _register_ui_design_carryover(workspace_root: Path, devagentstudio_dir: Path
 
 
 def _register_product_plan_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
-    """登记上一轮的页面定义，供下一轮对「用户没要求改的页面」整份沿用。
+    """登记上一轮完整 ProductPlan 与页面定义，供新迭代联合修订及开发差异使用。
 
-    新一轮会整份重新生成 ProductPlan，模型会顺手重写其余页面的信息项与操作 ——
-    语义没变但 `itemId` 全换，于是上一轮按旧 ID 产出的设计稿对不上、继承被拒，
-    用户被迫重做本可沿用的页面。
+    完整 `plan` 是联合 ChangeSet 的产品基线；`definition` 继续为开发快照和无完整基线的
+    兜底生成提供稳定信息项与操作 ID，避免无关页面被自由重写。
 
-    登记三样东西：
-    - `requirement`：上一轮 RequirementSpec 的该页条目 —— 下一轮用它判断"用户改没改这一页"
-    - `development_page`：上一轮完整 ProductPlan 页面 —— 作为开发变更快照的迭代基线
-    - `definition`：上一轮 ProductPlan 里模型补充的那部分 —— 未变时整份沿用
+    登记四类事实：
+    - `plan`：上一轮完整 ProductPlan —— 新迭代联合 ChangeSet 的产品基线
+    - `requirement`：上一轮 RequirementSpec 的该页条目 —— 兜底沿用与开发差异的比较依据
+    - `development_page`：上一轮完整 ProductPlan 页面 —— 开发变更快照的迭代基线
+    - `definition`：上一轮 ProductPlan 的产品补充字段 —— 无完整基线时保持稳定 ID
 
     读不到任一份产物（首轮、或从未进入规划）时清掉旧记录 —— 否则会沿用更早一轮的内容。
     """
@@ -342,30 +341,21 @@ def _register_product_plan_carryover(workspace_root: Path, devagentstudio_dir: P
         workspace_root,
         source_branch=read_workspace_branch_name(workspace_root),
         pages=pages,
+        plan=plan,
     )
 
 
 def _register_requirement_spec_carryover(workspace_root: Path, devagentstudio_dir: Path) -> None:
-    """登记本轮的 RequirementSpec 作为下一轮的"基线"，供增量合并。
+    """登记上一轮 RequirementSpec，标记显式新迭代并提供差异展示基线。
 
-    LLM 在新迭代里会**整份重新生成** RequirementSpec，但它经常自由发挥——
-    简化、重写、甚至丢失基线里已有的页面/角色/模块。结果：上一迭代实现的页面
-    在新迭代里"消失"，下游 UI 设计稿继承、技术规划、构建都基于错位的 spec 推进。
+    正式 requirement-spec.json 本身保留在 specs 目录，本交接记录用于区分首次创建与
+    新迭代首次输入。新一轮把它与 ProductPlan 快照交给同一个联合 ChangeSet，未涉及内容
+    不再依赖整份重生成后的页面补回。
 
-    本函数在 `start_iteration` 时把当前磁盘上的 requirement-spec.json 完整登记到
-    `.devagentstudio/requirement-spec-carryover.json`。新一轮 `requirements` 节点在
-    LLM 输出后调 `requirement_spec_merger.merge_requirement_spec`，把"LLM 重新生成
-    的 spec"与"基线 spec"按 pageId 合并 —— 未在 LLM 输出里出现的基线页面会被
-    自动补回（_change_status=unchanged），防止"被静默删除"。
+    读不到文件（首轮、或从未进入规划）时清掉旧记录，避免把更早一轮误当成本轮基线。
 
-    读不到文件（首轮、或从未进入规划）时清掉旧记录 —— 否则会让新一轮沿用更早一轮的基线。
-
-    **关键细节**：`agent_note` 是 LLM 输出的"原始 JSON 字符串"，可能含未转义引号、
-    换行符或其他非法 JSON 字符 —— 写入 carryover 会让整个文件变非法 JSON，导致
-    `read_requirement_spec_carryover` 静默返回 None（异常被 except 吞掉），下一轮
-    merger 走"首轮创建"分支，全部标 added（用户实测 hello_world 标了 added 而非
-    unchanged）。这里把 agent_note 剥掉再写盘：它只是 LLM 的思考过程，对下一轮
-    合并判断（按 pageId 对齐）没有价值。
+    `agent_note` 只是模型原始输出和溯源材料，不属于可编辑业务文档；写交接记录前剥离，
+    避免无关模型元数据进入下一轮事务。
     """
 
     try:

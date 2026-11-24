@@ -14,6 +14,7 @@ from app.graph.nodes.application_revision import (
 )
 from app.workspace.plan_documents import commit_technical_plan_document
 from app.workspace.revision_draft_documents import load_revision_draft, revision_draft_directory
+from tests.test_technical_plan_content_changes import _changeset
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -34,9 +35,12 @@ class RevisionDraftRevisionsTests(unittest.TestCase):
             {**self.harness.candidate, "confirmation_status": "confirmed"},
         ))
         self.canonical_before = self.canonical.read_bytes()
-        first = deepcopy(self.harness.candidate)
-        first["architecture"]["frontend"] += " 第一轮增加前端说明。"
-        with patch("app.graph.nodes.application_revision.plan_project_with_chat_model", return_value=first):
+        first = _changeset(self.harness.candidate, self.active.request, [{
+            "op": "replace", "path": "/architecture/frontend",
+            "expectedBefore": self.harness.candidate["architecture"]["frontend"],
+            "value": self.harness.candidate["architecture"]["frontend"] + " 第一轮增加前端说明。",
+        }])
+        with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=first):
             _create_technical_plan_draft(self.workspace, self.active)
         self.directory = revision_draft_directory(
             self.workspace, change_id=self.active.change_id, artifact_key="technical-plan",
@@ -67,16 +71,21 @@ class RevisionDraftRevisionsTests(unittest.TestCase):
             with self.subTest(section=section):
                 _, previous = self._load()
 
-                def planner(requirement, *, existing_plan):
-                    """验证生产入口传入当前磁盘草稿，再模拟模型原位添加本轮修改。"""
+                def planner(requirement, document, request, *, feedback):
+                    """验证模型只收到当前草稿的业务投影，并返回本轮单项操作。"""
 
-                    self.assertEqual(existing_plan, previous)
-                    self.assertIn(self.active.request, requirement["planning_adjustment_request"])
-                    self.assertIn(feedback, requirement["planning_adjustment_request"])
-                    existing_plan["architecture"][section] += f" 本轮{feedback}。"
-                    return existing_plan
+                    from app.services.technical_plan_changeset import revision_document
+                    self.assertEqual(document, revision_document(previous))
+                    self.assertIn(self.active.request, request)
+                    self.assertIn(feedback_text, request)
+                    old = document["architecture"][section]
+                    return _changeset(document, request, [{
+                        "op": "replace", "path": f"/architecture/{section}",
+                        "expectedBefore": old, "value": old + f" 本轮{feedback_text}。",
+                    }])
 
-                with patch("app.graph.nodes.application_revision.plan_project_with_chat_model", side_effect=planner):
+                feedback_text = feedback
+                with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=planner):
                     result = self._revise(feedback)
                 metadata, current = self._load()
                 self.assertEqual(result["technical_plan_baseline"], previous)
@@ -100,7 +109,7 @@ class RevisionDraftRevisionsTests(unittest.TestCase):
 
         before = {name: (self.directory / name).read_bytes() for name in ("artifact.json", "metadata.json")}
         _, previous = self._load()
-        with patch("app.graph.nodes.application_revision.plan_project_with_chat_model", side_effect=RuntimeError("模型暂不可用")):
+        with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=RuntimeError("模型暂不可用")):
             with self.assertRaisesRegex(RuntimeError, "模型暂不可用"):
                 self._revise("补充后端说明")
         for name, content in before.items():
@@ -115,19 +124,34 @@ class RevisionDraftRevisionsTests(unittest.TestCase):
 
         before = {name: (self.directory / name).read_bytes() for name in ("artifact.json", "metadata.json")}
         _, previous = self._load()
-        invalid = deepcopy(previous)
-        invalid["architecture"]["frontend"] = "An English explanation without Chinese characters."
-        with patch("app.graph.nodes.application_revision.plan_project_with_chat_model", return_value=invalid):
+        def invalid_planner(requirement, document, request, *, feedback):
+            """返回语法合法但中文规则不合法的操作，验证全局校验保留原稿。"""
+
+            return _changeset(document, request, [{
+                "op": "replace", "path": "/architecture/frontend",
+                "expectedBefore": document["architecture"]["frontend"],
+                "value": "An English explanation without Chinese characters.",
+            }])
+
+        with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=invalid_planner):
             with self.assertRaisesRegex(ValueError, "简体中文"):
                 self._revise("补充后端说明")
         for name, content in before.items():
             self.assertEqual((self.directory / name).read_bytes(), content)
         self.assertEqual(self.canonical.read_bytes(), self.canonical_before)
-        candidate = deepcopy(previous)
-        candidate["architecture"]["backend"] += " 重试补充后端说明。"
-        with patch("app.graph.nodes.application_revision.plan_project_with_chat_model", return_value=candidate) as planner:
+        def retry_planner(requirement, document, request, *, feedback):
+            """重试始终基于保留的旧草稿，不复用失败候选。"""
+
+            return _changeset(document, request, [{
+                "op": "replace", "path": "/architecture/backend",
+                "expectedBefore": document["architecture"]["backend"],
+                "value": document["architecture"]["backend"] + " 重试补充后端说明。",
+            }])
+
+        with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=retry_planner) as planner:
             result = self._revise("补充后端说明")
-        self.assertEqual(planner.call_args.kwargs["existing_plan"], previous)
+        from app.services.technical_plan_changeset import revision_document
+        self.assertEqual(planner.call_args.args[1], revision_document(previous))
         self.assertEqual(result["technical_plan_baseline"], previous)
         self.assertIn("重试补充后端说明", result["technical_plan"]["architecture"]["backend"])
         self.assertEqual(self.canonical.read_bytes(), self.canonical_before)

@@ -15,6 +15,8 @@ from app.workspace.plan_documents import (
     technical_plan_json_path, technical_plan_draft_json_path,
 )
 from tests.test_application_page_planning import _confirmed_state
+from app.services.technical_plan_carryover import drop_generated_fields
+from tests.test_technical_plan_content_changes import _changeset
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -43,7 +45,7 @@ class TechnicalPlanJsonStorageTests(unittest.TestCase):
             commit_technical_plan_document(state, candidate)
             self.assertEqual(formal.read_bytes(), before)
             self.assertEqual(current_technical_plan_json_path(state), draft)
-            self.assertEqual(prepare_technical_planning_retry(state)["technical_plan"], candidate)
+            self.assertEqual(prepare_technical_planning_retry(state)["technical_plan"], drop_generated_fields(candidate))
             review = load_stage_artifacts(state, "technical_planning_confirm")
             self.assertEqual(review["technical_plan"], candidate)
             self.assertEqual(review["project_plan_json_path"], str(draft))
@@ -75,7 +77,7 @@ class TechnicalPlanJsonStorageTests(unittest.TestCase):
             formal.write_text(json.dumps(harness.candidate, ensure_ascii=False), encoding="utf-8")
             before = formal.read_bytes()
             self.assertEqual(current_technical_plan_json_path(state), formal)
-            self.assertEqual(prepare_technical_planning_retry(state)["technical_plan"], harness.candidate)
+            self.assertEqual(prepare_technical_planning_retry(state)["technical_plan"], drop_generated_fields(harness.candidate))
             review = load_stage_artifacts(state, "technical_planning_confirm")
             self.assertEqual(review["technical_plan"], harness.candidate)
             self.assertEqual(formal.read_bytes(), before)
@@ -106,7 +108,11 @@ class TechnicalPlanJsonStorageTests(unittest.TestCase):
             candidate = deepcopy(harness.candidate)
             candidate["architecture"]["frontend"] += " 本轮修订保留全部接口类型。"
             active = SimpleNamespace(change_id="revision", request="完善技术架构说明")
-            with patch("app.graph.nodes.application_revision.plan_project_with_chat_model", return_value=candidate):
+            changeset = _changeset(harness.candidate, active.request, [{
+                "op": "replace", "path": "/architecture/frontend",
+                "expectedBefore": harness.candidate["architecture"]["frontend"], "value": candidate["architecture"]["frontend"],
+            }])
+            with patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset):
                 draft = _create_technical_plan_draft(harness.workspace, active)
             self.assertNotIn("markdown", draft)
             self.assertEqual(path.read_bytes(), before)

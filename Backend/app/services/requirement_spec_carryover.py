@@ -1,15 +1,12 @@
-"""跨迭代交接 RequirementSpec 的"上一迭代基线"，供新一轮做增量合并与变更标记。
+"""跨迭代交接 RequirementSpec 基线，供新一轮联合 ChangeSet 与变更标记使用。
 
-**为什么需要它**：`iteration_service.start_iteration` 会保留 `specs/requirement-spec.json`
-作为新迭代 LLM 的种子（见 `_CLEARABLE_DIRS` 注释）。但 LLM 在重新生成 spec 时可能
-**简化、重写或丢失**基线里已有的页面/角色/模块，让旧迭代实现的页面在新迭代里"消失"。
+`iteration_service.start_iteration` 保留正式 `specs/requirement-spec.json`，并在本文件登记
+显式的新迭代边界。新一轮把该 RequirementSpec 与 ProductPlan 交接快照组成同一份业务文档，
+模型只提交稳定身份路径操作；未涉及子树保持原样，不再整份生成后按页面补回。
 
 本文件（`.devagentstudio/requirement-spec-carryover.json`）与 `product-plan-carryover.json`
-同理，**刻意不放进 `_CLEARABLE_DIRS`**：它是跨迭代的基线事实，不是本轮产物。
-
-新一轮 `requirements` 节点在 LLM 输出后调 `requirement_spec_merger.merge_requirement_spec`，
-把"LLM 重新生成的 spec"与"本文件登记的基线 spec"按 `pageId` 合并 —— 未在 LLM 输出里
-出现的基线页面会被自动补回（_change_status=unchanged），防止"被静默删除"。
+刻意不放进 `_CLEARABLE_DIRS`：它们是跨迭代的基线事实，不是本轮产物。页面新增、修改、
+删除及未变更标记均由同一次 ChangeSet 的真实前后内容计算。
 """
 
 from __future__ import annotations

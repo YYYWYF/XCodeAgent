@@ -146,6 +146,41 @@ class ProductPlanningRetryTests(unittest.TestCase):
         retry_feedback = planner_mock.call_args_list[1].kwargs["user_feedback"]
         self.assertIn("跳转操作未同步到 navigation_targets", retry_feedback)
 
+    @patch("app.graph.nodes.product_planning.write_product_plan_documents")
+    @patch("app.graph.nodes.product_planning.plan_product_with_chat_model")
+    def test_revision_content_and_badge_reach_product_plan(
+        self,
+        planner_mock,
+        writer_mock,
+    ) -> None:
+        """需求修订的新字段与修改标识必须同步到 ProductPlan 文档视图。"""
+
+        requirement_spec = create_requirement_spec("创建人员明细列表，展示姓名、性别、出生日期")
+        requirement_spec["pages"][0]["description"] += "，每条记录增加政治面貌"
+        requirement_spec["business_flows"][0]["steps"][0] += "，并展示政治面貌"
+        requirement_diff = deepcopy(requirement_spec)
+        requirement_diff["pages"][0]["_change_status"] = "modified"
+        valid_plan = create_product_plan(requirement_spec)
+        valid_plan["pages"][0]["information_items"].append({
+            "itemId": "political_status", "label": "政治面貌",
+            "description": "每条人员记录的政治面貌。",
+        })
+        planner_mock.return_value = valid_plan
+        writer_mock.return_value = ("product-plan.md", "product-plan.json")
+
+        update = product_planning({
+            "requirement_spec": requirement_spec,
+            "requirement_spec_diff": requirement_diff,
+            "request": "人员明细记录中加上政治面貌",
+        })
+
+        self.assertIn("政治面貌", update["product_plan"]["business_flows"][0]["steps"][0])
+        self.assertIn(
+            "political_status",
+            {item["itemId"] for item in update["product_plan"]["pages"][0]["information_items"]},
+        )
+        self.assertEqual(update["product_plan"]["pages"][0]["_change_status"], "modified")
+
     def test_revision_regenerates_pending_product_with_existing_baseline(self) -> None:
         """正式修订及恢复重入不能复用旧待确认稿，普通恢复展示仍直接复用。"""
         requirement_spec = create_requirement_spec("创建一个库存管理系统")

@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.agents.main.planner import plan_project_with_chat_model
+from app.agents.main.technical_plan_revision import generate_technical_plan_revision
 from app.graph.nodes.common import workspace_from_state
 from app.graph.state import ProjectState
 from app.domain.application_planning_recovery import application_planning_sha256
@@ -268,14 +268,19 @@ def _create_technical_plan_draft(
         "application_config": read_application_config(workspace),
         "planning_adjustment_request": revision_request or active.request,
     }
-    artifact = plan_project_with_chat_model(
-        technical_input,
-        # 编辑器可以修改候选，审阅基线必须保留修改前的独立快照。
-        existing_plan=deepcopy(existing),
+    artifact, errors = generate_technical_plan_revision(
+        {
+            "workspace": str(workspace), "workflow_scope": "application_planning",
+            "requirement_spec": requirement_spec, "product_plan": product_plan,
+            "ui_designs": ui_designs,
+        },
+        technical_input, deepcopy(existing), technical_input["planning_adjustment_request"],
     )
-    artifact = bind_plan_entity_tables(artifact, technical_input["application_config"])
-    artifact = attach_page_implementation_contracts(artifact, product_plan, ui_designs)
-    artifact["confirmation_status"] = "pending_user_confirmation"
+    if artifact is None:
+        raise ValueError("TechnicalPlan revision 未完成：" + "；".join(errors[:12]))
+    from app.services.technical_plan_merger import preserve_deletion_records
+
+    artifact = preserve_deletion_records(existing, artifact)
     _validate_technical_plan(artifact, requirement_spec, product_plan, ui_designs, technical_input["application_config"])
     based_on_paths = {
         "product-plan": plans / "product-plan.json",
@@ -348,6 +353,13 @@ def _validate_technical_plan(
 ) -> None:
     """复用当前 TechnicalPlan/PIC 校验集合，任何错误都阻止 canonical 提交。"""
 
+    from app.services.technical_plan_changeset import revision_document
+    from app.services.technical_plan_content_changes import technical_plan_content_errors
+
+    content_errors = technical_plan_content_errors(artifact, product_plan)
+    if content_errors:
+        raise ValueError("TechnicalPlan revision 校验失败：" + "；".join(content_errors[:12]))
+    artifact = {**artifact, **revision_document(artifact)}
     runtime = materialize_technical_plan_runtime(
         artifact,
         requirement_spec,

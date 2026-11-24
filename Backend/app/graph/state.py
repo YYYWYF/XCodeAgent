@@ -86,6 +86,12 @@ class ProjectState(TypedDict, total=False):
     # 跨迭代增量合并产物：带 _change_status 标记的"展示版"RequirementSpec。
     # 仅供前端做"本次变更 vs 未变更内容"分区展示，不参与生成/确认/配置决策。
     requirement_spec_diff: dict[str, Any]
+    # 一次需求修订的修改前草稿；澄清期间冻结，仅用于差异展示与防丢失合并。
+    requirement_spec_baseline: dict[str, Any]
+    # 直接修订澄清只保存当前内存事务；答案不能被当作文档确认。
+    requirement_changeset_context: dict[str, Any]
+    # 同一 ChangeSet 已完成并校验的产品候选，交给原联合确认节点提交草稿。
+    requirement_revision_product_candidate: dict[str, Any]
     requirements_confirmed: bool
     requirements_clarification_round: int
     edited_requirement_spec: dict[str, Any]

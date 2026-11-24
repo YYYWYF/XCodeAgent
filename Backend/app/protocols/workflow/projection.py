@@ -649,6 +649,8 @@ def _public_workflow_state(
             "application_planning_review_route",
             "design_revision_intent",
             "design_interaction_context",
+            "requirement_changeset_context",
+            "requirement_revision_product_candidate",
             "application_planning_recovery_boundary",
             "document_review",
             "technical_plan_candidate",

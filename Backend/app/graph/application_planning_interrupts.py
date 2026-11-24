@@ -199,9 +199,22 @@ def prepare_application_planning_review_resume(
     validate_application_planning_review_action(state, effective_node_name, submission)
     runtime_update = _application_planning_runtime_update(config)
 
-    if submission.action == "design_change" or (
-        submission.action == "revise" and effective_node_name == "requirement_document"
-    ):
+    if submission.action == "revise" and effective_node_name == "requirement_document":
+        # 待确认需求卡是明确修改授权，直接进入联合 ChangeSet，不再让分类器选择整份重生成。
+        revision = begin_current_artifact_revision(state, node_name="requirements", request=submission.request)
+        return ApplicationPlanningReviewResumeDecision(
+            update={
+                **runtime_update, **revision, "document_review": {}, "resume_from": "",
+                "request": submission.request.strip(),
+                # 先让原 Markdown 编辑同步读取当前文件；新候选成功后才更新这些路径。
+                "requirement_spec_path": state.get("requirement_spec_path") or "",
+                "requirement_spec_json_path": state.get("requirement_spec_json_path") or "",
+                "application_planning_interaction": submission.model_dump(by_alias=False, exclude_none=True),
+                "requirement_changeset_context": {}, "requirement_revision_product_candidate": {},
+            },
+            target_node="requirements",
+        )
+    if submission.action == "design_change":
         # 需求+产品规划合并确认门上的“修改”可能涉及任一产物，统一走设计意图分析，
         # 由分类器路由到最早受影响产物并级联重新生成下游。
         if not submission.request.strip():

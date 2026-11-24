@@ -24,21 +24,16 @@ from app.graph.nodes.common import workspace_from_state
 logger = logging.getLogger("uvicorn.error")
 from app.graph.state import ProjectState
 from app.services.technical_plan_fragments import TechnicalPlanFragmentStore
-from app.services.requirement_spec_carryover import read_requirement_spec_carryover
 from app.services.technical_plan_carryover import (
     drop_generated_fields,
     read_technical_plan_carryover,
 )
-from app.services.technical_plan_content_changes import (
-    direct_endpoint_revision_targets, direct_revision_schema_targets,
-)
 from app.services.technical_plan_merger import (
-    merge_direct_endpoint_revision,
-    merge_technical_plan,
-    relevant_object_ids,
+    preserve_deletion_records,
     strip_change_status,
     technical_plan_revision_diff,
 )
+from app.agents.main.technical_plan_revision import generate_technical_plan_revision
 from app.services.application_lifecycle import (
     application_lifecycle_payload,
     load_application_lifecycle,
@@ -95,9 +90,8 @@ def _technical_plan_transaction_baseline(state: ProjectState, workspace: str) ->
     只有基线变更块（`technical_plan_baseline_origin`）标记为 `resumed` 时才沿用 state；
     其余情况一律以磁盘 / 交接记录为准。没有磁盘依据时返回空 dict，按首轮创建处理。
 
-    首轮要显示"全部新增"是**展示层**的事：前端在基线为空时把每个对象都视为新增，
-    见 `TechnicalPlanReviewPanel`。合并逻辑里则由 `merge_technical_plan(None, ...)`
-    标记 added，同样不依赖这个字段。
+    首轮要显示"全部新增"是展示层的事；technical_plan_revision_diff 仅计算标记，
+    不决定哪些模型内容可被采纳，也不能用基线补回或覆盖操作结果。
     """
 
     if state.get("technical_plan_baseline_origin") == "resumed":
@@ -377,45 +371,25 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
         and state.get("technical_plan")
         else None
     )
-    # 审阅与合并统一使用迭代初始基线，不能直接吃 `state["technical_plan"]`。
-    # existing_plan 可以跟随上一版继续修改，但 baseline 必须保持在进入本迭代时的
-    # 交接版本；否则二次修订会把本迭代较早新增的页面和接口错误标成 unchanged。
-    # 它与 existing_plan 用途不同：
-    # - existing_plan 交给模型当"继续修改的起点"，模型仍会整份重写；
-    # - baseline 用于生成后做**保守合并**和本轮变更标记。
+    # 首轮和上游重生成保留生成入口；直接修订只能来自当前草稿上的 ChangeSet。
     workspace = workspace_from_state(state)
     baseline = _technical_plan_review_baseline(state, workspace) or None
     generation_fragments = {}
-    # 直接修订及其失败重试使用当前计划匹配目标，不把设计派生或首轮需求当成接口授权。
     direct_revision = existing_plan is not None and boundary.operation in {
         ApplicationPlanningOperation.REVISE, ApplicationPlanningOperation.REPAIR,
     }
-    targets, target_errors = (
-        direct_endpoint_revision_targets(request, existing_plan)
-        if direct_revision else ({}, [])
-    )
-    schema_targets, schema_errors = (
-        direct_revision_schema_targets(request, existing_plan)
-        if direct_revision else ({}, [])
-    )
-    target_errors.extend(schema_errors)
-    if target_errors:
-        # 生成前即挂既有 AG-UI 错误审阅门；不调用模型、不覆盖旧草稿、不进入确认成功。
-        return _technical_generation_failure(state, target_errors, generation_fragments)
-    if targets:
-        technical_requirement = {
-            **technical_requirement,
-            "technical_plan_revision_scope": {
-                "endpoints": list(targets.values()),
-                "schemas": {key: sorted(names) for key, names in schema_targets.items()},
-            },
-        }
-    plan, errors, failed_candidate = _generate_valid_technical_plan(
-        state,
-        technical_requirement,
-        existing_plan,
-        generation_fragments=generation_fragments,
-    )
+    if direct_revision:
+        plan, errors = generate_technical_plan_revision(
+            state, technical_requirement, existing_plan, request,
+        )
+        if plan is None:
+            return _technical_generation_failure(state, errors, generation_fragments)
+        failed_candidate = None
+    else:
+        plan, errors, failed_candidate = _generate_valid_technical_plan(
+            state, technical_requirement, existing_plan,
+            generation_fragments=generation_fragments,
+        )
     if plan is None:
         # 生成失败不写磁盘、不改生命周期；审阅节点会把错误作为当前业务交互展示。
         return {
@@ -434,39 +408,11 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             "clarification": _technical_generation_error_payload(errors),
             "timeline": ["technical_planning_generate"],
         }
-    # 跨迭代增量合并：模型整份重新生成 technical-plan.json 时，会把继承自基线的对象
-    # 也顺手重写一遍（措辞润色、删掉 error_codes、改 required_for_initial_load 等）。
-    # 用户这轮没要求改的对象必须**原样继承基线**，否则下游会基于漂移的契约推进。
-    # 与需求文档侧 requirement_spec_merger 同一口径：基线不动，只做按 ID 的增量合并。
-    #
-    # 合并产出两份：
-    # - candidate：剥离 _change_status 的干净版，走原有校验 / 写盘 / 入库全流程；
-    # - technical_plan_diff：带标记的展示版，仅存 state 供前端分区显示，不落盘。
-    if targets or schema_targets:
-        try:
-            # 当前事务基线决定可修改内容；迭代初始基线仅重算展示，不能回退已采纳修订。
-            controlled = merge_direct_endpoint_revision(
-                existing_plan, plan, targets, schema_targets=schema_targets,
-            )
-            merged_with_status = technical_plan_revision_diff(baseline, controlled)
-        except (TypeError, ValueError) as exc:
-            return _technical_generation_failure(state, [str(exc)], generation_fragments)
-    else:
-        merged_with_status = merge_technical_plan(
-            baseline,
-            plan,
-            relevant=relevant_object_ids(
-                requirement_spec,
-                state.get("product_plan"),
-                baseline,
-                # 上一轮的需求文档用于证明本轮对象变化，不以模型候选反证用户意图。
-                read_requirement_spec_carryover(workspace) if workspace else None,
-            ),
-            deleted_page_ids=_deleted_page_ids(state),
-        )
-    candidate = deepcopy(strip_change_status(merged_with_status))
-    # 模型候选通过校验不代表增量合并后仍有效：必须复用完整确认校验链，
-    # 不合格的合并结果只进入错误审阅，不能写草稿后再让用户反复点击确认。
+    # 结果已经由生成/原子修订确定，基线只负责展示与现行开发删除记录。
+    # 不做白名单、按页签合并、类型补回或模型候选兜底。
+    candidate = preserve_deletion_records(existing_plan or baseline, plan)
+    merged_with_status = technical_plan_revision_diff(baseline, candidate)
+    # 只校验最终候选；不使用物化/修复返回值再次修改已核验的操作结果。
     try:
         validation_plan = _attach_technical_plan_contracts(state, candidate)
         errors = _project_plan_validation_errors(validation_plan, state)
@@ -518,10 +464,10 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
 def _technical_generation_failure(
     state: ProjectState, errors: list[str], fragments: dict[str, Any],
 ) -> dict[str, Any]:
-    """将目标匹配或受控合并失败接回原错误审阅门，保留现有计划和磁盘草稿。"""
+    """将变更集规划、原子操作或全局校验失败接回原错误门，保留当前草稿。"""
 
     clarification = _technical_generation_error_payload(errors)
-    clarification["message"] = "技术修订未完成，请核对点名接口及修改范围。"
+    clarification["message"] = "技术修订未完成，原草稿已保留，请核对修改要求及关联引用。"
     return {
         "phase": "technical_planning_generate",
         "status": "requires_user_input",
@@ -647,11 +593,10 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
         _project_plan_validation_errors,
     )
     from app.graph.application_planning_revision import cleared_design_change_context
-    from app.services.project_plan import apply_project_plan_feedback
 
     request = _technical_request(state)
     confirmed_plan = {
-        **apply_project_plan_feedback(plan, request),
+        **plan,
         "confirmation_status": "confirmed",
     }
     confirmed_plan = _attach_technical_plan_contracts(state, confirmed_plan)

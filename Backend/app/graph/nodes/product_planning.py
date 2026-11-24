@@ -622,6 +622,26 @@ def product_planning(state: ProjectState) -> dict[str, Any]:
     requirement_spec = state.get("requirement_spec")
     if not isinstance(requirement_spec, dict):
         raise ValueError("产品规划必须读取已校验的 RequirementSpec 草稿。")
+    # 需求卡直接修订已经在同一 ChangeSet 原子修改并校验两份文档。
+    # 此处只接回原联合确认门，不再调用整份生成器或按旧页面内容合并覆盖。
+    revised_product = state.get("requirement_revision_product_candidate")
+    if isinstance(revised_product, dict) and revised_product:
+        errors = validate_product_plan(revised_product, requirement_spec)
+        if errors:
+            raise ValueError("联合需求修订产品候选未通过校验：" + "；".join(errors[:12]))
+        plan_view = _inherit_page_change_status(
+            revised_product, requirement_spec, state.get("requirement_spec_diff"),
+        )
+        markdown_path = str(state.get("product_plan_path") or "")
+        json_path = str(state.get("product_plan_json_path") or "")
+        if not markdown_path or not json_path:
+            raise ValueError("联合需求修订缺少已提交的两份草稿路径。")
+        return {
+            "phase": "product_planning", "status": "requires_user_input", "product_plan": plan_view,
+            "product_plan_path": markdown_path, "product_plan_json_path": json_path,
+            "requirement_revision_product_candidate": {}, "clarification": _confirmation_payload(plan_view),
+            "timeline": ["product_planning"],
+        }
     # 本轮删除的页面：需求侧把它们保留在 spec 里（供后续清理），但产品计划不应包含。
     # 后续所有校验 / 修复都必须带上这份集合，否则"模型正确删页"会被判成"页面缺失"。
     deleted_page_ids = _deleted_page_ids_from_diff(

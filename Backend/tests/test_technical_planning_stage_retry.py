@@ -20,6 +20,7 @@ from app.workspace.plan_documents import commit_technical_plan_document
 from app.services.application_lifecycle import (
     load_application_lifecycle, persist_application_lifecycle_transition, write_application_lifecycle,
 )
+from tests.test_technical_plan_content_changes import _changeset
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -90,22 +91,32 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                 gate_id="retry-gate", artifact_revision="retry-revision", request=harness.request,
             )
             await harness.graph.aupdate_state(snapshot.config, state, as_node="workflow_entry")
+            changeset = _changeset(baseline, harness.request, [{
+                "op": "replace", "path": "/architecture/frontend",
+                "expectedBefore": harness.candidate["architecture"]["frontend"],
+                "value": harness.candidate["architecture"]["frontend"] + " 本轮重试修改。",
+            }]) if has_plan else None
             if native:
                 if commit_failure:
                     with (
+                        patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset),
                         patch("app.graph.nodes.planning._generate_valid_technical_plan", return_value=(deepcopy(harness.candidate), [], None)),
                         patch("app.graph.nodes.application_technical_planning.commit_technical_plan_document", side_effect=RuntimeError("暂时无法写入")),
                     ):
                         await harness.run_initial()
                 else:
-                    with patch("app.graph.nodes.planning._generate_valid_technical_plan", side_effect=RuntimeError("模型暂时不可用")):
+                    with (
+                        patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=RuntimeError("模型暂时不可用")),
+                        patch("app.graph.nodes.planning._generate_valid_technical_plan", side_effect=RuntimeError("模型暂时不可用")),
+                    ):
                         await harness.run_initial()
             else:
                 # 精确复现附件：begin 已提交 GENERATION_READY，下一次请求却要求重跑技术规划。
                 prepared = await technical_planning_begin(state)
                 await harness.graph.aupdate_state(config, prepared, as_node="technical_planning_begin")
             with (
-                patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(harness.candidate)) as generate,
+                patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(harness.candidate)) as initial_generate,
+                patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset) as revision_generate,
                 patch("app.graph.nodes.planning._repair_technical_plan_candidate") as repair,
                 patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             ):
@@ -126,17 +137,18 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                         },
                     )]
                     self.assertFalse(any('"type": "RUN_ERROR"' in frame for frame in frames))
+                generate = revision_generate if has_plan else initial_generate
                 if native and commit_failure:
-                    # 保存失败的候选仍可由 checkpoint 安全提交，无需再次请求生成模型。
                     generate.assert_not_called()
                 else:
                     generate.assert_called_once()
                 repair.assert_not_called()
                 if generate.call_args is not None:
-                    self.assertEqual(generate.call_args.args[0]["planning_adjustment_request"], harness.request)
                     if has_plan:
-                        self.assertEqual(generate.call_args.kwargs["existing_plan"]["summary"], "磁盘最新技术规划")
+                        self.assertEqual(generate.call_args.args[2], harness.request)
+                        self.assertEqual(generate.call_args.args[1]["architecture"], baseline["architecture"])
                     else:
+                        self.assertEqual(generate.call_args.args[0]["planning_adjustment_request"], harness.request)
                         self.assertNotIn("existing_plan", generate.call_args.kwargs)
             final = await harness.graph.aget_state(config)
             self.assertEqual(final.values["request"], harness.request)
@@ -220,8 +232,13 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                     await harness.run_initial()
                 source, _, action = await harness.resolve_action()
                 self.assertEqual(source.current_node, "technical_planning_begin")
+            changeset = _changeset(harness.candidate, harness.request, [{
+                "op": "replace", "path": "/architecture/frontend",
+                "expectedBefore": harness.candidate["architecture"]["frontend"],
+                "value": harness.candidate["architecture"]["frontend"] + " 本轮默认值说明为8。",
+            }])
             with (
-                patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(harness.candidate)) as generate,
+                patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset) as generate,
                 patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
             ):
                 if native:
@@ -231,7 +248,7 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     await harness.run_initial()
                 generate.assert_called_once()
-                self.assertEqual(generate.call_args.args[0]["planning_adjustment_request"], harness.request)
+                self.assertEqual(generate.call_args.args[2], harness.request)
             final = await harness.graph.aget_state(config)
             self.assertEqual(tuple(final.next), ("technical_planning_review",))
             self.assertTrue(any(task.interrupts for task in final.tasks))

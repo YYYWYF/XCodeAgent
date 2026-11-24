@@ -126,6 +126,29 @@ class StartIterationCleanupTests(unittest.TestCase):
             self.assertTrue((workspace / ".devagentstudio" / "AGENTS.md").is_file())
             self.assertTrue((workspace / ".devagentstudio" / "application.json").is_file())
 
+    def test_product_plan_baseline_survives_iteration_cleanup(self) -> None:
+        """清理正式目录前必须登记完整 ProductPlan，供新迭代联合 ChangeSet 使用。"""
+
+        from app.services.product_plan import create_product_plan
+        from app.services.product_plan_carryover import read_product_plan_iteration_baseline
+        from app.services.requirement_spec import create_requirement_spec
+
+        with tempfile.TemporaryDirectory() as raw:
+            workspace = Path(raw)
+            _bootstrapped_workspace(workspace)
+            spec = create_requirement_spec("创建一个库存管理系统")
+            spec["confirmation_status"] = "confirmed"
+            plan = create_product_plan(spec)
+            plan["confirmation_status"] = "confirmed"
+            root = workspace / ".devagentstudio"
+            (root / "specs/requirement-spec.json").write_text(json.dumps(spec), encoding="utf-8")
+            (root / "plans/product-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+            start_iteration(_request(workspace))
+
+            self.assertFalse((root / "plans/product-plan.json").exists())
+            self.assertEqual(read_product_plan_iteration_baseline(workspace), plan)
+
     def test_clears_previous_planning_artifacts(self) -> None:
         """上一轮的规划产物与 lifecycle 快照不能带进新迭代。"""
 

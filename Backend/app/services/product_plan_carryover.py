@@ -1,20 +1,15 @@
-"""跨迭代沿用「用户没要求改的页面」的完整定义，避免模型每轮重写它。
+"""跨迭代交接完整 ProductPlan 与稳定页面定义，避免新需求重写无关内容。
 
-**为什么需要**：发起新迭代会整份重新生成 ProductPlan。即使用户只想加一个新页面，
-模型也会顺手把其余页面的信息项、操作重写一遍 —— 语义没变、但 `itemId` 全换了。
-而 UI 设计稿里写的是 `data-information-item-id="<旧 ID>"`，ID 一换，上一轮的设计稿
-就对不上、继承被拒，用户被迫重做本可沿用的页面。
+完整 `plan` 快照与保留的 RequirementSpec 共同构成新迭代联合 ChangeSet 基线；模型只修改
+用户明确要求的节点，其余信息项、操作和验收内容原样保留。页面 `definition` 仍用于开发
+变更快照，以及没有完整产品基线时的生成兜底，避免自由重写导致 `itemId` 漂移、旧 UI 设计稿
+无法继承。
 
-**判定口径**：`RequirementSpec` 的页面条目是"用户到底要什么"的权威表述。本轮它的该页条目
-与上一轮**逐字段相同**，就说明用户没要求改这一页 —— 于是整份沿用上一轮 ProductPlan 里
-这一页的定义，模型这一轮给的内容直接丢弃。
+页面兜底沿用的判定以 RequirementSpec 页面身份与功能描述为准；只覆盖 goal、information_items、
+actions、navigation_targets 等补充字段，path/name/module_id/description 始终取当前需求。
 
-**只沿用 supplement 类字段**（goal / information_items / actions / navigation_targets），
-`path` / `name` / `module_id` / `description` 仍取当前 RequirementSpec ——
-否则修好的路由会被旧值覆盖回去。
-
-本文件（`.devagentstudio/product-plan-carryover.json`）与 `ui_design_carryover.json` 同理，
-**刻意不放进清空清单**：它是跨迭代的交接事实，不是本轮产物。
+本文件（`.devagentstudio/product-plan-carryover.json`）刻意不放进清空清单：它是跨迭代事实，
+不是本轮待确认产物。
 """
 
 from __future__ import annotations
@@ -113,13 +108,29 @@ def read_product_plan_carryover(workspace: str | Path) -> dict[str, dict[str, An
     return carried
 
 
+def read_product_plan_iteration_baseline(workspace: str | Path) -> dict[str, Any] | None:
+    """读取新迭代联合 ChangeSet 所需的上一轮完整 ProductPlan 基线。"""
+
+    try:
+        payload = json.loads(
+            product_plan_carryover_path(workspace).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    plan = payload.get("plan")
+    return plan if isinstance(plan, dict) and plan else None
+
+
 def write_product_plan_carryover(
     workspace: str | Path,
     *,
     source_branch: str,
     pages: dict[str, dict[str, Any]],
+    plan: dict[str, Any] | None = None,
 ) -> None:
-    """登记本轮 ProductPlan 的页面定义；写失败只记日志。
+    """登记下一轮的产品页面定义及联合修订基线；写失败只记日志。
 
     `pages` 为空时**清掉**已有记录：那说明本轮没有可沿用的定义，
     留着旧记录会让下一轮沿用上一轮（或更早）的内容。
@@ -149,6 +160,9 @@ def write_product_plan_carryover(
             for page_id, record in pages.items()
         },
     }
+    if isinstance(plan, dict) and plan:
+        # 新迭代直接修订需要完整业务基线，不能只靠页面定义重新猜出产品级内容。
+        payload["plan"] = plan
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(

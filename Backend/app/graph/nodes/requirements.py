@@ -233,11 +233,30 @@ def requirements(state: ProjectState) -> dict:
     application_planning_scope = state.get("workflow_scope") == "application_planning"
     request = _request_for_requirement_node(state, interaction)
     design_revision_requested = _has_design_revision_for_node(state, "requirements")
-    revision_requested = design_revision_requested or (
+    iteration_revision_state = None
+    if application_planning_scope and not design_revision_requested and isinstance(existing_spec, dict):
+        from app.agents.main.requirement_revision import new_iteration_revision_state
+
+        iteration_revision_state = new_iteration_revision_state(state, existing_spec, request)
+    new_iteration_revision = iteration_revision_state is not None
+    revision_requested = design_revision_requested or new_iteration_revision or (
         interaction.get("action") == "revise"
         if application_planning_scope
         else _requirement_revision_requested(request)
     )
+    workspace = workspace_from_state(state)
+    stored_baseline = state.get("requirement_spec_baseline")
+    if (
+        revision_requested
+        and isinstance(existing_spec, dict)
+        and existing_spec.get("confirmation_status") in {"pending_user_confirmation", "confirmed"}
+    ):
+        # 新一轮修改从当前待确认/正式草稿起算，后续澄清不得推进这份审阅基线。
+        review_baseline = strip_change_status(existing_spec)
+    elif isinstance(stored_baseline, dict) and stored_baseline:
+        review_baseline = stored_baseline
+    else:
+        review_baseline = read_requirement_spec_carryover(workspace) if workspace else None
     clarification_round = _clarification_round(state)
     if not isinstance(existing_spec, dict) or (
         revision_requested
@@ -260,8 +279,8 @@ def requirements(state: ProjectState) -> dict:
         #
         # 真正的"用户已确认新一轮 spec"复用路径必然走过 LLM 生成 → 用户点确认 →
         # requirements 节点把它写进 state（此时没有 loaded_from_disk 标记）。
-        # 磁盘自动加载的旧产物会被 load_stage_artifacts 打上 loaded_from_disk 标记，
-        # 必须强制走 LLM（用 llm_reference_spec 作参考）。
+        # 磁盘自动加载的旧产物带有 loaded_from_disk 标记，不能直接复用并忽略新输入。
+        # 新迭代由上方入口进入联合 ChangeSet；其他没有修订上下文的场景仍走正常生成。
         and not state.get("requirement_spec_loaded_from_disk")
     ):
         # 已确认需求且没有新的结构化交互或修订游标时直接复用 checkpoint，禁止再次调用 LLM。
@@ -306,6 +325,34 @@ def requirements(state: ProjectState) -> dict:
             existing_spec,
             datasource_type=datasource_type,
         )
+    direct_revision = isinstance(existing_spec, dict) and (
+        (revision_requested and existing_spec.get("confirmation_status") in {"pending_user_confirmation", "confirmed"})
+        or (interaction.get("action") == "answer" and bool(state.get("requirement_changeset_context")))
+    )
+    if direct_revision:
+        from app.agents.main.requirement_revision import generate_requirement_revision
+
+        revision = generate_requirement_revision(iteration_revision_state or state, existing_spec, request)
+        if revision["requirement_spec"].get("confirmation_status") == "pending_user_input":
+            return revision
+        spec = revision["requirement_spec"]
+        product_candidate = revision.get("requirement_revision_product_candidate")
+        if isinstance(product_candidate, dict) and product_candidate:
+            from app.agents.main.requirement_revision import write_joint_revision_drafts
+
+            return write_joint_revision_drafts(state, revision)
+        spec_path = write_generated_documents(
+            state, [requirement_spec_draft_markdown_path(state)],
+            write_requirement_spec_draft_document, state, spec,
+        )
+        return {
+            **revision, "phase": "requirements", "status": "requires_user_input",
+            "requirements_clarification_round": 0,
+            "requirement_spec_path": spec_path,
+            "requirement_spec_json_path": str(requirement_spec_draft_json_path(state)),
+            "clarification": _requirement_spec_draft_payload(spec),
+            "timeline": ["requirements"],
+        }
     analysis_request = _requirement_analysis_request(
         request,
         existing_spec,
@@ -325,25 +372,19 @@ def requirements(state: ProjectState) -> dict:
         datasource_type,
     )
     _apply_menus_root_path_to_pages(spec, state)
-    # 跨迭代增量合并：LLM 在整份重新生成 spec 时经常自由发挥——简化、重写、
-    # 甚至丢失基线里已有的页面/角色/模块。结果：上一迭代实现的页面在新迭代里
-    # "消失"，下游 UI 设计稿继承、技术规划、构建都基于错位的 spec 推进。
-    #
-    # 这里在 LLM 输出后立即调 merger：把"LLM 重新生成的 spec"与"基线 spec"
-    # （来自 .devagentstudio/requirement-spec-carryover.json，由 iteration_service
-    # 在 start_iteration 时登记）按 pageId 合并。未在 LLM 输出里出现的基线页面
-    # 会被自动补回（_change_status=unchanged），防止"被静默删除"。
+    # 合并基线优先使用本次修改前冻结的 RequirementSpec 草稿，覆盖多轮澄清；
+    # 非修订生成仍使用 start_iteration 登记的跨迭代 carryover。
+    # 未在 LLM 输出里出现的基线页面会被自动补回（_change_status=unchanged），
+    # 防止整份重写时静默删除既有事实；展示徽标与本次修改前的内容保持同一比较口径。
     #
     # 合并产出**两份**：
     # - spec：剥离 _change_status 后的"干净版"，走原有所有流程（写盘、校验、入库）；
     # - requirement_spec_diff：带 _change_status 标记的"展示版"，存到 state 供前端
     #   做"本次变更 vs 未变更内容"分区显示。
-    workspace = workspace_from_state(state)
-    base_spec = read_requirement_spec_carryover(workspace) if workspace else None
     # 显式删除声明来自模型输出（`deleted_pages`）：只有用户明确要求删除的页面
     # 才会被标成 deleted；模型漏写的基线页面一律原样继承，不被误删。
     merged_with_status = merge_requirement_spec(
-        base_spec,
+        review_baseline,
         spec,
         explicit_deleted_ids={
             str(page_id).strip()
@@ -393,6 +434,7 @@ def requirements(state: ProjectState) -> dict:
             # 增量合并产物：带 _change_status 标记的"展示版"spec，
             # 供前端在右侧文档 tab 做"本次变更 vs 未变更内容"分区显示。
             "requirement_spec_diff": requirement_spec_diff,
+            "requirement_spec_baseline": review_baseline or {},
             "requirements_confirmed": False,
             "requirements_clarification_round": min(
                 clarification_round + 1,
@@ -456,6 +498,7 @@ def requirements(state: ProjectState) -> dict:
             # 增量合并产物：带 _change_status 标记的"展示版"spec，
             # 供前端在右侧文档 tab 做"本次变更 vs 未变更内容"分区显示。
             "requirement_spec_diff": requirement_spec_diff,
+            "requirement_spec_baseline": review_baseline or {},
             "requirements_confirmed": False,
             "requirements_clarification_round": next_clarification_round,
             "requirement_spec_path": "",
@@ -476,6 +519,7 @@ def requirements(state: ProjectState) -> dict:
         # 增量合并产物：带 _change_status 标记的"展示版"spec，
         # 供前端在右侧文档 tab 做"本次变更 vs 未变更内容"分区显示。
         "requirement_spec_diff": requirement_spec_diff,
+        "requirement_spec_baseline": review_baseline or {},
         "requirements_confirmed": False,
         "requirements_clarification_round": next_clarification_round,
         "requirement_spec_path": spec_path,
@@ -945,11 +989,17 @@ def _request_for_requirement_node(
 
             # 需求分析统一在模型边界展开全部问答，不能依赖调用方把选择题压成纯文本。
             spec = state.get("requirement_spec") or {}
+            resume_request = str(interaction.get("request") or "").strip()
+            # 协议生成的恢复信封只携带当前答案；嵌套转发会截断草稿中累计的原始修改和历史答案。
+            # 自由文本补充仍保留，结构化答案由下方统一展开，避免同一答案重复进入模型。
+            generated_resume_envelope = (
+                "原始需求：" in resume_request and "用户补充确认：" in resume_request
+            )
             return requirement_clarification_request(
                 str(spec.get("source_request") or state.get("request") or ""),
                 state.get("clarification") or {},
                 interaction.get("answers") or {},
-                str(interaction.get("request") or ""),
+                "" if generated_resume_envelope else resume_request,
             )
         return str(interaction.get("request") or "").strip()
     return str(state.get("request") or "")

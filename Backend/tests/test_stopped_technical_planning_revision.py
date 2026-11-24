@@ -16,6 +16,7 @@ from app.domain.application_lifecycle import ApplicationLifecycleStage
 from app.services.application_lifecycle import load_application_lifecycle, write_application_lifecycle
 from app.services.planning_execution_end import end_planning_execution
 from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_draft_json_path
+from tests.test_technical_plan_content_changes import _changeset
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -76,24 +77,30 @@ class StoppedTechnicalPlanningRevisionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("intent", decision, decision)
         self.assertEqual(decision["intent"], "revise")
         self.assertEqual(before, load_application_lifecycle(self.h.workspace))
-        candidate = deepcopy(self.h.candidate)
-        candidate["summary"] = "停止后按新意见修改的技术规划"
+        snapshot = await self.h.graph.aget_state(self.config)
+        baseline = snapshot.values["technical_plan"]
+        frontend = baseline["architecture"]["frontend"]
+        changeset = _changeset(baseline, request, [{
+            "op": "replace", "path": "/architecture/frontend", "expectedBefore": frontend,
+            "value": frontend + " 停止后按新意见修改的技术规划。",
+        }])
         with (
-            patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=candidate) as generate,
+            patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset) as generate,
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
         ):
             _, events = await self._send("revise", request, sourceRunId=decision["sourceRunId"], checkpointId=decision["checkpointId"])
         errors = [event for event in events if event["type"] == "RUN_ERROR"]
         self.assertEqual(errors, [], errors)
         generate.assert_called_once()
-        self.assertEqual(generate.call_args.args[0]["planning_adjustment_request"], request)
-        self.assertEqual(generate.call_args.kwargs["existing_plan"]["summary"], "停止前已有技术规划")
+        self.assertEqual(generate.call_args.args[2], request)
+        self.assertEqual(generate.call_args.args[1]["architecture"]["frontend"], frontend)
         final = await self.h.graph.aget_state(self.config)
         self.assertEqual(tuple(final.next), ("technical_planning_review",))
         self.assertTrue(any(task.interrupts for task in final.tasks))
         self.assertEqual(final.values["technical_plan"]["confirmation_status"], "pending_user_confirmation")
         disk = json.loads(technical_plan_draft_json_path({"workspace": str(self.h.workspace)}).read_text())
-        self.assertEqual(disk["summary"], candidate["summary"])
+        self.assertEqual(disk["summary"], "停止前已有技术规划")
+        self.assertIn("停止后按新意见修改", disk["architecture"]["frontend"])
         self.assertEqual(disk["confirmation_status"], "pending_user_confirmation")
         current = load_application_lifecycle(self.h.workspace)
         self.assertEqual(current.initialization.status, "awaiting_user")

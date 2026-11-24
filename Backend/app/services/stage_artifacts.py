@@ -70,6 +70,13 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
         set(_ARTIFACTS) if node in _TECHNICAL_STAGES | _RUNTIME_STAGES
         else _PLANNING_INPUTS.get(node, set())
     )
+    if node == "requirements" and (
+        (state.get("application_planning_interaction") or {}).get("action") == "revise"
+        or state.get("requirement_changeset_context")
+        or state.get("design_change_generation_target") == "requirements"
+    ):
+        # 联合需求卡的修改必须读取当前产品草稿，不能清掉它后再整份生成。
+        required.add("product_plan")
     if node in _RUNTIME_STAGES and endpoint_development(state):
         required.discard("ui_designs")
     fields: dict[str, Any] = {}
@@ -92,6 +99,16 @@ def load_stage_artifacts(state: dict[str, Any], node: str) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise ValueError(f"阶段产物不是有效对象：{path.name}")
         fields[key] = value
+        if key == "technical_plan" and node in {"technical_planning_begin", "technical_planning_generate"}:
+            from app.domain.application_planning_recovery import parse_application_planning_boundary, validate_application_planning_baseline
+
+            boundary = parse_application_planning_boundary(state.get("application_planning_recovery_boundary"))
+            if boundary is not None and boundary.baseline_sha256 is not None:
+                # 事务摘要只验证磁盘业务内容；正常节点保持完整元数据，Native Recovery 的基线单独统一。
+                validate_application_planning_baseline(boundary, value)
+                if state.get("retry_source_run_id"):
+                    from app.services.technical_plan_carryover import drop_generated_fields
+                    fields[key] = drop_generated_fields(value)
         # 标记该字段是"磁盘自动加载"而非"本轮 LLM 生成"——requirements 节点据此
         # 识别"上一轮 confirmed 旧产物"，避免误走"已确认直接复用"分支跳过 LLM。
         fields[f"{key}_loaded_from_disk"] = exists

@@ -713,7 +713,9 @@ class RevisionLifecycleTests(unittest.TestCase):
 
         from app.graph.nodes.application_revision import _validate_technical_plan
 
-        artifact = {"artifact_type": "technical-plan"}
+        artifact = {"artifact_type": "technical-plan", "architecture": {
+            "frontend": "React 前端。", "backend": "Springboot 后端。", "data": "MySQL8 数据库。",
+        }, "entities": [], "api_contracts": [], "pages": []}
         requirement_spec: dict[str, object] = {}
         product_plan: dict[str, object] = {}
         ui_designs: dict[str, object] = {}
@@ -909,7 +911,7 @@ class RevisionLifecycleTests(unittest.TestCase):
             from app.graph.nodes.application_revision import start_application_revision
 
             with patch(
-                "app.graph.nodes.application_revision.plan_project_with_chat_model"
+                "app.graph.nodes.application_revision.generate_technical_plan_revision"
             ) as planner, patch(
                 "app.graph.nodes.application_revision._current_plan_state",
                 return_value={},

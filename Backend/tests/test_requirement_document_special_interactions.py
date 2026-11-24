@@ -9,8 +9,11 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
+from app.agents.main.requirement_revision import requirement_revision_document
+from app.domain.application_planning_recovery import application_planning_sha256
 from app.graph.state import ProjectState
 from app.graph.application_planning_interrupts import requirement_document_review
+from app.graph.nodes.requirements import requirements
 from app.graph.nodes.product_planning import (
     _configuration_alignment_update,
     product_planning,
@@ -31,20 +34,22 @@ def submission(snapshot, action, **fields):
 
 
 def build_graph(saver, product_node=product_planning):
-    """挂载原产品节点和联合审阅门，正式确认完成后才结束图。"""
+    """挂载真实需求、产品节点和联合审阅门，正式确认完成后才结束图。"""
     def route(state):
         """业务问题或新草稿都继续等待联合确认。"""
         return END if state.get("status") == "completed" else "review"
 
     def design_intent(state):
-        """记录已进入原修订入口，避免测试调用真实模型分类器。"""
-        return {"phase": "design_intent_analysis", "status": "completed"}
+        """需求卡直接修改不得回到旧分类器，图注册仅用于校验路由目标。"""
+        raise AssertionError("需求卡直接修改不能先进入意图分类")
 
     builder = StateGraph(ProjectState)
+    builder.add_node("requirements", requirements)
     builder.add_node("product_planning", product_node)
     builder.add_node("review", requirement_document_review)
     builder.add_node("design_intent_analysis", design_intent)
     builder.add_edge(START, "product_planning")
+    builder.add_edge("requirements", "product_planning")
     builder.add_conditional_edges("product_planning", route)
     builder.add_edge("design_intent_analysis", END)
     return builder.compile(checkpointer=saver)
@@ -94,7 +99,7 @@ class RequirementDocumentSpecialInteractionTests(unittest.IsolatedAsyncioTestCas
                         "action": "answer", "answers": {question["id"]: "page:people"}})
 
     async def test_alignment_can_reconfirm_and_revise_without_bypassing_configuration(self):
-        """真实配置缺管理员时能再次提交并显示原因，也能沿原修订入口处理问题。"""
+        """配置缺管理员时可重提确认，也可经联合 ChangeSet 修订且不得改写配置。"""
         with tempfile.TemporaryDirectory() as workspace:
             application = Path(workspace) / ".devagentstudio/application.json"
             application.parent.mkdir(parents=True)
@@ -129,11 +134,37 @@ class RequirementDocumentSpecialInteractionTests(unittest.IsolatedAsyncioTestCas
                 self.assertTrue(any("subjectId" in error for error in gate["clarification"]["errors"]))
                 self.assertFalse(current.values.get("requirements_confirmed", False))
                 self.assertFalse((application.parent / "specs/requirement-spec.json").exists())
-                await graph.ainvoke(submission(current, "revise", request="补充真实初始管理员主体并重新对齐需求"), config)
+
+                request = "库存页面补充真实初始管理员配置说明"
+                document = requirement_revision_document(spec, plan)
+                page_id = spec["pages"][0]["pageId"]
+                requirement_description = spec["pages"][0]["description"]
+                product_description = plan["pages"][0]["description"]
+                revised_description = requirement_description + " 页面说明已补充。"
+                changeset = {"schemaVersion": 1, "baseSha256": application_planning_sha256(document),
+                    "intents": [{"id": "intent-1", "sourceText": request, "operations": [
+                        {"op": "replace", "path": f"/requirement_spec/pages/{page_id}/description",
+                            "expectedBefore": requirement_description, "value": revised_description},
+                        {"op": "replace", "path": f"/product_plan/pages/{page_id}/description",
+                            "expectedBefore": product_description, "value": revised_description},
+                    ]}]}
+                with patch("app.agents.main.requirement_revision.plan_requirement_changeset", return_value=changeset) as planner:
+                    await graph.ainvoke(submission(current, "revise", request=request), config)
+                planner.assert_called_once()
                 revised = await graph.aget_state(config)
-                self.assertEqual(revised.values["phase"], "design_intent_analysis")
-                self.assertEqual(revised.values["request"], "补充真实初始管理员主体并重新对齐需求")
+                self.assertEqual(revised.next, ("review",))
+                self.assertEqual(revised.values["phase"], "product_planning")
+                self.assertEqual(revised.values["request"], request)
+                self.assertEqual(revised.values["requirement_spec"]["pages"][0]["description"], revised_description)
+                self.assertEqual(revised.values["product_plan"]["pages"][0]["description"], revised_description)
                 self.assertFalse(revised.values.get("requirements_confirmed", False))
+                self.assertEqual(application.read_text(), config_text)
+
+                await graph.ainvoke(submission(revised, "confirm"), config)
+                reconfirmed = await graph.aget_state(config)
+                gate = application_planning_interrupt_from_snapshot(reconfirmed)
+                self.assertTrue(any("subjectId" in error for error in gate["clarification"]["errors"]))
+                self.assertFalse(reconfirmed.values.get("requirements_confirmed", False))
                 self.assertEqual(application.read_text(), config_text)
 
     async def test_aligned_drafts_can_finish_joint_confirmation(self):

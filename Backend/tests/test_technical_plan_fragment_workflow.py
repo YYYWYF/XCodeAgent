@@ -16,6 +16,7 @@ from app.persistence.checkpoints import close_workflow_checkpointer_for_workspac
 from app.protocols.workflow.runtime import build_workflow_ag_ui_stream
 from app.workspace.plan_documents import commit_technical_plan_document, technical_plan_json_path, technical_plan_draft_json_path
 from tests.test_technical_plan_fragment_editor import ScriptedEditorModel, tool_response
+from tests.test_technical_plan_content_changes import _changeset
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
 
 
@@ -55,13 +56,14 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         }, as_node="workflow_entry")
         return baseline
 
-    async def _run(self, models, *, full_generation=None):
+    async def _run(self, models, *, full_generation=None, changesets=None):
         """从生产 AG-UI 入口执行真实 Graph，仅替换外部聊天模型响应。"""
 
         h = self.harness
         with (
             patch("app.config.Settings.from_env", side_effect=h.current_settings),
             patch("app.agents.main.technical_plan_editor.create_chat_model", side_effect=models),
+            patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=changesets or AssertionError("首版不得进入直接修订")),
             patch("app.agents.main.planner._invoke_live_chat_model", side_effect=full_generation or AssertionError("已有候选后不能整份重生成")),
         ):
             return [frame async for frame in build_workflow_ag_ui_stream(
@@ -79,23 +81,17 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         baseline = await self._prepare_revision()
         old_frontend = baseline["architecture"]["frontend"]
         ref = baseline["api_contracts"][0]["endpoints"][0]["response_schema_ref"]
-        first = ScriptedEditorModel(responses=[
-            tool_response("edit_file", file_path="/technical-plan.json", old_string=old_frontend,
-                          new_string=old_frontend + "局部修订验收 FRAGMENT-KEEP。"),
-            tool_response("edit_file", file_path="/technical-plan.json",
-                          old_string=f'"response_schema_ref": "{ref}"',
-                          new_string='"response_schema_ref": "FragmentMissingOutput"'),
-            AIMessage(content="已完成修改。"),
+        endpoint = baseline["api_contracts"][0]["endpoints"][0]
+        first = _changeset(baseline, self.harness.request, [
+            {"op": "replace", "path": "/architecture/frontend", "expectedBefore": old_frontend,
+             "value": old_frontend + "局部修订验收 FRAGMENT-KEEP。"},
+            {"op": "replace", "path": f"/api_contracts/{baseline['api_contracts'][0]['id']}/endpoints/{endpoint['id']}/response_schema_ref",
+             "expectedBefore": ref, "value": "FragmentMissingOutput"},
         ])
-        second = ScriptedEditorModel(responses=[
-            tool_response("grep", pattern="FragmentMissingOutput", output_mode="content"),
-            tool_response("edit_file", file_path="/technical-plan.json",
-                          old_string='"response_schema_ref": "FragmentMissingOutput"',
-                          new_string=f'"response_schema_ref": "{ref}"'),
-            AIMessage(content="已修复引用，并保留原始修改意见。"),
-        ])
+        second = deepcopy(first)
+        second["intents"][0]["operations"] = first["intents"][0]["operations"][:1]
         with patch.object(planning, "_project_plan_validation_errors", wraps=planning._project_plan_validation_errors) as validate:
-            frames = await self._run([first, second])
+            frames = await self._run([], changesets=[first, second])
         state = await self.harness.graph.aget_state({"configurable": {"thread_id": self.harness.thread_id}})
         self.assertEqual(tuple(state.next), ("technical_planning_review",), "\n".join(frames))
         self.assertTrue(any(task.interrupts for task in state.tasks))
@@ -110,10 +106,8 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(clean["pages"], baseline["pages"])
         self.assertEqual(result["confirmation_status"], "pending_user_confirmation")
         self.assertNotIn("FragmentMissingOutput", technical_plan_draft_json_path(state.values).read_text())
-        for model in (first, second):
-            for messages in model.seen_messages:
-                self.assertIn(self.harness.request, messages[0].content)
-        self.assertIn("FragmentMissingOutput", second.seen_messages[0][0].content)
+        self.assertEqual(first["baseSha256"], second["baseSha256"])
+        self.assertEqual(second["intents"][0]["sourceText"], self.harness.request)
 
     async def test_failed_local_repair_does_not_overwrite_existing_plan(self):
         """三轮候选持续不合法时，磁盘既有产物保持不变且只展示生成错误审阅门。"""
@@ -121,11 +115,10 @@ class TechnicalPlanFragmentWorkflowTests(IsolatedAsyncioTestCase):
         baseline = await self._prepare_revision()
         path = technical_plan_draft_json_path({"workspace": str(self.harness.workspace)})
         before = path.read_bytes()
-        models = [ScriptedEditorModel(responses=[
-            tool_response("edit_file", file_path="/technical-plan.json", old_string='"pages":', new_string='"pages" invalid:'),
-            AIMessage(content="完成。"),
-        ]) for _ in range(3)]
-        frames = await self._run(models)
+        invalid = _changeset(baseline, self.harness.request, [{
+            "op": "remove", "path": "/api_contracts/missing", "expectedBefore": None,
+        }])
+        frames = await self._run([], changesets=[deepcopy(invalid) for _ in range(3)])
         self.assertEqual(path.read_bytes(), before)
         state = await self.harness.graph.aget_state({"configurable": {"thread_id": self.harness.thread_id}})
         self.assertEqual(tuple(state.next), ("technical_planning_review",), "\n".join(frames))
