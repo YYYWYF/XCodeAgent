@@ -12,6 +12,7 @@ import { cx } from '../../utils'
 import { formatError } from './utils'
 import ApplicationPlanningRecoveryIncidentCard from '../ApplicationPlanningRecoveryIncidentCard'
 import ConnectionStatusBanner from '../ConnectionStatusBanner'
+import DesktopWindowControls from '../DesktopWindowControls'
 import ApplicationPlanningProgress from './ApplicationPlanningProgress'
 import ApplicationPlanningQuestionPanel from './ApplicationPlanningQuestionPanel'
 import UiDesignStreamingPreview from './UiDesignStreamingPreview'
@@ -154,7 +155,7 @@ export default function ApplicationPagePlanningModal({
         !visible && 'is-hidden'
       )}
     >
-      <header className={cx('page-planning-screen-header')}>
+      <header className={cx('page-planning-screen-header', 'desktop-titlebar')}>
         <div className={cx('page-planning-title')}>
           <Button
             aria-label="回到首页"
@@ -173,6 +174,7 @@ export default function ApplicationPagePlanningModal({
         <span className={cx('page-planning-background-hint')}>
           返回首页后，规划将在后台继续运行
         </span>
+        <DesktopWindowControls />
       </header>
 
       <div className={cx('page-planning-screen-body')}>

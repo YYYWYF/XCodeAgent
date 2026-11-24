@@ -20,23 +20,35 @@
 }
 
 .@{class-prefix}-welcome-shell {
+  --welcome-shell-max-width: 1540px;
+  --welcome-shell-gutter: 34px;
+  --welcome-topbar-inset: 26px;
   position: relative;
   z-index: 1;
   display: flex;
   width: 100%;
-  max-width: 1540px;
+  max-width: var(--welcome-shell-max-width);
   height: 100%;
   min-height: 0;
   flex-direction: column;
   margin: 0 auto;
-  padding: 26px 34px 34px;
+  padding: 0 var(--welcome-shell-gutter) 34px;
 }
 
 .@{class-prefix}-welcome-topbar {
+  // 将顶部留白纳入原生拖动范围，图标仍与居中的内容区对齐。
   display: flex;
-  min-height: 44px;
+  width: 100vw;
+  min-height: calc(44px + var(--welcome-topbar-inset));
+  flex: 0 0 auto;
+  align-self: center;
   align-items: center;
   justify-content: space-between;
+  padding-top: var(--welcome-topbar-inset);
+  padding-inline: max(
+    var(--welcome-shell-gutter),
+    calc((100vw - var(--welcome-shell-max-width)) / 2 + var(--welcome-shell-gutter))
+  );
 }
 
 .@{class-prefix}-welcome-brand {
@@ -263,7 +275,7 @@ html[data-platform='windows'] {
 
 @media (max-height: 720px) {
   .@{class-prefix}-welcome-shell {
-    padding-top: 18px;
+    --welcome-topbar-inset: 18px;
     padding-bottom: 20px;
   }
 

@@ -7,6 +7,7 @@ import { Layout, message, notification } from 'antd'
 import { randomUUID } from '@ag-ui/client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { LeftPanel, WorkbenchTopBar } from '../components'
+import DesktopWindowControls from '../components/DesktopWindowControls'
 import WorkbenchVersionModals from '../components/WorkbenchVersionModals'
 import type {
   HistoricalIterationDirtyChoice,
@@ -1050,14 +1051,15 @@ function WorkbenchPage({
       ) : null}
 
       {entryStage !== 'ready' ? (
-        <div
-          aria-live="polite"
-          className={cx('workbench-entry', entryStage === 'leaving' && 'is-leaving')}
-          role="status"
-        >
+        <div className={cx('workbench-entry', entryStage === 'leaving' && 'is-leaving')}>
+          {entryStage === 'loading' ? (
+            <div className={cx('workbench-entry-titlebar', 'desktop-titlebar')}>
+              <DesktopWindowControls />
+            </div>
+          ) : null}
           <div className={cx('workbench-entry-glow', 'glow-one')} />
           <div className={cx('workbench-entry-glow', 'glow-two')} />
-          <div className={cx('workbench-entry-content')}>
+          <div className={cx('workbench-entry-content')} role="status">
             <div className={cx('workbench-entry-mark')} aria-hidden="true">
               <span />
               <span />

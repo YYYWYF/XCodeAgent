@@ -22,6 +22,8 @@ import { readStoredSession, readStoredSessionSummary, saveStoredSession } from '
 import { setupApplicationSettingsIpc } from './applicationSettings'
 import { setupClipboardIpc } from './clipboard'
 import { setupAppVersionIpc } from './appVersion'
+import { attachWindowControls, setupWindowControlsIpc } from './windowControls'
+import { WINDOW_CONTROLS_ARGUMENT } from '../shared/windowControls'
 import { lstatIfPresent, movePathToTrashIfPresent } from './filesystem'
 import { assertCurrentApplicationSchema, readManagedWorkspaceApplication } from './managedWorkspace'
 import { endpointDesignDocumentStatus } from './planningArtifactStatus'
@@ -55,6 +57,7 @@ let mainWindow: BrowserWindow | null = null
 let loginWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
+const useCustomTitleBar = process.platform === 'win32' || process.platform === 'darwin'
 const previewWindows = new Set<BrowserWindow>()
 const launchedPreviewWorkspaces = new Map<string, string>()
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -1737,6 +1740,7 @@ function loadRendererPage(targetWindow: BrowserWindow, pageName: RendererPage): 
   void targetWindow.loadFile(join(__dirname, `../renderer/${pageName}.html`))
 }
 
+/** 创建或聚焦主窗口，Windows 和 macOS 共用自绘标题栏。 */
 function createMainWindow(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show()
@@ -1751,6 +1755,7 @@ function createMainWindow(): void {
     minHeight: 600,
     title: PRODUCT_DISPLAY_NAME,
     backgroundColor: '#f5f7fb',
+    frame: !useCustomTitleBar,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform !== 'darwin' ? { icon } : {}),
@@ -1761,12 +1766,14 @@ function createMainWindow(): void {
       nodeIntegration: false,
       additionalArguments: [
         `--devagentstudio-base-url=${getBackendBaseUrl()}`,
+        ...(useCustomTitleBar ? [WINDOW_CONTROLS_ARGUMENT] : []),
         ...(isBackendTelemetryEnabled() ? ['--devagentstudio-telemetry-enabled'] : [])
       ]
     }
   })
 
   mainWindow.setMenuBarVisibility(false)
+  if (useCustomTitleBar) attachWindowControls(mainWindow)
   mainWindow.on('close', (event) => {
     if (isQuitting) return
     event.preventDefault()
@@ -1984,6 +1991,7 @@ async function initializePrimaryApplication(): Promise<boolean> {
   setupBrowserIpc()
   setupClipboardIpc()
   setupAppVersionIpc()
+  if (useCustomTitleBar) setupWindowControlsIpc(() => mainWindow)
   setupProjectPreviewIpc()
   setupWorkspaceIpc()
   setupSessionStorageIpc()

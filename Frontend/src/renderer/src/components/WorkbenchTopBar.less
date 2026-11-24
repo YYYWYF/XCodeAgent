@@ -11,6 +11,7 @@
 
 /* —— 品牌标识 —— */
 .@{class-prefix}-workbench-topbar-logo {
+  flex: 0 0 auto;
   padding: 4px 6px;
   color: var(--wb-text);
 }
@@ -22,12 +23,26 @@
   flex: 0 0 auto;
 }
 
+// 窄窗口内横向滚动项目和阶段入口，给右侧操作保留完整空间。
+.@{class-prefix}-workbench-topbar-navigation {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 2px;
+  overflow: auto hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--wb-border-strong) transparent;
+  white-space: nowrap;
+}
+
 /* —— 应用卡（与阶段连着）—— */
 .@{class-prefix}-workbench-topbar-app {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 220px;
+  max-width: clamp(96px, 16vw, 220px);
   padding: 4px 10px;
   border: 0;
   border-radius: 6px;
@@ -169,10 +184,9 @@
   white-space: nowrap;
 }
 
-/* —— 右侧快捷区（主题切换 + 预览开关）——
-   margin-left: auto 由本容器承担，把整组推到最右；主题开关排在预览开关左侧。
-   两个按钮共用同一套盒子尺寸与字体继承上下文，图标大小因此天然一致。 */
+/* —— 右侧快捷区固定在可滚动导航右侧。 —— */
 .@{class-prefix}-workbench-topbar-actions {
+  -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
   gap: 4px;

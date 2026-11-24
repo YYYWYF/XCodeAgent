@@ -1,6 +1,11 @@
 import { contextBridge,ipcRenderer} from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { AppUpdateApi, AppUpdateState } from '../shared/appUpdate'
+import {
+  WINDOW_CONTROLS_ARGUMENT,
+  WINDOW_CONTROLS_CHANNELS,
+  type WindowControlsApi
+} from '../shared/windowControls'
 
 const appUpdate: AppUpdateApi = {
   /** 补取启动更新的当前状态。 */
@@ -22,6 +27,22 @@ const appUpdate: AppUpdateApi = {
   /** 退出整个应用且不安装更新。 */
   quit: () => ipcRenderer.invoke('app-update:quit')
 }
+
+const windowControls: WindowControlsApi = {
+  /** 读取当前主窗口是否已最大化。 */
+  getMaximized: () => ipcRenderer.invoke(WINDOW_CONTROLS_CHANNELS.getMaximized),
+  /** 转发最大化状态并为组件卸载提供退订。 */
+  onMaximizedChanged: (listener) => {
+    /** 只传递状态值，隔离 Electron 的事件对象。 */
+    const handler = (_event: Electron.IpcRendererEvent, maximized: boolean): void =>
+      listener(maximized)
+    ipcRenderer.on(WINDOW_CONTROLS_CHANNELS.maximizedChanged, handler)
+    return () => ipcRenderer.removeListener(WINDOW_CONTROLS_CHANNELS.maximizedChanged, handler)
+  },
+  /** 请求主进程执行指定的原生窗口操作。 */
+  perform: (action) => ipcRenderer.invoke(WINDOW_CONTROLS_CHANNELS.perform, action)
+}
+
 const AGENT_ARG_PREFIX = '--devagentstudio-base-url=';
 const agentBaseUrl =
   process.argv.find((argument) => argument.startsWith(AGENT_ARG_PREFIX))?.slice(AGENT_ARG_PREFIX.length) ||
@@ -36,6 +57,7 @@ const api = {}
 
 const devAgentStudioApi = {
   appUpdate,
+  ...(process.argv.includes(WINDOW_CONTROLS_ARGUMENT) ? { windowControls } : {}),
   /** 读取当前运行客户端的版本，不依赖启动更新窗口。 */
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
   isElectron: true,

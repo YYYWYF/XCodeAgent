@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons'
 import BrandLogo from './BrandLogo'
 import AppVersionBadge from './AppVersionBadge'
+import DesktopWindowControls from './DesktopWindowControls'
 import WorkbenchSettings from './BackendLogDrawer'
 import PhaseSwitchConfirmModal from './PhaseSwitchConfirmModal'
 import VersionActions from './VersionActions'
@@ -50,7 +51,7 @@ type Props = {
 
 /**
  * 工作台顶部单条：左 = Logo(DevAgent Studio)，分隔线后 = 应用卡 + 阶段横排 stepper，
- * 右侧 = 快捷区（主题切换 + 预览开关）。
+ * 右侧依次显示主题切换、设置和桌面窗口控制。
  */
 export default function WorkbenchTopBar({
   application,
@@ -109,7 +110,7 @@ export default function WorkbenchTopBar({
   }
 
   return (
-    <div className={cx('workbench-topbar')}>
+    <div className={cx('workbench-topbar', 'desktop-titlebar')}>
       <div className={cx('workbench-topbar-logo', 'app-version-brand')}>
         <BrandLogo size={22} />
         <AppVersionBadge />
@@ -117,94 +118,26 @@ export default function WorkbenchTopBar({
 
       <span className={cx('workbench-topbar-divider')} aria-hidden="true" />
 
-      <button
-        className={cx('workbench-topbar-app')}
-        onClick={onReturnWelcome}
-        disabled={returningWelcome}
-        aria-busy={returningWelcome}
-        title={`返回欢迎页 · ${workspaceRoot}`}
-        aria-label={`${application.name}，返回欢迎页`}
-        type="button"
-      >
-        {returningWelcome ? (
-          <LoadingOutlined spin aria-hidden="true" />
-        ) : (
-          <LeftOutlined aria-hidden="true" />
-        )}
-        <FolderOutlined />
-        <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
-      </button>
+      <div className={cx('workbench-topbar-navigation')}>
+        <button
+          className={cx('workbench-topbar-app')}
+          onClick={onReturnWelcome}
+          disabled={returningWelcome}
+          aria-busy={returningWelcome}
+          title={`返回欢迎页 · ${workspaceRoot}`}
+          aria-label={`${application.name}，返回欢迎页`}
+          type="button"
+        >
+          {returningWelcome ? (
+            <LoadingOutlined spin aria-hidden="true" />
+          ) : (
+            <LeftOutlined aria-hidden="true" />
+          )}
+          <FolderOutlined />
+          <span className={cx('workbench-topbar-app-name')}>{application.name}</span>
+        </button>
 
-      {application.branches && application.branches.length > 0 ? (
-        <VersionActions
-          application={application as ApplicationConfig}
-          lifecycle={lifecycle}
-          viewingBranchName={viewingBranchName}
-          onPublish={onPublishBranch || (() => {})}
-          onStartIteration={onStartIteration || (() => {})}
-          onBranchSelect={onBranchSelect || (() => {})}
-          part="selector"
-        />
-      ) : null}
-
-      <div className={cx('workbench-topbar-phase', locked && 'locked')}>
-        <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
-          {PHASE_ORDER.map((phaseKey, idx) => {
-            // 只读分支也要高亮当前阶段：它只读、不可点，但仍要指明这条分支
-            // 停在哪个阶段（历史分支冻结在验收），否则阶段条上没有任何位置提示。
-            const isActive = phase === phaseKey
-            const blockedByTestGate =
-              idx >= PHASE_ORDER.indexOf('test') && testEntryGate?.allowed !== true
-            // 到达记录不会授予门禁权限；阻断的后续阶段也不显示可回访强调色。
-            const reached = PHASE_ORDER.indexOf(reachedPhase) >= idx && !blockedByTestGate
-            return (
-              <Fragment key={phaseKey}>
-                {idx > 0 ? (
-                  <span className={cx('workbench-topbar-arrow')} aria-hidden="true">
-                    →
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  className={cx(
-                    'workbench-topbar-phase-item',
-                    isActive && 'active',
-                    reached && !isActive && 'reached'
-                  )}
-                  disabled={locked || blockedByTestGate || (phaseKey !== 'test' && !reached)}
-                  title={
-                    locked
-                      ? '该版本为只读历史，阶段和 Agent 调度均已锁定'
-                      : phaseKey === 'test'
-                        ? testEntryGateReason(testEntryGate)
-                        : undefined
-                  }
-                  onClick={() => handlePhaseClick(phaseKey)}
-                >
-                  <span className={cx('workbench-topbar-phase-dot')} aria-hidden="true" />
-                  {WORKBENCH_PHASE_AGENTS[phaseKey].label}阶段
-                  {phaseKey === 'development' && developmentTotals ? (
-                    <span>
-                      {developmentTotals.completed}/{developmentTotals.total}
-                    </span>
-                  ) : null}
-                </button>
-              </Fragment>
-            )
-          })}
-        </div>
-      </div>
-
-      {application.branches && application.branches.length > 0 ? (
-        <>
-          <span
-            aria-hidden="true"
-            className={cx('workbench-topbar-arrow', 'workbench-topbar-terminal-arrow')}
-          >
-            →
-          </span>
+        {application.branches && application.branches.length > 0 ? (
           <VersionActions
             application={application as ApplicationConfig}
             lifecycle={lifecycle}
@@ -212,14 +145,82 @@ export default function WorkbenchTopBar({
             onPublish={onPublishBranch || (() => {})}
             onStartIteration={onStartIteration || (() => {})}
             onBranchSelect={onBranchSelect || (() => {})}
-            onStartHistoricalIteration={onStartHistoricalIteration}
-            part="terminal"
+            part="selector"
           />
-        </>
-      ) : null}
+        ) : null}
 
-      {/* 右侧快捷区：主题切换。整组由本容器推到最右（margin-left: auto）。
-          右侧面板的显示/分栏/全宽已由分隔线上的三档控件负责，顶栏不再重复提供入口。 */}
+        <div className={cx('workbench-topbar-phase', locked && 'locked')}>
+          <div className={cx('workbench-topbar-stepper')} role="tablist" aria-label="阶段">
+            {PHASE_ORDER.map((phaseKey, idx) => {
+              // 只读分支也要高亮当前阶段：它只读、不可点，但仍要指明这条分支
+              // 停在哪个阶段（历史分支冻结在验收），否则阶段条上没有任何位置提示。
+              const isActive = phase === phaseKey
+              const blockedByTestGate =
+                idx >= PHASE_ORDER.indexOf('test') && testEntryGate?.allowed !== true
+              // 到达记录不会授予门禁权限；阻断的后续阶段也不显示可回访强调色。
+              const reached = PHASE_ORDER.indexOf(reachedPhase) >= idx && !blockedByTestGate
+              return (
+                <Fragment key={phaseKey}>
+                  {idx > 0 ? (
+                    <span className={cx('workbench-topbar-arrow')} aria-hidden="true">
+                      →
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    className={cx(
+                      'workbench-topbar-phase-item',
+                      isActive && 'active',
+                      reached && !isActive && 'reached'
+                    )}
+                    disabled={locked || blockedByTestGate || (phaseKey !== 'test' && !reached)}
+                    title={
+                      locked
+                        ? '该版本为只读历史，阶段和 Agent 调度均已锁定'
+                        : phaseKey === 'test'
+                          ? testEntryGateReason(testEntryGate)
+                          : undefined
+                    }
+                    onClick={() => handlePhaseClick(phaseKey)}
+                  >
+                    <span className={cx('workbench-topbar-phase-dot')} aria-hidden="true" />
+                    {WORKBENCH_PHASE_AGENTS[phaseKey].label}阶段
+                    {phaseKey === 'development' && developmentTotals ? (
+                      <span>
+                        {developmentTotals.completed}/{developmentTotals.total}
+                      </span>
+                    ) : null}
+                  </button>
+                </Fragment>
+              )
+            })}
+          </div>
+        </div>
+
+        {application.branches && application.branches.length > 0 ? (
+          <>
+            <span
+              aria-hidden="true"
+              className={cx('workbench-topbar-arrow', 'workbench-topbar-terminal-arrow')}
+            >
+              →
+            </span>
+            <VersionActions
+              application={application as ApplicationConfig}
+              lifecycle={lifecycle}
+              viewingBranchName={viewingBranchName}
+              onPublish={onPublishBranch || (() => {})}
+              onStartIteration={onStartIteration || (() => {})}
+              onBranchSelect={onBranchSelect || (() => {})}
+              onStartHistoricalIteration={onStartHistoricalIteration}
+              part="terminal"
+            />
+          </>
+        ) : null}
+      </div>
+
       <div className={cx('workbench-topbar-actions')}>
         <button
           aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
@@ -231,6 +232,7 @@ export default function WorkbenchTopBar({
           {theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
         </button>
         <WorkbenchSettings />
+        <DesktopWindowControls />
       </div>
 
       <PhaseSwitchConfirmModal

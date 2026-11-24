@@ -1,6 +1,7 @@
 import { QuestionCircleOutlined } from '@ant-design/icons'
 import { Button, message, Tooltip } from 'antd'
 import AppVersionBadge from '../components/AppVersionBadge'
+import DesktopWindowControls from '../components/DesktopWindowControls'
 import {
   CreateApplicationAction,
   OpenWorkspaceAction,
@@ -37,7 +38,7 @@ export default function WelcomePage({
   return (
     <main className={cx('welcome-page')} data-theme={theme}>
       <section className={cx('welcome-shell')}>
-        <header className={cx('welcome-topbar')}>
+        <header className={cx('welcome-topbar', 'desktop-titlebar')}>
           <div className={cx('welcome-brand')} aria-label="DevAgent Studio">
             <img
               alt=""
@@ -60,6 +61,7 @@ export default function WelcomePage({
                 type="text"
               />
             </Tooltip>
+            <DesktopWindowControls />
           </nav>
         </header>
 

@@ -124,6 +124,8 @@ function renderNavigation(
         application={lifecycle.application}
         workspaceRoot="/workspace"
         onReturnWelcome={() => assert.fail('不应切换应用')}
+        theme="light"
+        onThemeChange={() => assert.fail('不应切换主题')}
         rightPanelOpen
         onToggleRightPanel={() => assert.fail('不应切换预览')}
         versionReadOnly={versionReadOnly}
@@ -160,6 +162,18 @@ function assertPhaseActive(html: string, label: string): void {
   assert.equal(active.length, 1, `应恰好高亮一个阶段，实际 ${active.length} 个`)
   assert.ok(active[0].includes(`${label}阶段`), `高亮阶段应为${label}`)
 }
+
+test('主窗口按主题、设置、最小化、最大化、关闭的顺序呈现顶栏入口', () =>
+  withStorage(() => {
+    assert.doesNotMatch(renderNavigation().html, /aria-label="窗口控制"/)
+    // 静态渲染只判断主窗口是否暴露专用桥接，实际窗口动作由 Electron 执行。
+    Object.defineProperty(window, 'devAgentStudio', { value: { windowControls: {} } })
+    const html = renderNavigation().html
+    assert.match(
+      html,
+      /aria-label="切换为深色主题".*aria-label="设置".*aria-label="最小化窗口".*aria-label="最大化窗口".*aria-label="关闭窗口"/s
+    )
+  }))
 
 test('顶部开发进度与测试门禁只统计页面和 Endpoint，规划实体不参与', () =>
   withStorage(() => {

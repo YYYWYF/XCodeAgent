@@ -2,6 +2,7 @@ export {}
 
 import type { ElectronAPI } from '@electron-toolkit/preload'
 import type { AppUpdateApi } from '../../shared/appUpdate'
+import type { WindowControlsApi } from '../../shared/windowControls'
 import type {
   ApplicationSchemaConfig,
   DevelopmentPlanningPageTreeNode
@@ -12,6 +13,7 @@ declare global {
     electron: ElectronAPI
     devAgentStudio?: {
       appUpdate: AppUpdateApi
+      windowControls?: WindowControlsApi
       getAppVersion: () => Promise<string>
       isElectron: boolean
       agentBaseUrl: string
