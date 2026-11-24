@@ -10,6 +10,11 @@ from app.agents.main.technical_plan_generation_prompts import (
 from app.agents.main.technical_plan_catalog_repair import business_slots
 
 
+CONTRACT_BASE_PATH_RULE = (
+    "Contract 的 base_path 必须以 /api/ 开头，并包含业务资源路径，例如 /api/products。\n"
+)
+
+
 def _page_facts(page: dict) -> dict:
     """保留页面业务事实，避免把导航、控件和本地交互带入目录决策。"""
 
@@ -127,7 +132,9 @@ def registry_prompt(requirement: dict, entities: list[dict]) -> str:
         "Contract 按业务实体或业务聚合划分，分组名称体现业务主体。将该主体的新增、列表查询、详情查询、修改、删除"
         "及其他业务操作归入同一 Contract。例如新增商品和查询商品详情都属于“商品”分组，不要拆成“商品新增”和“商品查询”。\n"
         "不能按操作类型、读写差异、页面或生成批次拆分同一主体。内容较多时由平台在同一 Contract 内分批生成。\n\n"
-        "【3. 汇总页面并输出目录】\n"
+        "【3. 确定 Contract 基础路径】\n"
+        f"{CONTRACT_BASE_PATH_RULE}\n"
+        "【4. 汇总页面并输出目录】\n"
         "Contract 可供多页共享。"
         "page_ids 汇总该主体操作涉及的页面，page_ids 非空。"
         "entity_ids 汇总该能力涉及的实体，若能力不涉及实体，则将 entity_ids 填为 []。"
@@ -190,7 +197,10 @@ def endpoints_prompt(requirement: dict, identity: dict, entities: list, complete
         f"{LIST_QUERY_RULE}"
         "在 summary 中写明列表是否分页。分页参数和响应 Schema 由契约阶段生成。\n\n"
         "【3. 确定请求方法、路径和记录标识】\n"
-        "GET 只能读取，创建不能代替更新已有记录。路径必须位于当前 base_path 的完整路径段范围内，"
+        "GET 只能读取，创建不能代替更新已有记录。\n"
+        "path 输出以 /api/ 开头的完整接口路径，沿用 base_path 中已有的 /api 前缀，避免生成 /api/api/。"
+        "例如 base_path 为 /api/products 时，列表用 /api/products，详情可用 /api/products/{code}。\n"
+        "路径必须位于当前 base_path 的完整路径段范围内，"
         "不能占用 other_contracts 中更具体的路径范围。\n"
         f"{API_RECORD_IDENTITY_RULE}\n"
         "【4. 复核并输出接口目录】\n"

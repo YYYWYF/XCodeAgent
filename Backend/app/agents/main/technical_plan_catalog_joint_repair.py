@@ -5,7 +5,7 @@ from copy import deepcopy
 from pydantic import Field
 
 from app.agents.main.technical_plan_catalog_conflict import CatalogContractConflict
-from app.agents.main.technical_plan_catalog_parts_prompts import _page_facts, _prompt
+from app.agents.main.technical_plan_catalog_parts_prompts import CONTRACT_BASE_PATH_RULE, _page_facts, _prompt
 from app.agents.main.technical_plan_catalog_parts_validation import (
     ContractIdentity, validate_endpoint_directory, validate_registry,
 )
@@ -121,11 +121,13 @@ def repair_contract_conflict(requirement: dict, registry: dict, conflict: Catalo
         "这是一项跨分组联合修正。contracts 是本轮全部可修改分组，必须一起审阅，不得只重写后生成的一组。\n"
         "根据已确认页面业务判断边界：同一业务主体因页面、管理/展示或读写被拆开时，合并并共享接口；"
         "确属不同业务聚合时保留分组，明确各自范围。允许调整冲突组的 name、base_path、entity_ids 和 page_ids。\n"
+        f"{CONTRACT_BASE_PATH_RULE}"
         "只能使用冲突分组的原 ID；合并时保留其中一个。entity_ids 和 page_ids 的并集必须完整保留，"
         "不得为了消除冲突丢失读取、写入或页面业务。readonly_contracts 与 reserved_endpoints 不得修改。\n"
         "同一 method/path 及 Endpoint ID 在全应用只定义一次；共享接口所属分组的 page_ids 必须覆盖所有使用页面。"
         "实体字段和 ProductPlan 只读，不输出 Schema 或动作映射。\n"
-        + ("只返回 {contracts:[{id,name,entity_ids,base_path,page_ids,endpoints:[{id,name,method,path,summary}]}]}，每组提供完整接口目录。"
+        + ("每个接口的 path 必须是所属 base_path 范围内以 /api/ 开头的完整路径，沿用已有前缀。\n"
+           "只返回 {contracts:[{id,name,entity_ids,base_path,page_ids,endpoints:[{id,name,method,path,summary}]}]}，每组提供完整接口目录。"
            if with_endpoints else "只返回 {contracts:[{id,name,entity_ids,base_path,page_ids}]}，不生成接口。")
     )
     key = prefix + "joint:" + fragment_digest(context)

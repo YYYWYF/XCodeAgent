@@ -31,11 +31,20 @@ definite result.
 
 ## Check Endpoint Routes
 
-Match endpoints by HTTP method and full path.
+The backend's `application.yml` sets the servlet context path:
 
-The combined class-level `@RequestMapping` and method-level mapping must match the
-contract's full path. Do not repeat the class-level prefix in the method mapping.
-For example, `@RequestMapping("/api/products")` with `@GetMapping("/{id}")` handles
+```yaml
+server:
+  servlet:
+    context-path: /api
+```
+
+Omit the leading `/api` from Controller mapping annotations because the context path
+already supplies it. Match endpoints by HTTP method and full path, combining the
+context path, class-level mapping, and method-level mapping. Keep shared route
+segments in the class-level mapping.
+
+For example, `@RequestMapping("/products")` with `@GetMapping("/{id}")` handles
 `GET /api/products/{id}`.
 
 Reuse the matching handler and preserve other existing routes.
@@ -80,7 +89,8 @@ public BeeResponseEntity<ProductDetailResponse> createProduct(
 }
 ```
 
-This example handles product creation under the class-level `/api/products` route.
+With `@RequestMapping("/products")` on the class, this example handles
+`POST /api/products`.
 Use the routes, DTOs, and Service corresponding to the current task.
 
 Apply the HTTP response status when explicitly specified by the contract.
