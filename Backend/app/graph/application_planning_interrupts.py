@@ -7,6 +7,9 @@ from uuid import uuid4
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command, interrupt
 
+from app.agents.main.technical_plan_revision_scope import CLARIFICATION_MODE
+from app.services.technical_planning_retry import technical_planning_clarification_request
+
 from app.domain.application_planning_interaction import (
     ApplicationPlanningArtifact,
     ApplicationPlanningInteraction,
@@ -138,7 +141,8 @@ def validate_application_planning_review_action(
             artifact == "requirement_document"
             and mode == "authorization_operation_action_resolution"
         )
-        if (artifact != "requirement_spec" and not product_operation_question) or not has_questions:
+        technical_revision_question = artifact == "technical_plan" and mode == CLARIFICATION_MODE
+        if (artifact != "requirement_spec" and not product_operation_question and not technical_revision_question) or not has_questions:
             raise ValueError(
                 f"当前 {artifact} 审阅门不允许 action=answer；澄清问题必须存在且不能提交确认卡答案。"
             )
@@ -251,6 +255,14 @@ def prepare_application_planning_review_resume(
         and submission.answers["planning_recovery"] == submission.request)
     if submission.action in {"answer", "revise"} and submission.request.strip() and not retry_control:
         business_request = submission.request.strip()
+    technical_answer = (
+        effective_node_name == "technical_planning"
+        and payload.get("clarification", {}).get("mode") == CLARIFICATION_MODE
+        and submission.action == "answer"
+    )
+    if technical_answer:
+        business_request = technical_planning_clarification_request(state, submission.request, submission.answers)
+
     update: dict[str, Any] = {
         **runtime_update,
         # 显式动作通过版本核验后，后续正常确认/修改不再继承本轮重建绑定。
@@ -266,6 +278,10 @@ def prepare_application_planning_review_resume(
             exclude_none=True,
         ),
     }
+    if effective_node_name == "technical_planning" and submission.action in {"answer", "revise"}:
+        # begin 会消费 interaction；必须同步本轮输入，避免 generate 回读上一轮要求。
+        update["design_change_generation_request"] = business_request
+        update["application_planning_interaction"]["request"] = business_request
     if retry_control:
         # 内置失败重试只授权续修，不是新的业务修改；保留输入身份才能复用已完成片段。
         update["application_planning_interaction"]["request"] = business_request
@@ -287,12 +303,13 @@ def prepare_application_planning_review_resume(
         update["requirement_spec_feedback"] = submission.requirement_spec_feedback
     if submission.ui_action is not None:
         update["ui_design_action"] = submission.ui_action
-    if submission.action == "revise":
+    if submission.action == "revise" or technical_answer:
         clarification = payload.get("clarification")
         clarification = clarification if isinstance(clarification, dict) else {}
         if clarification.get("mode") not in {
             "technical_plan_generation_error",
             "project_plan_dependency_validation_error",
+            CLARIFICATION_MODE,
         }:
             # generation error 的 revise 属于失败候选续修，必须保留 repair candidate/errors；
             # 只有用户直接修订正式产物时才开启新的 baseline revision transaction。
@@ -311,6 +328,7 @@ def prepare_application_planning_review_resume(
                 in {
                     "technical_plan_generation_error",
                     "project_plan_dependency_validation_error",
+                    CLARIFICATION_MODE,
                 }
                 else ApplicationPlanningOperation.REVISE
             ),
@@ -322,7 +340,7 @@ def prepare_application_planning_review_resume(
             # 已校验的失败审阅动作先把来源写进 checkpoint；begin 才做 lifecycle CAS 交接。
             update["technical_plan_repair_source_run_id"] = (
                 str(state.get("active_run_id") or "")
-                if clarification.get("mode") == "technical_plan_generation_error"
+                if clarification.get("mode") in {"technical_plan_generation_error", CLARIFICATION_MODE}
                 else ""
             )
         if effective_node_name == "ui_confirmation":
@@ -337,7 +355,7 @@ def prepare_application_planning_review_resume(
         else (
             "technical_planning_begin"
             if effective_node_name == "technical_planning"
-            and submission.action == "revise"
+            and (submission.action == "revise" or technical_answer)
             else (
                 "technical_planning_confirm"
                 if effective_node_name == "technical_planning"

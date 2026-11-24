@@ -60,6 +60,22 @@ def restart_stopped_technical_plan_revision(
         )
 
 
+def technical_planning_clarification_request(
+    state: dict[str, Any], request: str, answers: dict[str, Any] | None = None,
+) -> str:
+    """补充当前技术修改的问题时保留原意，普通新修改仍仅使用本轮文字。"""
+
+    from app.agents.main.technical_plan_revision_scope import CLARIFICATION_MODE
+    from app.services.requirement_clarification import requirement_clarification_request
+
+    clarification = state.get("clarification") or {}
+    if clarification.get("mode") != CLARIFICATION_MODE:
+        return request.strip()
+    original = str(state.get("design_change_generation_request") or state.get("request") or "")
+    # 复用已有问答转文本规则，保留问题、选项含义、其他补充和原修改要求。
+    return requirement_clarification_request(original, clarification, answers or {}, request)
+
+
 def prepare_technical_planning_retry(
     state: dict[str, Any], *, target_node: str = "technical_planning_begin",
     new_request: str | None = None, allow_initial_generation: bool = False,
@@ -89,9 +105,9 @@ def prepare_technical_planning_retry(
         # 显式 @技术规划可重新发起首次生成，旧计划只是可选基线；普通修订仍要求已有计划。
         if not baseline and not allow_initial_generation:
             raise ValueError("当前尚无技术规划，请使用上方重试入口重新生成。")
-        request = new_request.strip()
-        if not request:
+        if not new_request.strip():
             raise ValueError("技术规划修改要求不能为空。")
+        request = technical_planning_clarification_request(state, new_request)
     previous = parse_application_planning_boundary(state.get("application_planning_recovery_boundary"))
     formal_revision = bool(state.get("change_id"))
     operation = (

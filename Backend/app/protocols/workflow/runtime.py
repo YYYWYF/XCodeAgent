@@ -894,6 +894,8 @@ def build_workflow_ag_ui_stream(
                 initial_state.update(prepare_technical_planning_retry(
                     {**initial_state,
                      "request": checkpoint_values.get("request") or initial_state["request"],
+                     # 仅从服务端原门禁读取补充语义，并由 prepare 统一合并一次。
+                     "clarification": checkpoint_values.get("clarification"),
                      "active_run_id": current_lifecycle.active_run_id if current_lifecycle else ""},
                     new_request=technical_planning_revision.request if technical_planning_revision else None,
                     allow_initial_generation=bool(technical_planning_revision and
@@ -938,8 +940,13 @@ def build_workflow_ag_ui_stream(
                 initial_state.update(cleared_design_change_context())
                 if technical_planning_revision is not None:
                     # 新的技术修改替代旧生成要求；后续失败重试继续沿用这次明确输入。
-                    initial_state["design_change_request"] = technical_planning_revision.request
-                    initial_state["design_change_generation_request"] = technical_planning_revision.request
+                    technical_request = (
+                        str(initial_state["request"])
+                        if technical_planning_revision.target_node == "technical_planning"
+                        else technical_planning_revision.request
+                    )
+                    initial_state["design_change_request"] = technical_request
+                    initial_state["design_change_generation_request"] = technical_request
                     initial_state["design_conversation_target"] = technical_planning_revision.conversation_target
             first_node_name = _application_planning_resume_node(
                 application_planning_interaction

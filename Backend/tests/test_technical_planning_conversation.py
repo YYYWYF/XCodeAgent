@@ -25,6 +25,7 @@ from app.services.execution_recovery_executor import (
 from app.domain.application_planning_recovery import application_planning_sha256
 from app.workspace.plan_documents import commit_technical_plan_document
 from tests.test_technical_planning_recovery_journey import TechnicalPlanningRecoveryJourneyHarness
+from tests.test_technical_plan_content_changes import _changeset
 
 
 class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
@@ -35,6 +36,9 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         self.h = TechnicalPlanningRecoveryJourneyHarness()
         self.settings = patch("app.config.Settings.from_env", side_effect=self.h.current_settings)
         self.settings.start()
+        self.scope = patch("app.graph.nodes.application_technical_planning.resolve_technical_plan_revision_scope",
+                           return_value=({}, {}, []))
+        self.scope.start()
         await self.h.initialize_graph()
         with patch("app.graph.nodes.planning._generate_valid_technical_plan", side_effect=RuntimeError("模型请求失败")):
             await self.h.run_initial()
@@ -44,6 +48,7 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         """关闭工作区连接和模型配置替身。"""
         await close_workflow_checkpointer_for_workspace(workspace=str(self.h.workspace))
         self.h.close()
+        self.scope.stop()
         self.settings.stop()
 
     async def _send(self, action="classify", request="为什么报错？", **identity):
@@ -69,6 +74,15 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         plan["summary"] = "已有技术规划"
         commit_technical_plan_document({"workspace": str(self.h.workspace)}, plan)
         return plan
+
+    def _revision_changeset(self, requirement, document, request, **kwargs):
+        """替换修订模型，保留真实 ChangeSet 执行及正式确认链路。"""
+
+        before = document["architecture"]["frontend"]
+        return _changeset(document, request, [{
+            "op": "replace", "path": "/architecture/frontend",
+            "expectedBefore": before, "value": before + "，技术问答修改标记。",
+        }])
 
     async def _return_to_design(self, request, conversation_target=None):
         """先交接独立 DESIGN 线程，再使用目标 checkpoint 的精确版本执行上游修改。"""
@@ -116,7 +130,19 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
         spec["pages"].append({"pageId": "random_name", "name": "随机生成名字", "path": "/random-name",
                               "module_id": spec["feature_modules"][0]["id"], "description": "随机生成名字"})
         product = create_product_plan(spec)
+
+        def requirement_changeset(document, source, feedback):
+            """按当前联合文档生成新增页操作，避免测试调用真实需求修订模型。"""
+
+            values = {"requirement_spec": spec["pages"][-1], "product_plan": product["pages"][-1]}
+            return {"schemaVersion": 1, "baseSha256": application_planning_sha256(document),
+                    "intents": [{"id": "current-request", "sourceText": source, "operations": [
+                        {"op": "add", "path": f"/{key}/pages/random_name", "value": value}
+                        for key, value in values.items() if key in document
+                    ]}]}
+
         with (
+            patch("app.agents.main.requirement_revision.plan_requirement_changeset", side_effect=requirement_changeset) as changeset,
             patch("app.graph.nodes.requirements.analyze_requirements_with_chat_model",
                   return_value={"requirement_spec": spec, "clarification": clear_clarification(spec)}) as analyze,
             patch("app.graph.nodes.product_planning._generate_valid_product_plan", return_value=product),
@@ -128,7 +154,8 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             })
             _, events = await self._return_to_design(request, "requirements")
         self.assertFalse(any(event["type"] == "RUN_ERROR" for event in events))
-        analyze.assert_called_once()
+        analyze.assert_not_called()
+        changeset.assert_called_once()
         technical.assert_not_called()
         snapshot = await self.h.graph.aget_state(self.config)
         self.assertEqual(snapshot.values["design_change_target"], "requirements")
@@ -150,7 +177,7 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             decision, _ = await self._send(request=request, conversationTarget="technical_planning")
         self.assertEqual(decision.get("intent"), "revise")
         with (
-            patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(self.h.candidate)) as generate,
+            patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=self._revision_changeset) as generate,
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
         ):
             _, events = await self._send("revise", request, sourceRunId=decision["sourceRunId"],
@@ -240,21 +267,21 @@ class TechnicalPlanningConversationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rejected["status"], "failed")
             self.assertEqual(before.config, (await self.h.graph.aget_state(self.config)).config)
 
-    async def test_revision_uses_original_generator_with_new_request_and_existing_plan(self):
-        """失败后输入新修改要求，携带已有计划调用原生成器并停回正式确认门。"""
-        self._seed_plan()
+    async def test_revision_uses_changeset_with_new_request_and_existing_plan(self):
+        """失败后输入新修改要求，基于已有计划执行 ChangeSet 并停回正式确认门。"""
+        baseline = self._seed_plan()
         request = "在前端架构说明追加技术问答修改标记。"
         with patch("app.protocols.technical_planning_conversation.classify_technical_planning_conversation",
                    return_value=TechnicalPlanningConversationDecision(intent="revise", message="修改技术规划。")):
             decision, _ = await self._send(request=request)
         with (
-            patch("app.graph.nodes.planning.plan_project_with_chat_model", return_value=deepcopy(self.h.candidate)) as generate,
+            patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", side_effect=self._revision_changeset) as generate,
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
         ):
             _, events = await self._send("revise", request, sourceRunId=decision["sourceRunId"], checkpointId=decision["checkpointId"])
         generate.assert_called_once()
         self.assertEqual(generate.call_args.args[0]["planning_adjustment_request"], request)
-        self.assertEqual(generate.call_args.kwargs["existing_plan"]["summary"], "已有技术规划")
+        self.assertEqual(generate.call_args.args[1]["architecture"], baseline["architecture"])
         self.assertFalse(any(e["type"] == "RUN_ERROR" for e in events))
         final = await self.h.graph.aget_state(self.config)
         self.assertEqual(final.values["request"], request)

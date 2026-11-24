@@ -28,6 +28,10 @@ from app.services.technical_plan_carryover import (
     drop_generated_fields,
     read_technical_plan_carryover,
 )
+from app.agents.main.technical_plan_revision_scope import (
+    CLARIFICATION_MODE, resolve_technical_plan_revision_scope,
+)
+from app.tools.ask_user import AskUserQuestion, build_ask_user_payload
 from app.services.technical_plan_merger import (
     preserve_deletion_records,
     strip_change_status,
@@ -397,6 +401,24 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
             }
         )
     )
+    # 只为当前草稿的直接修订识别目标；新迭代仍允许 ChangeSet 新增原基线没有的内容。
+    targets, schema_targets, questions = (
+        resolve_technical_plan_revision_scope(request, existing_plan)
+        if existing_plan is not None and boundary.operation in {
+            ApplicationPlanningOperation.REVISE, ApplicationPlanningOperation.REPAIR,
+        } else ({}, {}, [])
+    )
+    if questions:
+        # 歧义是等待补充信息，复用原澄清卡；不生成候选、不覆盖旧草稿。
+        return _technical_generation_failure(state, questions, generation_fragments, clarify=True)
+    if targets or schema_targets:
+        technical_requirement = {
+            **technical_requirement,
+            "technical_plan_revision_scope": {
+                "endpoints": list(targets.values()),
+                "schemas": {key: sorted(names) for key, names in schema_targets.items()},
+            },
+        }
     if direct_revision:
         # carryover 不只是事后 diff 的参照，也是本轮唯一事务基线；未显式操作的旧子树不经过模型重写。
         plan, errors = generate_technical_plan_revision(
@@ -482,17 +504,23 @@ def technical_planning_generate(state: ProjectState) -> dict[str, Any]:
 
 
 def _technical_generation_failure(
-    state: ProjectState, errors: list[str], fragments: dict[str, Any],
+    state: ProjectState, errors: list[str], fragments: dict[str, Any], *, clarify: bool = False,
 ) -> dict[str, Any]:
     """将变更集规划、原子操作或全局校验失败接回原错误门，保留当前草稿。"""
 
     clarification = _technical_generation_error_payload(errors)
     clarification["message"] = "技术修订未完成，原草稿已保留，请核对修改要求及关联引用。"
+    if clarify:
+        clarification = build_ask_user_payload([
+            AskUserQuestion(header=f"修改范围{index + 1}", question=question, type="text")
+            for index, question in enumerate(errors[:8])
+        ])
+        clarification.update(mode=CLARIFICATION_MODE, message="请补充技术规划修改信息，已有规划已保留。")
     return {
         "phase": "technical_planning_generate",
         "status": "requires_user_input",
         "technical_plan_repair_candidate": {},
-        "technical_plan_repair_errors": errors[:12],
+        "technical_plan_repair_errors": [] if clarify else errors[:12],
         "technical_plan_generation_input_sha256": fragments.get("input_sha256", ""),
         "technical_plan_repair_source_run_id": "",
         "application_planning_recovery_boundary": _boundary_payload_for_state(

@@ -43,6 +43,10 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
 
         self.harness = TechnicalPlanningRecoveryJourneyHarness()
         self.addAsyncCleanup(self._cleanup_harness)
+        self.scope = patch("app.graph.nodes.application_technical_planning.resolve_technical_plan_revision_scope",
+                           return_value=({}, {}, []))
+        self.resolve_scope = self.scope.start()
+        self.addCleanup(self.scope.stop)
 
     async def _cleanup_harness(self) -> None:
         """先关闭 checkpoint 连接，再清理测试工作区。"""
@@ -361,6 +365,10 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             proposed["endpoints"][0]["summary"] = "用户本次修改的接口说明"
             proposed["endpoints"] = [item for item in proposed["endpoints"] if item["id"] != removed["id"]]
             proposed["endpoints"][1]["summary"] = "模型顺手改写但必须丢弃"
+            self.resolve_scope.return_value = ({item["id"]: {
+                "contract_id": contract["id"], "method": item["method"], "path": item["path"],
+                "deleted": item["id"] == removed["id"],
+            } for item in (change, removed)}, {}, [])
             pending = before.tasks[0].interrupts[0].value
             changeset = _changeset(baseline, request, [
                 {"op": "replace", "path": f"/api_contracts/{contract['id']}/endpoints/{change['id']}/summary",
@@ -438,6 +446,10 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             candidate = deepcopy(baseline)
             candidate["api_contracts"][0]["endpoints"][0]["path"] = new_path
             pending = before.tasks[0].interrupts[0].value
+            self.resolve_scope.return_value = ({endpoint["id"]: {
+                "contract_id": contract["id"], "method": endpoint["method"], "path": old_path,
+                "new_path": new_path, "deleted": False,
+            }}, {}, [])
 
             changeset = _changeset(baseline, request, [{
                 "op": "replace", "path": f"/api_contracts/{contract['id']}/endpoints/{endpoint['id']}/path",
@@ -494,13 +506,8 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             path = technical_plan_draft_json_path({"workspace": str(harness.workspace)})
             prior_bytes = path.read_bytes()
             request = "删除 /api/canteen-evaluations/canteens 接口"
-            changeset = _changeset(before.values["technical_plan"], request, [{
-                "op": "remove", "path": "/api_contracts/missing/endpoints/missing", "expectedBefore": None,
-            }])
-            with (
-                patch("app.graph.nodes.planning._generate_valid_technical_plan") as model,
-                patch("app.agents.main.technical_plan_revision.plan_technical_plan_changeset", return_value=changeset),
-            ):
+            self.resolve_scope.return_value = ({}, {}, ["未匹配到该路径，请补充要删除的接口。"])
+            with patch("app.graph.nodes.planning._generate_valid_technical_plan") as model:
                 frames = [frame async for frame in build_workflow_ag_ui_stream(
                     graph=harness.graph,
                     payload={
@@ -519,15 +526,15 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             after = await harness.graph.aget_state(config)
             self.assertEqual(tuple(after.next), ("technical_planning_review",))
             self.assertEqual(after.values["technical_plan_candidate"], {})
-            self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_generation_error")
-            self.assertIn("不存在", " ".join(after.values["technical_plan_repair_errors"]))
+            self.assertEqual(after.tasks[0].interrupts[0].value["clarification"]["mode"], "technical_plan_revision_clarification")
+            self.assertEqual(after.values["technical_plan_repair_errors"], [])
             self.assertEqual(path.read_bytes(), prior_bytes)
             self.assertEqual(
                 drop_generated_fields(after.values["technical_plan"]),
                 drop_generated_fields(before.values["technical_plan"]),
             )
             stream = "".join(frames)
-            self.assertIn("不存在", stream)
+            self.assertIn("未匹配到该路径", stream)
             self.assertIn('"type":"RUN_FINISHED"', stream)
             self.assertNotIn('"type":"RUN_ERROR"', stream)
 
@@ -567,6 +574,9 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
                     patch("app.graph.nodes.planning._attach_technical_plan_contracts", side_effect=lambda _state, plan: plan),
                     patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
                 ):
+                    self.resolve_scope.return_value = ({_endpoint(current)["id"]: {
+                        "contract_id": "greeting_contract", "method": "GET", "path": _endpoint(current)["path"], "deleted": False,
+                    }}, {}, [])
                     result = technical_planning_generate(state)
                 model.assert_called_once()
                 self.assertEqual(_endpoint(result["technical_plan_candidate"])["summary"], "本次修订")
@@ -746,6 +756,7 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             patch("app.graph.nodes.planning._attach_technical_plan_contracts", side_effect=lambda _state, plan: plan),
             patch("app.graph.nodes.planning._project_plan_validation_errors", return_value=[]),
         ):
+            self.resolve_scope.return_value = ({}, {"greeting_contract": {"MorningGreetingResponse"}}, [])
             result = technical_planning_generate(state)
         self.assertIn("greetingText", _contract(result["technical_plan_candidate"])["schemas"]["MorningGreetingResponse"]["properties"])
         self.assertEqual(_endpoint(result["technical_plan_diff"])["_change_status"], "modified")
@@ -785,6 +796,36 @@ class TechnicalPlanningRepairBaselineTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["technical_plan_candidate"], {})
             self.assertIn(expected, " ".join(result["clarification"]["errors"]))
             self.assertEqual(result["application_planning_recovery_boundary"]["boundary"], "review_ready")
+
+    def test_ambiguous_and_unmatched_paths_stop_before_changeset(self) -> None:
+        """目标歧义先进入澄清，不能调用 ChangeSet 或旧候选生成器。"""
+
+        from tests.test_technical_plan_content_changes import _base_plan, _contract, _endpoint
+        base = _base_plan()
+        _contract(base)["endpoints"].append({**_endpoint(base), "id": "other.post", "method": "POST"})
+        for request, expected in (("/api/greetings/morning 接口改响应", "歧义"), ("/api/greeting/morning 接口改响应", "未匹配")):
+            with self.subTest(request=request):
+                state = {
+                    "request": request, "technical_plan": base,
+                    "requirement_spec": self.harness.requirement_spec,
+                    "application_planning_recovery_boundary": application_planning_boundary_payload(
+                        operation_id="direct-match-test", operation=ApplicationPlanningOperation.REVISE,
+                        boundary=ApplicationPlanningRecoveryBoundary.GENERATION_READY,
+                        request=request, baseline=base,
+                    ),
+                }
+                with (
+                    patch("app.graph.nodes.application_technical_planning._technical_plan_review_baseline", return_value=base),
+                    patch("app.graph.nodes.planning._technical_planning_requirement_spec", return_value={}),
+                    patch("app.graph.nodes.planning._generate_valid_technical_plan") as model,
+                ):
+                    self.resolve_scope.return_value = ({}, {}, [f"请补充目标：{expected}"])
+                    result = technical_planning_generate(state)
+                model.assert_not_called()
+                self.assertEqual(result["technical_plan_candidate"], {})
+                self.assertIn(expected, result["clarification"]["questions"][0]["question"])
+                self.assertEqual(result["clarification"]["mode"], "technical_plan_revision_clarification")
+                self.assertEqual(result["application_planning_recovery_boundary"]["boundary"], "review_ready")
 
     async def test_confirm_failure_stops_without_generating_another_confirmation(self) -> None:
         """已有草稿确认失败后，真实 AG-UI/SQLite 挂起错误门，不再调用模型或改写草稿。"""

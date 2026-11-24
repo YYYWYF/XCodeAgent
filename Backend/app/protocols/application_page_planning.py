@@ -283,6 +283,7 @@ def application_page_planning_capabilities() -> dict[str, Any]:
             "planningStageEntry": "planning_stage_entry_confirmation",
             "technicalPlanConfirmation": "technical_plan_confirmation",
             "technicalPlanGenerationError": "technical_plan_generation_error",
+            "technicalPlanRevisionClarification": "technical_plan_revision_clarification",
         },
         "artifactSchemas": {
             "product_plan": "product-plan.v5",

@@ -30,6 +30,10 @@ class TechnicalPlanningStageRetryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         """创建隔离工作区和已确认的上游资产。"""
         self.harness = TechnicalPlanningRecoveryJourneyHarness()
+        scope = patch("app.graph.nodes.application_technical_planning.resolve_technical_plan_revision_scope",
+                      return_value=({}, {}, []))
+        scope.start()
+        self.addCleanup(scope.stop)
 
     async def asyncTearDown(self) -> None:
         """关闭连接并清理测试工作区。"""

@@ -1631,6 +1631,7 @@ def _workflow_user_input_message(
         "project_plan_confirmation": "项目计划已生成，请确认后继续。",
         "technical_plan_confirmation": "技术规划已生成，请确认后继续。",
         "technical_plan_generation_error": "技术规划未通过校验，请重新生成。",
+        "technical_plan_revision_clarification": "请补充技术规划修改信息，已有规划已保留。",
         "ui_design_confirmation": "UI设计稿已生成，请逐页确认后继续。",
         "batch_review": "页面与数据源设计已生成，请确认后继续。",
         "entity_source_binding": "实体数据源绑定已生成，请确认后继续。",

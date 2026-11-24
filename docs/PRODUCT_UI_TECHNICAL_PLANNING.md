@@ -173,6 +173,8 @@ TechnicalPlan 待确认版本写入 `.devagentstudio/drafts/plans/technical-plan
 
 TechnicalPlan 通过结构化面板审阅，完整展示所有 Path/Query/Header 参数、请求体、响应体及嵌套类型、必填和已声明约束。正式产物与正式修订草稿均只保存 JSON，不生成或读取技术规划 Markdown，也不把 JSON 作为用户可编辑文档。修改通过原 AG-UI 修改意见提交，新版本仍需显式确认；修订继续保留基线、上游哈希与生命周期绑定。技术确认回执只包含 JSON，模板交接和 Electron 工作区检查不再要求 Markdown。多余的 `plans/technical-plan.md` 或技术修订草稿 `artifact.md` 直接忽略，也不参与停止后继续的工作区指纹；正式目录的多余文件不主动删除，修订草稿仍按原确认/放弃流程整体清理。其他产物的 Markdown 合同保持原用途。
 
+修改意见按自然语言理解，不要求 HTTP 方法紧邻接口路径。模型根据当前接口与类型目录识别修改目标，平台核验稳定身份后，将目标作为定位信息交给现行 ChangeSet 原子修订；完整原始要求、全局校验和未涉及子树保护保持不变。信息不够或存在歧义时，沿原 AG-UI 流程复用现有澄清卡展示具体问题，保留已有规划；用户可在卡片回答或从底部输入框补充，系统结合原要求重新分析。澄清回答只补充信息，新生成版本仍须明确确认。
+
 TechnicalPlan 包含：
 
 - `architecture` 三段技术架构、业务实体、API Contract、请求/响应 Schema；

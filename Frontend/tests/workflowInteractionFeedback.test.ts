@@ -7,6 +7,7 @@ import UiDesignConfirmationPanel from '../src/renderer/src/components/Welcome/Ui
 import type { WorkflowRunPayload } from '../src/renderer/src/typings'
 import { WorkbenchPhaseContext } from '../src/renderer/src/context/workbenchPhaseState'
 import { WORKBENCH_PHASE_AGENTS } from '../src/renderer/src/workbenchPhase'
+import { ensureApplicationPlanningAction, planningWorkflowClarification } from '../src/renderer/src/service/applicationPlanningWorkflowState'
 import {
   globalFallbackState,
   isTechnicalPlanGenerationFailure,
@@ -186,4 +187,19 @@ test('真实补充问题保留表单和答案，历史回答不出现再次提�
   const historical = renderInteraction(workflow, { availability: 'stale', answers: { 用户范围: '内部员工' } })
   assert.match(historical, /内部员工/)
   assert.doesNotMatch(historical, /确认并继续/)
+})
+
+// 技术修改歧义复用原问题卡，展示具体问题且只能补充，不生成错误或正式保存操作。
+test('技术修改歧义复用现有澄清卡并提交 answer', () => {
+  const workflow = planningInteraction('technical_plan_revision_clarification')
+  workflow.summary.clarification!.questions = [{
+    header: '修改范围1', type: 'text', question: '/api/personal-logs 有 GET 和 POST，请明确修改哪一个？'
+  }]
+  const markup = renderInteraction(workflow)
+  assert.match(markup, /GET 和 POST/)
+  assert.match(markup, /确认并继续/)
+  assert.doesNotMatch(markup, /确认保存|技术规划生成失败|重试/)
+  assert.equal(isTechnicalPlanGenerationFailure(workflow), false)
+  assert.equal(planningWorkflowClarification(workflow)?.mode, 'technical_plan_revision_clarification')
+  assert.equal(ensureApplicationPlanningAction(workflow, { '修改范围1': 'GET' }).__applicationPlanningAction, 'answer')
 })

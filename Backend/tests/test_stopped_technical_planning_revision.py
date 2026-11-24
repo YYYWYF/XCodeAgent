@@ -26,6 +26,10 @@ class StoppedTechnicalPlanningRevisionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         """建立已有技术规划，生成进入审阅后经生产 End 结束任务。"""
         self.h = TechnicalPlanningRecoveryJourneyHarness()
+        scope = patch("app.graph.nodes.application_technical_planning.resolve_technical_plan_revision_scope",
+                      return_value=({}, {}, []))
+        scope.start()
+        self.addCleanup(scope.stop)
         self.settings = patch("app.config.Settings.from_env", side_effect=self.h.current_settings)
         self.settings.start()
         await self.h.initialize_graph()

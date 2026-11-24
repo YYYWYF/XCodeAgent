@@ -99,6 +99,7 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             "ui_designs": values.get("ui_designs"),
             "conversation_target": request.conversationTarget,
             "last_generation_request": prepared["request"],
+            "pending_clarification": values.get("clarification"),
             "execution_status": source.status.value if source else None,
             "failure": recovery_failure_diagnostic(source) if source else None,
             "lifecycle_error": lifecycle.error.model_dump(mode="json") if lifecycle.error else None,
