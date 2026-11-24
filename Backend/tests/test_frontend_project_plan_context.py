@@ -439,6 +439,19 @@ class FrontendProjectPlanContextTests(unittest.TestCase):
                     self.assertEqual(prompt.count("/.devagentstudio/builtin-skills/frontend-engineering-standards/SKILL.md"), 1)
                     self.assertIn("`/frontend/AGENTS.md`", prompt)
                     self.assertIn("not a built-in Skill", prompt)
+                    for rule in (
+                        "For every `frontend.api_module` task",
+                        "Preserve every existing formal Endpoint export and its compliant implementation",
+                        "exists, read it before editing",
+                        "preserve it unchanged and return already_satisfied",
+                        "Never rewrite a compliant implementation solely to match an example",
+                        "style preference, or an equivalent implementation pattern",
+                        "Only modify concrete contract or engineering violations within the current task scope",
+                        "create a second per-Endpoint API module, split one Contract into multiple files",
+                        "remove existing exports because this task is an incremental PlanningRun",
+                        "continue importing all business API functions from the shared Contract module",
+                    ):
+                        self.assertIn(rule, prompt)
                     for obsolete in ("code-block-template", "react-develop-specification",
                                      "frontend-template-modification-boundary"):
                         self.assertNotIn(obsolete, prompt)

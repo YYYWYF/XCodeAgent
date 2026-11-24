@@ -56,6 +56,8 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                     self.assertIn("必须提供非空且具体说明所需调整的 change_request", prompt)
                     self.assertIn("其他失败分类不得携带 change_request", prompt)
                     if kind == PAGE:
+                        self.assertNotIn("直接返回 already_satisfied", prompt)
+                        self.assertNotIn("禁止仅因示例写法", prompt)
                         self.assertIn("references/component-patterns.md 对应章节", prompt)
                         self.assertIn("references/page-structure-examples.md 对应章节", prompt)
                         self.assertIn("不默认完整读取全部 references", prompt)
@@ -85,11 +87,17 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                             "直接使用 implementation_contract 中已注入的正式 API 契约",
                             "不搜索其他业务 API 文件获取契约",
                             "按需读取已授权的统一请求封装 src/apis/service.ts 和当前目标文件",
-                            "已有目标文件优先保留符合契约的实现并增量修改",
+                            "先依据当前 implementation_contract 和适用工程规范核对现有实现",
+                            "仅在发现明确差异时修改",
+                            "若已有实现满足当前任务全部要求，直接返回 already_satisfied",
+                            "不进行文件修改或无必要的重复核对",
+                            "禁止仅因示例写法、非强制性风格偏好或等价实现方式不同而改写已有代码",
+                            "仅增量修复不满足契约或适用工程规范的部分",
                             "必要示例仅用于编码参考，不覆盖业务契约",
                             "模板 AGENTS.md 中列出的工程文件仅用于说明结构，不是逐一读取清单",
                             "无当前任务明确依赖时，不读取相邻 API、登录或权限模块",
-                            "状态足以实施时，立即实现并做必要自检",
+                            "当已有信息足以判断任务状态时，立即完成必要修改或直接提交已满足结果",
+                            "仅进行必要自检",
                             "不再为了寻找参考而探索其他文件",
                             "无关文件读取被拒绝时不得转向目录遍历或无关的 grep、Code Graph 搜索",
                             "若存在真实契约冲突或必要信息缺失，只能在既有授权范围内定向核对",
@@ -98,6 +106,7 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                             "已有 API 文件使用 edit_file 增量实现",
                         ):
                             self.assertIn(guidance, prompt)
+                        self.assertNotIn("立即实现并做必要自检", prompt)
                         for control in ("begin_frontend_task", "advance_frontend_step", "complete_frontend_task"):
                             self.assertNotIn(control, system)
                             self.assertNotIn(control, prompt)
