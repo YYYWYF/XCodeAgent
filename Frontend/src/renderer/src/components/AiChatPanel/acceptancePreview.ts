@@ -1,11 +1,14 @@
 import type { PreviewRuntimePayload } from '../../service/previewRuntime'
 import { composePreviewUrl, previewOrigin } from '../../utils/previewUrl'
+import { externalBrowserPreviewUrl } from '../BrowserPreviewPanel/serviceStatusPolicy'
 import type { WorkflowPreviewTarget } from './utils'
 
 type AcceptancePreviewOwner = { workspace: string; sessionKey: string; runId: string }
 
 export type AcceptancePreviewRequest = WorkflowPreviewTarget &
   AcceptancePreviewOwner & { attemptId: string }
+
+type ReadyAcceptancePreview = WorkflowPreviewTarget & { reveal: 'service-ready' | 'iframe-load' }
 
 /** 核对预览请求是否仍属于当前工作区、会话和运行。 */
 export function acceptancePreviewForOwner(
@@ -20,12 +23,13 @@ export function acceptancePreviewForOwner(
     : undefined
 }
 
-/** 本轮前端和所需后端就绪后，生成目标页面的预加载地址。 */
-export function acceptancePreviewToLoad(
+/** 本轮前端和所需后端就绪后，生成目标地址和对应模式的展示时机。 */
+export function acceptancePreviewWhenReady(
   request: AcceptancePreviewRequest | undefined,
   runtime: PreviewRuntimePayload['runtime'],
-  path: string
-): WorkflowPreviewTarget | undefined {
+  path: string,
+  externalBrowser: boolean
+): ReadyAcceptancePreview | undefined {
   if (
     !request ||
     request.attemptId !== runtime?.attemptId ||
@@ -39,6 +43,14 @@ export function acceptancePreviewToLoad(
 
   const runningUrl = runtime.previewUrl || runtime.frontend.url || ''
   if (previewOrigin(runningUrl) !== previewOrigin(request.url)) return undefined
-  const url = composePreviewUrl(runningUrl, path)
-  return url ? { key: JSON.stringify([request.key, request.attemptId, url]), url } : undefined
+  const url = externalBrowser
+    ? externalBrowserPreviewUrl({ runtime, frontendChanging: false, pagePath: path })
+    : composePreviewUrl(runningUrl, path)
+  return url
+    ? {
+        key: JSON.stringify([request.key, request.attemptId, url]),
+        url,
+        reveal: externalBrowser ? 'service-ready' : 'iframe-load'
+      }
+    : undefined
 }

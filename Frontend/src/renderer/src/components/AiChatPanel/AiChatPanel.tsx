@@ -78,7 +78,7 @@ import { previewRepairExecutionBlocks } from '../BrowserPreviewPanel/serviceStat
 import { usePreviewRuntime } from './hooks/usePreviewRuntime'
 import {
   acceptancePreviewForOwner,
-  acceptancePreviewToLoad,
+  acceptancePreviewWhenReady,
   type AcceptancePreviewRequest
 } from './acceptancePreview'
 import ChatComposer from './components/ChatComposer'
@@ -1171,6 +1171,9 @@ export default function AiChatPanel({
   const isDesignPhase = activeWorkbenchPhase === 'product'
   const isTechnicalPlanningPhase = activeWorkbenchPhase === 'planning'
   const isApplicationPlanningPhase = isDesignPhase || isTechnicalPlanningPhase
+  const externalBrowserPreview =
+    application.auth?.enable === true &&
+    (activeWorkbenchPhase === 'development' || activeWorkbenchPhase === 'acceptance')
   const {
     acquireSessionExecution,
     releaseSessionExecution,
@@ -4337,14 +4340,29 @@ export default function AiChatPanel({
     planExecutionMode: displayedPlanExecutionMode,
     acceptancePassed
   })
+  const acceptancePreviewPath = activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'
+  const readyAcceptancePreview = useMemo(
+    () =>
+      acceptanceAwaiting && !versionReadOnly && !showGlobalFallback
+        ? acceptancePreviewWhenReady(
+            currentAcceptancePreview,
+            acceptanceRuntime,
+            acceptancePreviewPath,
+            externalBrowserPreview
+          )
+        : undefined,
+    [
+      acceptanceAwaiting,
+      versionReadOnly,
+      showGlobalFallback,
+      currentAcceptancePreview,
+      acceptanceRuntime,
+      acceptancePreviewPath,
+      externalBrowserPreview
+    ]
+  )
   const preloadingAcceptancePreview =
-    acceptanceAwaiting && !versionReadOnly && !showGlobalFallback
-      ? acceptancePreviewToLoad(
-          currentAcceptancePreview,
-          acceptanceRuntime,
-          activeHeaderTarget.type === 'page' ? activeHeaderTarget.path : '/'
-        )
-      : undefined
+    readyAcceptancePreview?.reveal === 'iframe-load' ? readyAcceptancePreview : undefined
   const visiblePreview = showRightPanel && rightPanel?.type === 'preview' ? rightPanel : undefined
   const previewPane = preloadingAcceptancePreview
     ? {
@@ -4354,14 +4372,24 @@ export default function AiChatPanel({
       }
     : visiblePreview
 
-  /** 复用已经加载的 iframe，在当前请求仍有效时一次性显示验收预览。 */
-  const revealAcceptancePreview = (): void => {
-    if (!preloadingAcceptancePreview || !currentAcceptancePreview) return
-    openWorkflowPreview(preloadingAcceptancePreview, preloadingAcceptancePreview.key)
+  /** 在当前验收请求的展示条件满足后打开预览并清除该待展示请求。 */
+  const revealAcceptancePreview = useCallback((): void => {
+    if (!readyAcceptancePreview || !currentAcceptancePreview) return
+    openWorkflowPreview(readyAcceptancePreview, preloadingAcceptancePreview?.key)
     setAcceptancePreviewRequest((request) =>
       request === currentAcceptancePreview ? undefined : request
     )
-  }
+  }, [
+    currentAcceptancePreview,
+    openWorkflowPreview,
+    preloadingAcceptancePreview?.key,
+    readyAcceptancePreview
+  ])
+
+  useEffect(() => {
+    // 外部浏览器由用户打开，当前轮次服务就绪即可在工作台展示预览入口。
+    if (readyAcceptancePreview?.reveal === 'service-ready') revealAcceptancePreview()
+  }, [readyAcceptancePreview, revealAcceptancePreview])
 
   const acceptancePreviewFocus = acceptancePreviewCanFocus(
     activeWorkbenchPhase,
@@ -4473,7 +4501,7 @@ export default function AiChatPanel({
       setPreviewError(runtimePreviewLaunchError || '前端服务尚未启动完成，暂时无法预览页面')
       return
     }
-    setAcceptancePreviewRequest(undefined)
+    if (!externalBrowserPreview) setAcceptancePreviewRequest(undefined)
     ensureRightPanelVisible()
     setPreviewError('')
     setRightPanel({
@@ -6329,6 +6357,7 @@ export default function AiChatPanel({
           <div className={cx('workspace-content')}>
             <BrowserPreviewPanel
               key={previewPane.acceptanceLoadKey}
+              externalBrowser={externalBrowserPreview}
               inspectionDisabled={activeWorkbenchPhase === 'acceptance'}
               serviceControl={{ ...previewRuntime.control,
                 showDatabaseCheck: application.datasource.type === 'database' && application.datasource.db?.useBuiltin === true,

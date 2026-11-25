@@ -1,3 +1,6 @@
+import type { PreviewRuntimePayload } from '../../service/previewRuntime'
+import { composePreviewUrl, normalizePreviewUrl, previewOrigin } from '../../utils/previewUrl'
+
 export type PreviewServiceActionAvailability = {
   canRestart: boolean
   canDiagnose: boolean
@@ -55,6 +58,32 @@ export function shouldShowPreviewServiceEmptyState(input: {
 }): boolean {
   return input.externalStatus === undefined && input.hasSnapshot &&
     (input.frontendStopped === true || input.status !== 'running')
+}
+
+/** 使用本轮实际前端地址打开同源目标，避免待启动或换端口后继续使用旧地址。 */
+export function externalBrowserPreviewUrl(input: {
+  runtime?: PreviewRuntimePayload['runtime']
+  frontendChanging: boolean
+  requestedUrl?: string
+  pagePath: string
+}): string {
+  const { runtime, frontendChanging, requestedUrl, pagePath } = input
+  if (
+    frontendChanging ||
+    runtime?.status !== 'running' ||
+    runtime.frontend.status !== 'running' ||
+    runtime.frontend.stoppedByUser
+  )
+    return ''
+
+  const origin = [runtime.previewUrl, runtime.frontend.url]
+    .map((url) => (url && /^https?:\/\//i.test(url.trim()) ? previewOrigin(url) : ''))
+    .find(Boolean)
+  if (!origin) return ''
+
+  if (requestedUrl && previewOrigin(requestedUrl) === origin) return normalizePreviewUrl(requestedUrl)
+  const pageUrl = composePreviewUrl(origin, pagePath)
+  return previewOrigin(pageUrl) === origin ? pageUrl : `${origin}/`
 }
 
 /** 只有实际执行中的任务阻塞修复；等待用户确认的工作流已暂停。 */

@@ -25,7 +25,7 @@ import { DEFAULT_ASSISTANT_PANEL_RATIO } from '../src/renderer/src/components/Ai
 import { acceptancePreviewCanFocus } from '../src/renderer/src/components/AiChatPanel/globalFallbackState'
 import {
   acceptancePreviewForOwner,
-  acceptancePreviewToLoad,
+  acceptancePreviewWhenReady,
   type AcceptancePreviewRequest
 } from '../src/renderer/src/components/AiChatPanel/acceptancePreview'
 import type { PreviewRuntimePayload } from '../src/renderer/src/service/previewRuntime'
@@ -130,7 +130,7 @@ test('验收等待态自动生成预览目标且不展示代码审查结果', ()
   })
 })
 
-test('验收 Workflow 先返回时，等待当前启动轮次的服务就绪后才加载目标页面', () => {
+test('验收根据预览模式在当前启动轮次就绪后等待 iframe 或直接显示浏览器入口', () => {
   const owner = { workspace: '/app', sessionKey: 'current-session', runId: 'acceptance-run' }
   const request: AcceptancePreviewRequest = {
     ...owner,
@@ -148,7 +148,6 @@ test('验收 Workflow 先返回时，等待当前启动轮次的服务就绪后�
   const pagePath = '/page/orders'
   const url = `${request.url}${pagePath}`
 
-  assert.equal(acceptancePreviewToLoad(request, undefined, pagePath), undefined)
   const unready: Array<Partial<typeof running>> = [
     { attemptId: 'previous-attempt' },
     { status: 'starting' },
@@ -159,26 +158,45 @@ test('验收 Workflow 先返回时，等待当前启动轮次的服务就绪后�
     { backend: { status: 'failed' } },
     { previewUrl: 'http://127.0.0.1:3001' }
   ]
-  for (const change of unready) {
-    assert.equal(acceptancePreviewToLoad(request, { ...running, ...change }, pagePath), undefined)
-  }
   assert.equal(acceptancePreviewForOwner(request, { ...owner, workspace: '/other' }), undefined)
   assert.equal(
     acceptancePreviewForOwner(request, { ...owner, sessionKey: 'other-session' }),
     undefined
   )
   assert.equal(acceptancePreviewForOwner(request, { ...owner, runId: 'other-run' }), undefined)
-  const target = acceptancePreviewToLoad(
-    acceptancePreviewForOwner(request, owner),
-    running,
-    pagePath
-  )
-  assert.equal(target?.url, url)
-  assert.equal(
-    acceptancePreviewToLoad(request, { ...running, backend: { status: 'skipped' } }, pagePath)?.key,
-    target?.key
-  )
-  assert.notEqual(acceptancePreviewToLoad(request, running, '/other-page')?.key, target?.key)
+  for (const externalBrowser of [false, true]) {
+    assert.equal(
+      acceptancePreviewWhenReady(request, undefined, pagePath, externalBrowser),
+      undefined
+    )
+    for (const change of unready) {
+      assert.equal(
+        acceptancePreviewWhenReady(request, { ...running, ...change }, pagePath, externalBrowser),
+        undefined
+      )
+    }
+    const target = acceptancePreviewWhenReady(
+      acceptancePreviewForOwner(request, owner),
+      running,
+      pagePath,
+      externalBrowser
+    )
+    assert.equal(target?.url, url)
+    assert.equal(target?.reveal, externalBrowser ? 'service-ready' : 'iframe-load')
+    assert.equal(
+      acceptancePreviewWhenReady(
+        request,
+        { ...running, backend: { status: 'skipped' } },
+        pagePath,
+        externalBrowser
+      )?.key,
+      target?.key
+    )
+    assert.notEqual(
+      acceptancePreviewWhenReady(request, running, '/other-page', externalBrowser)?.key,
+      target?.key
+    )
+  }
 })
 
 test('验收通过后不再展示底部验收操作', () => {

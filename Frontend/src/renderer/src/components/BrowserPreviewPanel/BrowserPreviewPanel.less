@@ -243,7 +243,8 @@
   flex: 0 0 auto;
 }
 
-.@{class-prefix}-browser-inspector-button.ant-btn {
+.@{class-prefix}-browser-inspector-button.ant-btn,
+.@{class-prefix}-browser-external-button.ant-btn {
   height: 34px;
   color: #ffffff;
   background: var(--wb-accent);
@@ -334,6 +335,47 @@
   box-shadow: 0 12px 30px var(--wb-accent-soft);
   font-size: 27px;
   place-items: center;
+}
+
+.@{class-prefix}-browser-external-error {
+  max-width: 100%;
+  color: var(--wb-danger);
+  overflow-wrap: anywhere;
+}
+
+.@{class-prefix}-browser-external-button.ant-btn {
+  &,
+  &:hover,
+  &:focus {
+    color: var(--wb-canvas);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 3px;
+  }
+}
+
+.@{class-prefix}-browser-preview-panel--external {
+  .@{class-prefix}-browser-preview-toolbar {
+    .ant-btn[disabled],
+    .ant-input[disabled],
+    .ant-select-disabled .ant-select-selection-item,
+    .ant-select-disabled .ant-select-arrow {
+      color: var(--wb-text-secondary);
+    }
+
+    .ant-btn[disabled],
+    .ant-input[disabled],
+    .ant-select-disabled .ant-select-selector {
+      border-color: var(--wb-border-strong);
+      background: var(--wb-surface-subtle);
+    }
+
+    .ant-select-disabled .ant-select-selector {
+      border-color: var(--wb-border-strong) !important;
+    }
+  }
 }
 
 .@{class-prefix}-browser-preview-error {

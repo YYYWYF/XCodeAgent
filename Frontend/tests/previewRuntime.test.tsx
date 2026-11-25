@@ -4,6 +4,7 @@ import './databaseTableTabs.test'
 import { createElement } from 'react'
 import type { ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create } from 'react-test-renderer'
 import { PreviewRuntimeBusinessError, leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
 import { previewRecoveryAction } from '../src/renderer/src/components/AiChatPanel/previewRuntimeRecovery'
 import { usePreviewRuntime } from '../src/renderer/src/components/AiChatPanel/hooks/usePreviewRuntime'
@@ -11,10 +12,12 @@ import { SessionRuntimeProvider } from '../src/renderer/src/components/AiChatPan
 import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
 import PreviewRepairControls from '../src/renderer/src/components/BrowserPreviewPanel/PreviewRepairControls'
 import BrowserPreviewPanel from '../src/renderer/src/components/BrowserPreviewPanel/BrowserPreviewPanel'
+import ExternalBrowserPreview from '../src/renderer/src/components/BrowserPreviewPanel/ExternalBrowserPreview'
 import type { PreviewRuntimePayload } from '../src/renderer/src/service/previewRuntime'
 import type { ApplicationConfig } from '../src/renderer/src/typings'
 import { parsePreviewAuthorizationAdvisory } from '../src/renderer/src/typings/previewAuthorization'
 import {
+  externalBrowserPreviewUrl,
   previewServiceActionAvailability,
   previewRepairExecutionBlocks,
   previewServiceLaunchLabel,
@@ -77,6 +80,138 @@ assert.doesNotMatch(renderPreview({ ...warning, status: 'ready', seedReady: true
 assert.doesNotMatch(renderPreview(null), /权限功能尚未就绪/)
 assert.equal(parsePreviewAuthorizationAdvisory({ ...warning, message: 'x'.repeat(257) }), null)
 assert.equal(parsePreviewAuthorizationAdvisory({ ...warning, seedReady: true }), null)
+
+type PreviewPanelProps = Parameters<typeof BrowserPreviewPanel>[0]
+type PreviewRuntime = NonNullable<PreviewRuntimePayload['runtime']>
+
+/** 渲染带当前运行快照的一号通预览，检查输出的真实控件与地址。 */
+function renderExternalPreview(
+  runtime?: PreviewRuntime,
+  serviceOverrides?: Partial<NonNullable<PreviewPanelProps['serviceControl']>>
+): string {
+  return renderToStaticMarkup(
+    <BrowserPreviewPanel
+      application={{ name: '测试应用', menus: { items: [] }, pages: ['首页'] } as ApplicationConfig}
+      externalBrowser
+      previewBaseUrl="http://127.0.0.1:3000"
+      requestedUrl="http://127.0.0.1:3000/orders?filter=open#list"
+      selectedPagePath="/orders"
+      serviceControl={{
+        open: false,
+        setOpen: () => {},
+        snapshot: runtime ? { status: 'completed', runtime } : undefined,
+        busy: false,
+        error: '',
+        blockedReason: '',
+        onRestart: () => {},
+        onStop: () => {},
+        onDiagnose: () => {},
+        ...serviceOverrides
+      }}
+    />
+  )
+}
+
+const runningExternalPreview: PreviewRuntime = {
+  attemptId: 'attempt-1',
+  status: 'running',
+  previewUrl: 'http://127.0.0.1:3000/',
+  frontend: { status: 'running' },
+  backend: { status: 'skipped' }
+}
+const externalPreview = renderExternalPreview(runningExternalPreview)
+assert.match(externalPreview, /跳转浏览器预览/)
+assert.match(externalPreview, /一号通登录无法内嵌iframe运行/)
+assert.match(externalPreview, /value="http:\/\/127\.0\.0\.1:3000\/orders\?filter=open#list"/)
+assert.doesNotMatch(externalPreview, /<iframe\b/)
+for (const label of ['后退', '前进', '刷新', '预览地址', '审查元素', '页面', '在系统浏览器打开']) {
+  const control = externalPreview.match(
+    new RegExp(`<(?:button|input)\\b[^>]*aria-label="${label}"[^>]*>`)
+  )?.[0]
+  assert.match(control || '', /\bdisabled(?:="")?(?=\s|>)/, `${label}应禁用`)
+}
+assert.match(
+  externalPreview.match(/<button\b[^>]*ant-input-search-button[^>]*>/)?.[0] || '',
+  /\bdisabled/
+)
+const serviceButton = externalPreview.match(/<button\b[^>]*aria-label="打开服务状态"[^>]*>/)?.[0]
+assert.ok(serviceButton)
+assert.doesNotMatch(serviceButton, /\bdisabled/)
+
+for (const markup of [
+  renderExternalPreview(),
+  renderExternalPreview({ ...runningExternalPreview, status: 'starting' }),
+  renderExternalPreview({ ...runningExternalPreview, status: 'failed' }),
+  renderExternalPreview({
+    ...runningExternalPreview,
+    frontend: { status: 'stopped', stoppedByUser: true }
+  }),
+  renderExternalPreview({ ...runningExternalPreview, previewUrl: 'localhost-without-a-port' }),
+  renderExternalPreview({
+    ...runningExternalPreview,
+    maintenance: { threadId: 'preview-restart', action: 'restart' }
+  }),
+  renderExternalPreview(runningExternalPreview, { busy: true, busyLaunchLabel: '重启服务' }),
+  renderExternalPreview(runningExternalPreview, { busy: true, busyStopLayer: 'frontend' })
+]) {
+  assert.doesNotMatch(markup, /跳转浏览器预览|<iframe\b|127\.0\.0\.1:3000/)
+  assert.match(markup, /about:blank/)
+}
+const restartedPreview = renderExternalPreview({
+  ...runningExternalPreview,
+  attemptId: 'attempt-2',
+  previewUrl: undefined,
+  frontend: { status: 'running', url: 'http://127.0.0.1:3001/' }
+})
+assert.match(restartedPreview, /value="http:\/\/127\.0\.0\.1:3001\/orders"/)
+assert.doesNotMatch(restartedPreview, /127\.0\.0\.1:3000/)
+assert.equal(
+  externalBrowserPreviewUrl({
+    runtime: runningExternalPreview,
+    frontendChanging: false,
+    requestedUrl: 'https://other.test/orders',
+    pagePath: '//other.test/orders'
+  }),
+  'http://127.0.0.1:3000/'
+)
+
+/** 验证本机打开失败可重试，且挂载预览入口时没有自动调用 IPC。 */
+async function verifyExternalBrowserRetry(): Promise<void> {
+  const urls: string[] = []
+  const previousWindow = globalThis.window
+  const url = 'http://127.0.0.1:3001/orders'
+  Object.assign(globalThis, {
+    window: {
+      devAgentStudio: {
+        browser: {
+          /** 首次调用模拟系统拒绝，之后返回现有桥接的正常回执。 */
+          async openExternal(target: string): Promise<{ ok: boolean }> {
+            urls.push(target)
+            if (urls.length === 1) throw new Error('系统浏览器调用失败')
+            return { ok: true }
+          }
+        }
+      }
+    }
+  })
+  const renderer = create(<ExternalBrowserPreview url={url} />)
+  try {
+    assert.deepEqual(urls, [])
+    await act(async () => renderer.root.findByType('button').props.onClick({}))
+    assert.match(
+      renderer.root.findByProps({ role: 'alert' }).children.join(''),
+      /系统浏览器调用失败/
+    )
+    await act(async () => renderer.root.findByType('button').props.onClick({}))
+    assert.deepEqual(urls, [url, url])
+    assert.equal(renderer.root.findAllByProps({ role: 'alert' }).length, 0)
+  } finally {
+    renderer.unmount()
+    Object.assign(globalThis, { window: previousWindow })
+  }
+}
+
+await verifyExternalBrowserRetry()
 
 /** 用规范 AG-UI 生命周期验证真实 HttpAgent 的事件消费，不模拟客户端内部解析。 */
 function mockStream(failed = false): void {

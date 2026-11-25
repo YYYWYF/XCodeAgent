@@ -24,11 +24,13 @@ import {
   openExternalPreviewUrl
 } from '../../utils'
 import './BrowserPreviewPanel.less'
+import ExternalBrowserPreview from './ExternalBrowserPreview'
 import { useElementInspector } from './useElementInspector'
 import ServiceStatusDrawer from './ServiceStatusDrawer'
 import type { ServiceStatusControl } from './ServiceStatusDrawer'
 import type { PreviewServiceState } from './serviceStatusPolicy'
 import {
+  externalBrowserPreviewUrl,
   previewServiceBadge,
   previewServiceState,
   shouldShowPreviewServiceEmptyState
@@ -37,6 +39,7 @@ import {
 const { Text } = Typography
 
 type Props = {
+  externalBrowser?: boolean
   inspectionDisabled?: boolean
   serviceControl?: ServiceStatusControl
   /**
@@ -71,8 +74,9 @@ function menuPreviewPages(items: ApplicationMenuItem[]): PreviewPageOption[] {
   ])
 }
 
-/** 展示可由 Workflow 目标地址驱动的内嵌浏览器预览。 */
+/** 展示由 Workflow 目标地址驱动的内嵌预览或系统浏览器入口。 */
 export default function BrowserPreviewPanel({
+  externalBrowser = false,
   inspectionDisabled = false,
   serviceControl,
   externalServiceStatus,
@@ -104,6 +108,18 @@ export default function BrowserPreviewPanel({
     frontendStopped: serviceRuntime?.frontend.stoppedByUser
   })
   const initialPagePath = selectedPagePath || pageOptions[0]?.value || '/'
+  const frontendChanging =
+    Boolean(serviceControl?.busyLaunchLabel) ||
+    serviceControl?.busyStopLayer === 'frontend' ||
+    ['restart', 'stop', 'stop_frontend'].includes(serviceRuntime?.maintenance?.action || '')
+  const externalUrl = externalBrowser
+    ? externalBrowserPreviewUrl({
+        runtime: serviceRuntime,
+        frontendChanging,
+        requestedUrl,
+        pagePath: initialPagePath
+      })
+    : ''
   const initialUrl =
     (showServiceEmptyState
       ? 'about:blank'
@@ -117,9 +133,9 @@ export default function BrowserPreviewPanel({
   const [openError, setOpenError] = useState('')
   const [launchError, setLaunchError] = useState(externalError || '')
   const previewUrl = navigation.history[navigation.index]
-  const frameKey = `${previewUrl}-${refreshKey}`
+  const frameKey = externalBrowser ? 'external-browser' : `${previewUrl}-${refreshKey}`
   const elementInspector = useElementInspector({
-    disabled: inspectionDisabled,
+    disabled: externalBrowser || inspectionDisabled,
     frameKey,
     onElementContextChange,
     onInspectingChange,
@@ -139,6 +155,7 @@ export default function BrowserPreviewPanel({
   }, [previewUrl])
 
   useEffect(() => {
+    if (externalBrowser) return
     // 首次挂载已使用目标地址，只有后续新请求需要重载当前 iframe。
     if (requestKey && requestKey !== previousRequestKey.current) setRefreshKey((key) => key + 1)
     previousRequestKey.current = requestKey
@@ -146,9 +163,10 @@ export default function BrowserPreviewPanel({
     // 从外部收到新的 preview 地址（如 launch 成功返回），清除此前可能的启动错误
     setLaunchError('')
     setNavigation((current) => navigatePreviewHistory(current, requestedUrl))
-  }, [requestKey, requestedUrl, showServiceEmptyState])
+  }, [externalBrowser, requestKey, requestedUrl, showServiceEmptyState])
 
   useEffect(() => {
+    if (externalBrowser) return
     if (showServiceEmptyState) {
       // 服务退出后必须丢弃旧 localhost 历史，避免地址栏和 iframe 假装仍可访问。
       setNavigation({ history: ['about:blank'], index: 0 })
@@ -167,6 +185,7 @@ export default function BrowserPreviewPanel({
       navigatePreviewToStartedProject(current, readyUrl, selectedPage)
     )
   }, [
+    externalBrowser,
     previewBaseUrl,
     selectedPage,
     serviceRuntime?.frontend.url,
@@ -186,6 +205,7 @@ export default function BrowserPreviewPanel({
 
   /** 将手动输入的地址加入预览导航历史。 */
   const navigateTo = (rawUrl: string): void => {
+    if (externalBrowser) return
     if (showServiceEmptyState) {
       setDraftUrl('about:blank')
       return
@@ -201,6 +221,7 @@ export default function BrowserPreviewPanel({
 
   /** 使用当前前端端口和用户选择的页面路由切换内嵌预览。 */
   const handlePageChange = (pagePath: string): void => {
+    if (externalBrowser) return
     setSelectedPage(pagePath)
     const targetUrl = composePreviewUrl(previewBaseUrl, pagePath)
     if (!targetUrl) {
@@ -213,6 +234,7 @@ export default function BrowserPreviewPanel({
 
   /** 在系统浏览器中打开当前地址栏指向的预览页面。 */
   const openInBrowser = async (): Promise<void> => {
+    if (externalBrowser) return
     const targetUrl = normalizePreviewUrl(draftUrl) || previewUrl
     if (!targetUrl) return
 
@@ -225,8 +247,23 @@ export default function BrowserPreviewPanel({
     }
   }
 
+  const showEmptyState = externalBrowser ? !externalUrl : showServiceEmptyState
+  let emptyMessage = '请点击服务状态内的启动服务按钮进行预览'
+  if (externalBrowser && (frontendChanging || runtimeServiceState === 'starting')) {
+    emptyMessage = '正在更新前端服务状态，请稍候'
+  } else if (externalBrowser && runtimeServiceState === 'failed') {
+    emptyMessage = '预览服务启动失败，请打开服务状态查看详情'
+  } else if (runtimeServiceState === 'running') {
+    emptyMessage =
+      externalBrowser && !serviceRuntime?.frontend.stoppedByUser
+        ? '正在等待前端服务就绪，请通过服务状态查看进度'
+        : '前端服务已停止，请通过服务状态重启服务后预览'
+  }
+
   return (
-    <section className={cx('browser-preview-panel')}>
+    <section
+      className={cx('browser-preview-panel', externalBrowser && 'browser-preview-panel--external')}
+    >
       {serviceControl && <ServiceStatusDrawer {...serviceControl} />}
       <div className={cx('browser-preview-toolbar-scroll')}>
         <header className={cx('browser-preview-toolbar')}>
@@ -253,7 +290,7 @@ export default function BrowserPreviewPanel({
             <Tooltip title="后退">
               <Button
                 aria-label="后退"
-                disabled={navigation.index === 0}
+                disabled={externalBrowser || navigation.index === 0}
                 icon={<ArrowLeftOutlined />}
                 onClick={() =>
                   setNavigation((current) => ({
@@ -267,7 +304,7 @@ export default function BrowserPreviewPanel({
             <Tooltip title="前进">
               <Button
                 aria-label="前进"
-                disabled={navigation.index >= navigation.history.length - 1}
+                disabled={externalBrowser || navigation.index >= navigation.history.length - 1}
                 icon={<ArrowRightOutlined />}
                 onClick={() =>
                   setNavigation((current) => ({
@@ -281,6 +318,7 @@ export default function BrowserPreviewPanel({
             <Tooltip title="刷新">
               <Button
                 aria-label="刷新"
+                disabled={externalBrowser}
                 icon={<ReloadOutlined />}
                 onClick={() => setRefreshKey((key) => key + 1)}
                 type="text"
@@ -290,21 +328,23 @@ export default function BrowserPreviewPanel({
           <Input.Search
             aria-label="预览地址"
             className={cx('browser-address-input')}
-            disabled={showServiceEmptyState}
+            disabled={externalBrowser || showServiceEmptyState}
             enterButton="访问"
             onChange={(event) => setDraftUrl(event.target.value)}
             onSearch={navigateTo}
-            value={draftUrl}
+            value={externalBrowser ? externalUrl || 'about:blank' : draftUrl}
           />
           <Tooltip
             title={
-              inspectionDisabled
+              externalBrowser
+                ? '浏览器预览模式不支持元素审查'
+                : inspectionDisabled
                 ? '验收阶段不支持元素审查'
-                : elementInspector.active
-                ? '退出元素审查'
-                : elementInspector.ready
-                  ? '审查预览页面中的元素'
-                  : '当前预览页面尚未准备好元素审查'
+                  : elementInspector.active
+                    ? '退出元素审查'
+                    : elementInspector.ready
+                      ? '审查预览页面中的元素'
+                      : '当前预览页面尚未准备好元素审查'
             }
           >
             <span className={cx('browser-inspector-button-shell')}>
@@ -312,7 +352,11 @@ export default function BrowserPreviewPanel({
                 aria-label={elementInspector.active ? '退出审查' : '审查元素'}
                 aria-pressed={elementInspector.active}
                 className={cx('browser-inspector-button')}
-                disabled={inspectionDisabled || (!elementInspector.ready && !elementInspector.active)}
+                disabled={
+                  externalBrowser ||
+                  inspectionDisabled ||
+                  (!elementInspector.ready && !elementInspector.active)
+                }
                 icon={<AimOutlined />}
                 onClick={elementInspector.toggle}
                 type="primary"
@@ -324,13 +368,15 @@ export default function BrowserPreviewPanel({
           <Select
             aria-label="页面"
             className={cx('browser-page-select')}
+            disabled={externalBrowser}
             options={pageOptions}
-            value={selectedPage}
+            value={externalBrowser ? initialPagePath : selectedPage}
             onChange={handlePageChange}
           />
           <Tooltip title="在系统浏览器打开">
             <Button
               aria-label="在系统浏览器打开"
+              disabled={externalBrowser}
               icon={<ExpandOutlined />}
               onClick={openInBrowser}
               type="primary"
@@ -341,16 +387,17 @@ export default function BrowserPreviewPanel({
 
       <div className={cx('browser-preview-stage')}>
         <div className={cx('browser-preview-viewport')}>
-          {showServiceEmptyState ? (
+          {externalUrl ? (
+            <ExternalBrowserPreview
+              key={`${serviceRuntime?.attemptId}:${externalUrl}`}
+              url={externalUrl}
+            />
+          ) : showEmptyState ? (
             <div className={cx('browser-preview-service-empty')} role="status">
               <span className={cx('browser-preview-service-empty__icon')} aria-hidden="true">
                 <CloudServerOutlined />
               </span>
-              <p>
-                {runtimeServiceState === 'running'
-                  ? '前端服务已停止，请通过服务状态重启服务后预览'
-                  : '请点击服务状态内的启动服务按钮进行预览'}
-              </p>
+              <p>{emptyMessage}</p>
             </div>
           ) : (
             <iframe
@@ -366,13 +413,13 @@ export default function BrowserPreviewPanel({
         </div>
       </div>
 
-      {openError && (
+      {!externalBrowser && openError && (
         <Text className={cx('browser-preview-error')} type="danger">
           {openError}
         </Text>
       )}
 
-      {launchError && !openError && (
+      {!externalBrowser && launchError && !openError && (
         <Text className={cx('browser-preview-error')} type="warning">
           {launchError}
         </Text>

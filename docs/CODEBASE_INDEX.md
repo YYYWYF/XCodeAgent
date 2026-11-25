@@ -350,7 +350,7 @@ OpenAI 兼容模型 HTTP 客户端通过 `services/model_request_cancellation.py
 
 Use this file before broad code exploration. It is a routing map, not full documentation: read the matching row, then inspect only the listed entry files and nearby code.
 
-验收自动预览由 `AiChatPanel/acceptancePreview.ts` 核对当前工作区、验收会话、Run 和启动轮次。标准启动器在 Workflow 的 `launchResult.attempt_id` 返回同一个运行时 `attemptId`；验收期间 `usePreviewRuntime` 从待启动状态也订阅 `/preview-runtime/run`。运行时确认前端与所需后端就绪后，`BrowserPreviewPanel` 在后台加载当前路由，目标 iframe 发出 load 后原样显示并开放验收操作。故障留在可见的对话与恢复入口。回归：`tests.test_project_launcher`、`pnpm test:acceptance-phase`、`pnpm test:preview-runtime`。
+当前版本的开发和验收预览由 `AiChatPanel` 根据 `.devagentstudio/application.json` 的正式 `auth.enable` 选择模式。一号通启用时 `BrowserPreviewPanel` 从 `/preview-runtime/run` 的当前快照取得实际前端端口和同源目标路由。服务就绪后显示「跳转浏览器预览」，复用 Electron 系统浏览器 IPC，禁用内嵌导航与元素审查，保留服务管理。普通应用继续使用 iframe。验收自动预览由 `AiChatPanel/acceptancePreview.ts` 核对当前工作区、验收会话、Run、相同 `launchResult.attempt_id` / `attemptId`、地址和前后端就绪。普通应用等待目标 iframe 的 load，一号通应用在本轮服务就绪后展示入口和验收操作。故障沿既有对话与恢复入口展示。回归：`tests.test_project_launcher`、`pnpm test:acceptance-phase`、`pnpm test:preview-runtime`。
 
 审查确认进入验收时先激活验收会话并恢复对话分栏，展示 `launch_project` 的工程识别、后端启动、前端启动及就绪步骤。`hooks/useAssistantPreviewLayout.ts::phaseEntryRightPanelLayout` 清除上阶段的全宽/隐藏布局；`globalFallbackState.ts::acceptancePreviewCanFocus` 仅在当前 execution 为 `awaiting_acceptance`、预览已打开且没有故障兜底时铺满验收预览。已有预览、阶段切换或启动 ready 进度均不能提前隐藏对话；恢复运行、停止或失败继续展示步骤和原恢复入口。回归：`pnpm test:acceptance-phase`、`pnpm test:connection-recovery`。
 
