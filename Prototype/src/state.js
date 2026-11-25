@@ -6,7 +6,7 @@ export const state = {
   designStep: 0, uiGenerated: false, uiVariant: 0, uiSkipped: false,
   requirementFeedback: '', planFeedback: '', revisionEditing: '',
   tab: '', section: '概览', target: '', targetKind: '', buildStep: '', completed: [],
-  selectedArtifact: 'page', selectedFilePath: 'docs/requirement-spec.md', mappingStep: '', mappingConfirmed: false, mappingSourceSelected: false, mappingDescription: '', fieldMappings: {},
+  selectedArtifact: 'page', selectedFilePath: 'docs/requirement-spec.md', mappingStep: '', mappingConfirmed: false, mappingSourceSelected: false, mappingDescription: '', mappingAssistantOpen: false, mappingManualFields: {}, fieldMappings: {},
   testStep: 0, performanceSkipped: false, reviewStep: 0, accepted: false, released: false,
   productivityMethod: '', previousEffort: '', studioEffort: '', productivityRecord: null,
   previewRunning: false, frontendServiceRunning: false, backendServiceRunning: false, serviceStarting: { frontend:false, backend:false }, pageDebugUrl: 'http://localhost:5173', debugServiceMenuOpen: false, debugLogOpen: false, serviceLogs: {frontend:[],backend:[]}, serviceLogFollowing: {frontend:true,backend:true}, serviceRepairStep: '', serviceFailure: '', apiCalled: false, apiCallStatus: 'idle', apiCallError: '', apiLastRequestUrl: '', apiDebugMethod: 'GET', apiDebugUrl: 'http://localhost:8000/api/news', apiDebugParams: {dimension:'行情聚焦',current:'1',pageSize:'10'}, apiDebugEnabledParams: {dimension:true,current:true,pageSize:true}, apiDebugHeaders: {Accept:'application/json'}, apiDebugHeaderEnabled: {Accept:true}, apiDebugAuth: 'No Auth', apiDebugBody: '', apiRequestTab: 'Params', apiResponseTab: 'Body', panelLayout: 'split', previewStatus: false, acceptanceReminderDismissed: false,

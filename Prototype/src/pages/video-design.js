@@ -1,5 +1,5 @@
-import { state, safe } from '../state.js?v=20261122a';
-import { action, agentHeader, message, portalContent, workflowCard } from '../components/video-common.js?v=20261122a';
+import { state, safe } from '../state.js?v=20261122b';
+import { action, agentHeader, message, portalContent, workflowCard } from '../components/video-common.js?v=20261122b';
 
 // 设计阶段展示需求文档确认与门户首页设计稿。
 export function designConversation() {

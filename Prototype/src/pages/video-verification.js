@@ -1,5 +1,5 @@
-import { state, safe } from '../state.js?v=20261122a';
-import { action, agentHeader, message, workflowCard } from '../components/video-common.js?v=20261122a';
+import { state, safe } from '../state.js?v=20261122b';
+import { action, agentHeader, message, workflowCard } from '../components/video-common.js?v=20261122b';
 
 // 测试阶段展示构建检查、可选性能测试以及测试报告。
 export function testConversation() {

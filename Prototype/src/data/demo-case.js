@@ -5,11 +5,11 @@ export const exampleApi = {
   response: 'title：标题；summary：摘要；content：内容；publishDate：发布日期'
 };
 
-// AI 辅助映射的异常提示：只在需人工处理的字段上出现，hover 展示分析结果与建议。
+// AI 辅助说明按字段展示，只在需要核对的映射旁展开。
 // warn = 未找到映射、留待人工填写；info = AI 已填但置信度不高，建议核对。
 export const aiMappingHints = {
-  total: { level: 'info', text: 'AI 分析：total 与业务处理记录总数的对应基于语义推断，置信度中等。建议：核对业务处理的统计口径后再确认。' },
-  'list[].sequenceNumber': { level: 'warn', text: 'AI 分析：接口字段 list[].sequenceNumber（序号）在 portal_news 表中未找到可映射的字段。建议：选择 id 充当序号，或与业务方确认序号来源后手动指定，请人工确认。' }
+  total: { level: 'info', text: 'total 与业务处理记录总数的对应基于语义推断，置信度中等。建议核对业务处理的统计口径后再确认。' },
+  'list[].sequenceNumber': { level: 'warn', text: '接口字段 list[].sequenceNumber（序号）在 portal_news 表中没有直接对应的字段。可选用 id 作为序号，或补充业务规则说明序号来源，请人工确认。' }
 };
 
 // 已完成版本的各阶段产物与状态保持一致。
@@ -24,7 +24,7 @@ export function completedDemo() {
     revisionEditing: '', uiFeedback: '', tab: '应用预览', section: '概览',
     target: '门户首页', targetKind: 'page', selectedArtifact: 'page', selectedFilePath: 'docs/requirement-spec.md', buildStep: 'complete',
     completed: ['查询新闻列表', '门户首页'], mappingConfirmed: true, mappingSourceSelected: true,
-    mappingStep: 'confirmed', mappingDescription: '按维度查询新闻列表，返回标题、摘要、发布日期、来源与内容。',
+    mappingStep: 'confirmed', mappingDescription: '', mappingAssistantOpen: false, mappingManualFields: {},
     fieldMappings: {total:'业务处理',pageSize:'pageSize',current:'current','list[].sequenceNumber':'id',
       'list[].title':'title','list[].summary':'summary','list[].dimension':'dimension',
       'list[].publishDate':'publish_date','list[].source':'source','list[].content':'content'},

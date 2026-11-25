@@ -1,4 +1,4 @@
-import { state, safe } from '../state.js?v=20261122a';
+import { state, safe } from '../state.js?v=20261122b';
 import { planningSteps } from '../data/mock-data.js?v=20261118o';
 import { icon } from '../components/icons.js?v=20261123d';
 // 渲染规划流程中需求澄清、文档、页面设计和技术规划的主体。

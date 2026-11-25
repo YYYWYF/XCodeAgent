@@ -1,5 +1,5 @@
-import { state, safe } from '../state.js?v=20261122a';
-import { home } from './home.js?v=20261123d';
+import { state, safe } from '../state.js?v=20261122b';
+import { home } from './home.js?v=20261123e';
 import { icon } from '../components/icons.js?v=20261123d';
 
 // 按教学视频展示项目目录、应用基本信息和需求描述。

@@ -1,5 +1,5 @@
-import { state, projectMemory, safe } from '../state.js?v=20261122a';
-import { home } from './home.js?v=20261123d';
+import { state, projectMemory, safe } from '../state.js?v=20261122b';
+import { home } from './home.js?v=20261123e';
 
 // 提供返回已打开工作目录的原型入口。
 export function openWorkspace() {

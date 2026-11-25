@@ -1,11 +1,11 @@
-import { state, safe } from '../state.js?v=20261122a';
+import { state, safe } from '../state.js?v=20261122b';
 import { phases } from '../data/mock-data.js?v=20261118o';
-import { auxiliaryDrawer } from '../components/auxiliary.js?v=20261123l';
+import { auxiliaryDrawer } from '../components/auxiliary.js?v=20261124b';
 import { icon } from '../components/icons.js?v=20261123d';
-import { action, message } from '../components/video-common.js?v=20261122a';
-import { designConversation, planningConversation, requirementPanel, uiPanel, technicalPanel } from './video-design.js?v=20261122a';
-import { developmentConversation, artifactsPanel, applicationFilesPanel, pageDebugPanel, apiDebugPanel, mappingPanel, taskPlanPanel, previewPanel } from './video-development.js?v=20261123l';
-import { testConversation, testReport, reviewConversation, reviewReport, acceptanceConversation, acceptanceBar } from './video-verification.js?v=20261122a';
+import { action, message } from '../components/video-common.js?v=20261122b';
+import { designConversation, planningConversation, requirementPanel, uiPanel, technicalPanel } from './video-design.js?v=20261122b';
+import { developmentConversation, artifactsPanel, applicationFilesPanel, pageDebugPanel, apiDebugPanel, mappingPanel, taskPlanPanel, previewPanel } from './video-development.js?v=20261124j';
+import { testConversation, testReport, reviewConversation, reviewReport, acceptanceConversation, acceptanceBar } from './video-verification.js?v=20261122b';
 
 // 保留跨阶段的公共功能入口，图标按功能语义统一使用线框 SVG。
 function rail() {

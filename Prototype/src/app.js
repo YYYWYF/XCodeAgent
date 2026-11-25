@@ -1,10 +1,10 @@
-import { state, projectMemory, buildApiDebugUrl } from './state.js?v=20261122a';
-import { completedDemo, aiMappingHints } from './data/demo-case.js?v=20261123l';
+import { state, projectMemory, buildApiDebugUrl } from './state.js?v=20261122b';
+import { completedDemo, aiMappingHints } from './data/demo-case.js?v=20261124c';
 import { toast } from './components/feedback.js?v=20261118o';
-import { home } from './pages/home.js?v=20261123d';
-import { create } from './pages/create-application.js?v=20261123d';
-import { openWorkspace } from './pages/open-workspace.js?v=20261123d';
-import { workbench } from './pages/workbench.js?v=20261123l';
+import { home } from './pages/home.js?v=20261123e';
+import { create } from './pages/create-application.js?v=20261123e';
+import { openWorkspace } from './pages/open-workspace.js?v=20261123e';
+import { workbench } from './pages/workbench.js?v=20261124j';
 import { currentRoute } from './router.js?v=20261118o';
 import { updateAnnotations } from './components/annotations.js?v=20261118o';
 
@@ -39,7 +39,7 @@ function enterPhase(phase) {
   }
   state.phase = phase;
   state.reached = Math.max(state.reached, phase);
-  state.pane = ''; state.auxDetail = ''; state.modal = ''; state.previewStatus = false;
+  state.pane = ''; state.auxDetail = ''; state.modal = ''; state.mappingAssistantOpen=false; state.previewStatus = false;
   state.section = phase===1?'架构':'概览';
   state.tab = phase===0?(state.designStep?'UI设计稿':'需求文档'):phase===1?'技术规划':phase===3&&state.testStep?'测试报告':phase===4&&state.reviewStep?'审查报告':phase===5?'应用预览':'开发产物';
   if (phase===5) state.panelLayout='full';
@@ -60,16 +60,20 @@ function beginBuild(name, kind) {
   render();
 }
 
-// 把某一层服务更新为就绪，并记录本次启动日志。
-function markServiceReady(kind) {
+// 把某一层服务更新为就绪；source 区分日志语境：dev 为调试/手动启动，preflight 为验收前检查。
+function markServiceReady(kind, source='preflight') {
   const layerName=kind==='backend'?'后端':'前端';
   if (kind==='backend') state.backendServiceRunning=true;
   else state.frontendServiceRunning=true;
   state.previewRunning=state.frontendServiceRunning&&state.backendServiceRunning;
   if (state.serviceStarting) state.serviceStarting[kind]=false;
-  state.serviceLogs[kind]=kind==='backend'
-    ? ['[验收前检查 · stdout] 后端构建完成','[启动 · stdout] API 服务已就绪','[就绪检测 · info] 后端服务健康检查通过']
-    : ['[验收前检查 · stdout] 前端依赖检查完成','[启动 · stdout] Vite 服务已就绪','[就绪检测 · info] 前端预览地址可访问'];
+  state.serviceLogs[kind]=source==='dev'
+    ? (kind==='backend'
+      ? ['[依赖检查 · stdout] 后端依赖检查完成','[维护 · stdout] 应用服务启动完成','[就绪检测 · info] API 服务已就绪']
+      : ['[依赖检查 · stdout] 前端依赖检查完成','[维护 · stdout] Vite 服务启动完成','[就绪检测 · info] http://localhost:5173 已就绪'])
+    : (kind==='backend'
+      ? ['[验收前检查 · stdout] 后端构建完成','[启动 · stdout] API 服务已就绪','[就绪检测 · info] 后端服务健康检查通过']
+      : ['[验收前检查 · stdout] 前端依赖检查完成','[启动 · stdout] Vite 服务已就绪','[就绪检测 · info] 前端预览地址可访问']);
   state.serviceRepairStep='';
   if (state.serviceFailure.startsWith(layerName)) state.serviceFailure='';
 }
@@ -82,10 +86,10 @@ function autoStartService(kind) {
   if (state.serviceRepairStep==='plan' && state.serviceFailure.startsWith(label)) return;
   state.serviceStarting[kind]=true;
   render();
-  setTimeout(()=>{ state.serviceStarting[kind]=false; markServiceReady(kind); render(); },700);
+  setTimeout(()=>{ state.serviceStarting[kind]=false; markServiceReady(kind,'dev'); render(); },700);
 }
 
-// 调试面板随时可进入；对应产物完成后进入时自动拉起所需服务，未完成时由面板提示先开发。
+// 调试面板随时可进入；对应产物完成后进入时自动拉起所需服务，未完成时不自动启动、服务可在面板内手动操作。
 function openDebug(tab) {
   const isPage = tab==='页面调试';
   const artifact = isPage?'门户首页':'查询新闻列表';
@@ -203,24 +207,29 @@ function handleAction(action) {
     case 'start-api': beginBuild('查询新闻列表','api'); return;
     case 'start-page': beginBuild('门户首页','page'); return;
     case 'open-mapping': state.tab='字段映射'; break;
-    case 'mapping-source': state.mappingSourceSelected=false; state.mappingConfirmed=false; state.mappingStep=''; state.fieldMappings={}; state.mappingHints={}; break;
+    case 'mapping-ai-open': state.mappingAssistantOpen=!state.mappingAssistantOpen; break;
+    case 'mapping-ai-close': state.mappingAssistantOpen=false; break;
+    case 'mapping-source': state.mappingSourceSelected=false; state.mappingConfirmed=false; state.mappingStep=''; state.mappingDescription=''; state.mappingAssistantOpen=false; state.mappingManualFields={}; state.fieldMappings={}; state.mappingHints={}; break;
     case 'source-external': toast('请先添加外部 API。'); return;
     case 'source-static': toast('当前示例使用数据库作为数据来源。'); return;
     case 'source-confirm': state.modal=''; break;
     case 'open-data': state.modal=''; state.pane='data'; break;
     case 'mapping-generate': {
-      // AI 生成映射是辅助手段：一键把建议映射落入配置表单，可再次点击重新生成。
+      // 原型演示规则对序号映射的影响；其余自由文本保留供用户审阅和继续补充。
       if (!(state.databaseTables[state.database]||[]).includes('portal_news') || !state.mappingSourceSelected) { toast('请先选择 portal_news 数据表。'); return; }
       if (state.mappingGenerating) return;
+      const rules=state.mappingDescription||'';
+      const useId=/序号[^\n。；;]*\bid\b|\bid\b[^\n。；;]*序号/i.test(rules);
       state.mappingGenerating=true; render();
       setTimeout(()=>{
         state.mappingGenerating=false;
-        // 接口映射说明由 AI 生成映射一并给出，重新生成时同步更新。
-        state.mappingDescription='按维度查询新闻列表，返回标题、摘要、发布日期、来源与内容。';
-        state.fieldMappings={total:'业务处理',pageSize:'pageSize',current:'current','list[].title':'title','list[].summary':'summary','list[].dimension':'dimension','list[].publishDate':'publish_date','list[].source':'source','list[].content':'content'};
-        state.mappingHints=aiMappingHints;
-        state.mappingStep='draft'; state.mappingConfirmed=false;
-        render(); toast('AI 映射已生成，请检查字段旁的 AI 提示后保存。');
+        const suggestions={total:'业务处理',pageSize:'pageSize',current:'current','list[].title':'title','list[].summary':'summary','list[].dimension':'dimension','list[].publishDate':'publish_date','list[].source':'source','list[].content':'content'};
+        if (useId) suggestions['list[].sequenceNumber']='id';
+        const manualValues=Object.fromEntries(Object.entries(state.mappingManualFields||{}).filter(([,manual])=>manual).map(([field])=>[field,state.fieldMappings[field]||'']));
+        state.fieldMappings={...suggestions,...manualValues};
+        state.mappingHints=useId ? { ...aiMappingHints, 'list[].sequenceNumber': {level:'info',text:'已按补充规则将序号映射到 portal_news.id，请核对是否符合业务口径。'} } : aiMappingHints;
+        state.mappingStep='draft'; state.mappingConfirmed=false; state.mappingAssistantOpen=false;
+        render(); toast('映射建议已更新，AI 辅助说明已显示在相关字段下方。');
       },600);
       return;
     }
@@ -246,9 +255,9 @@ function handleAction(action) {
     case 'toggle-debug-log': state.debugLogOpen=!state.debugLogOpen; break;
     case 'close-debug-log': state.debugLogOpen=false; break;
     case 'service-start-frontend':
-    case 'service-restart-frontend': markServiceReady('frontend'); state.serviceLogs.frontend=['[依赖检查 · stdout] 前端依赖检查完成','[维护 · stdout] Vite 服务启动完成','[就绪检测 · info] http://localhost:5173 已就绪']; toast(action==='service-start-frontend'?'前端服务已启动。':'前端服务已重启。'); break;
+    case 'service-restart-frontend': markServiceReady('frontend','dev'); toast(action==='service-start-frontend'?'前端服务已启动。':'前端服务已重启。'); break;
     case 'service-start-backend':
-    case 'service-restart-backend': markServiceReady('backend'); state.serviceLogs.backend=['[依赖检查 · stdout] 后端依赖检查完成','[维护 · stdout] 应用服务启动完成','[就绪检测 · info] API 服务已就绪']; toast(action==='service-start-backend'?'后端服务已启动。':'后端服务已重启。'); break;
+    case 'service-restart-backend': markServiceReady('backend','dev'); toast(action==='service-start-backend'?'后端服务已启动。':'后端服务已重启。'); break;
     case 'service-stop-frontend': state.frontendServiceRunning=false; state.previewRunning=false; state.serviceLogs.frontend=[...state.serviceLogs.frontend,'[维护 · info] 前端服务已停止']; toast('前端服务已停止。'); break;
     case 'service-stop-backend': state.backendServiceRunning=false; state.previewRunning=state.frontendServiceRunning&&state.backendServiceRunning; state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; state.serviceLogs.backend=[...state.serviceLogs.backend,'[维护 · info] 后端服务已停止']; toast('后端服务已停止。'); break;
     case 'service-diagnose': {
@@ -326,12 +335,14 @@ function handleAction(action) {
 document.addEventListener('click', event => {
   const target=event.target instanceof Element?event.target:null;
   const el=target?.closest('button');
+  const dismissedMappingAssistant=state.mappingAssistantOpen&&!target?.closest('.mapping-ai-popover,.mapping-ai-trigger,input,textarea,select,summary');
+  if (dismissedMappingAssistant) state.mappingAssistantOpen=false;
   const clickedAuxiliary=Boolean(target?.closest('.aux-drawer,.aux-detail,.aux-overlay'));
   const dismissedAuxiliary=Boolean(state.pane&&!clickedAuxiliary);
   // 保留侧栏入口的互斥切换与再次点击关闭行为。
   if (el?.dataset.pane) { state.pane=state.pane===el.dataset.pane?'':el.dataset.pane; state.auxDetail=''; state.auxModal=''; state.versionMenu=false; render(); return; }
   if (dismissedAuxiliary) { state.pane=''; state.auxDetail=''; state.auxModal=''; }
-  if (!el) { if (dismissedAuxiliary && !target?.closest('a[href]')) render(); return; }
+  if (!el) { if ((dismissedAuxiliary||dismissedMappingAssistant) && !target?.closest('a[href]')) render(); return; }
   if (el.id==='help') { toast('帮助入口'); if (dismissedAuxiliary) render(); return; }
   if (el.dataset.openDemo) {
     if (state.hasProject && !state.isDemo) projectMemory.current=structuredClone(state);
@@ -374,6 +385,7 @@ document.addEventListener('click', event => {
     // 调试标签随时可进入，可选目标由面板内地址栏下拉控制；其余标签直接切换。
     if (el.dataset.tab==='页面调试'||el.dataset.tab==='接口调试') openDebug(el.dataset.tab);
     else state.tab=el.dataset.tab;
+    if (el.dataset.tab!=='字段映射') state.mappingAssistantOpen=false;
     state.pane=''; state.previewStatus=false;
     if (state.phase===5&&!state.accepted) state.panelLayout=state.tab==='应用预览'?'full':'split';
     render(); return;
@@ -412,7 +424,8 @@ document.addEventListener('submit', event => {
   event.preventDefault();
     if (event.target.id==='create-form') {
     const values=new FormData(event.target);
-    Object.assign(state,{name:document.querySelector('#name').value.trim(),description:document.querySelector('#description').value.trim(),projectPath:document.querySelector('#project-path').value.trim(),terminal:values.get('terminal'),layout:values.get('layout'),appIcon:values.get('app-icon'),useHeader:values.has('header'),useMenu:values.has('menu'),authEnabled:values.has('auth'),hasProject:true,isDemo:false,phase:0,reached:0,designStep:0,uiGenerated:false,uiSkipped:false,uiVariant:0,uiFeedback:'',requirementFeedback:'',planFeedback:'',revisionEditing:'',target:'',targetKind:'',selectedArtifact:'page',selectedFilePath:'docs/requirement-spec.md',buildStep:'',completed:[],mappingStep:'',mappingConfirmed:false,mappingSourceSelected:false,mappingDescription:'',fieldMappings:{},mappingHints:{},mappingGenerating:false,testStep:0,reviewStep:0,accepted:false,released:false,productivityMethod:'',previousEffort:'',studioEffort:'',productivityRecord:null,previewRunning:false,frontendServiceRunning:false,backendServiceRunning:false,serviceStarting:{frontend:false,backend:false},pageDebugUrl:'http://localhost:5173',debugServiceMenuOpen:false,debugLogOpen:false,serviceLogs:{frontend:[],backend:[]},serviceLogFollowing:{frontend:true,backend:true},serviceRepairStep:'',serviceFailure:'',acceptancePreflightStatus:'idle',acceptancePreflightOriginPhase:null,acceptancePreflightServices:{frontend:'idle',backend:'idle'},acceptancePreflightError:'',acceptancePreflightRun:0,apiCalled:false,apiDebugUrl:'http://localhost:8000/api/news',apiDebugParams:{dimension:'行情聚焦',current:'1',pageSize:'10'},panelLayout:'split',previewStatus:false,tab:'需求文档',section:'概览',pane:'',modal:''});
+    Object.assign(state,{name:document.querySelector('#name').value.trim(),description:document.querySelector('#description').value.trim(),projectPath:document.querySelector('#project-path').value.trim(),terminal:values.get('terminal'),layout:values.get('layout'),appIcon:values.get('app-icon'),useHeader:values.has('header'),useMenu:values.has('menu'),authEnabled:values.has('auth'),hasProject:true,isDemo:false,phase:0,reached:0,designStep:0,uiGenerated:false,uiSkipped:false,uiVariant:0,uiFeedback:'',requirementFeedback:'',planFeedback:'',revisionEditing:'',target:'',targetKind:'',selectedArtifact:'page',selectedFilePath:'docs/requirement-spec.md',buildStep:'',completed:[],mappingStep:'',mappingConfirmed:false,mappingSourceSelected:false,fieldMappings:{},mappingHints:{},mappingGenerating:false,testStep:0,reviewStep:0,accepted:false,released:false,productivityMethod:'',previousEffort:'',studioEffort:'',productivityRecord:null,previewRunning:false,frontendServiceRunning:false,backendServiceRunning:false,serviceStarting:{frontend:false,backend:false},pageDebugUrl:'http://localhost:5173',debugServiceMenuOpen:false,debugLogOpen:false,serviceLogs:{frontend:[],backend:[]},serviceLogFollowing:{frontend:true,backend:true},serviceRepairStep:'',serviceFailure:'',acceptancePreflightStatus:'idle',acceptancePreflightOriginPhase:null,acceptancePreflightServices:{frontend:'idle',backend:'idle'},acceptancePreflightError:'',acceptancePreflightRun:0,apiCalled:false,apiDebugUrl:'http://localhost:8000/api/news',apiDebugParams:{dimension:'行情聚焦',current:'1',pageSize:'10'},panelLayout:'split',previewStatus:false,tab:'需求文档',section:'概览',pane:'',modal:''});
+    state.mappingDescription=''; state.mappingAssistantOpen=false; state.mappingManualFields={};
     state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; state.apiLastRequestUrl=''; state.apiDebugMethod='GET'; state.apiDebugUrl='http://localhost:8000/api/news'; state.apiDebugParams={dimension:'行情聚焦',current:'1',pageSize:'10'}; state.apiDebugEnabledParams={dimension:true,current:true,pageSize:true}; state.apiDebugHeaders={Accept:'application/json'}; state.apiDebugHeaderEnabled={Accept:true}; state.apiDebugAuth='No Auth'; state.apiDebugBody=''; state.apiRequestTab='Params'; state.apiResponseTab='Body';
     state.databases=[]; state.database=''; state.databaseTables={}; state.databaseConfigs={};
     state.domains=['门户平台']; state.domain='门户平台'; state.domainApis={'门户平台':[]}; projectMemory.current=null;
@@ -457,14 +470,14 @@ document.addEventListener('change', event => {
   if (event.target.id==='api-debug-auth') { state.apiDebugAuth=event.target.value; state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; render(); return; }
   if (event.target.dataset.apiHeaderEnabled) { state.apiDebugHeaderEnabled[event.target.dataset.apiHeaderEnabled]=event.target.checked; state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; render(); return; }
   if (event.target.dataset.apiParamEnabled) { state.apiDebugEnabledParams[event.target.dataset.apiParamEnabled]=event.target.checked; state.apiCalled=false; state.apiCallStatus='idle'; state.apiCallError=''; render(); return; }
-  if (event.target.name==='mapping-source-table') { state.mappingSourceSelected=event.target.value==='portal_news'; state.mappingConfirmed=false; state.mappingStep=''; state.fieldMappings={}; state.mappingHints={}; render(); return; }
-  if (event.target.name==='mapping-field') { const position=document.querySelector('.mapping-content')?.scrollTop||0; state.fieldMappings[event.target.dataset.field]=event.target.value; render(); const panel=document.querySelector('.mapping-content'); if (panel) panel.scrollTop=position; return; }
+  if (event.target.name==='mapping-source-table') { state.mappingSourceSelected=event.target.value==='portal_news'; state.mappingConfirmed=false; state.mappingStep=''; state.mappingDescription=''; state.mappingAssistantOpen=false; state.mappingManualFields={}; state.fieldMappings={}; state.mappingHints={}; render(); return; }
+  if (event.target.name==='mapping-field') { const position=document.querySelector('.mapping-content')?.scrollTop||0; const field=event.target.dataset.field; state.fieldMappings[field]=event.target.value; state.mappingManualFields={...state.mappingManualFields,[field]:true}; state.mappingConfirmed=false; state.mappingAssistantOpen=false; render(); const panel=document.querySelector('.mapping-content'); if (panel) panel.scrollTop=position; return; }
   if (event.target.name!=='mode' || !event.target.closest('#aux-form')) return;
   document.querySelectorAll('[data-connection]').forEach(section=>{ const inactive=section.dataset.connection!==event.target.value; section.hidden=inactive; section.querySelectorAll('input').forEach(input=>{ input.disabled=inactive; }); });
 });
-// 保留映射说明，以便切换字段或标签后继续审阅。
+// 调试地址等输入实时记录，切换标签后继续沿用。
 document.addEventListener('input', event => {
-  if (event.target.getAttribute('aria-label')==='接口映射说明') state.mappingDescription=event.target.value;
+  if (event.target.id==='mapping-description') state.mappingDescription=event.target.value;
   if (event.target.id==='page-debug-url') state.pageDebugUrl=event.target.value;
   if (event.target.id==='api-debug-url') {
     const value=event.target.value;
@@ -495,35 +508,54 @@ document.addEventListener('input', event => {
 document.addEventListener('change',event=>{
   if (event.target.id==='productivity-method') state.productivityMethod=event.target.value;
 });
-// AI 提示气泡：用固定定位的现代 tooltip 展示异常字段的分析与建议，替代原生 title 的迟滞体验。
-let aiTipTimer=null;
-function ensureAiTip() { let tip=document.querySelector('.ai-tip'); if (!tip) { tip=document.createElement('div'); tip.className='ai-tip'; tip.setAttribute('role','tooltip'); document.body.appendChild(tip); } return tip; }
-document.addEventListener('mouseover', event => {
-  const hint=event.target.closest?.('.mapping-ai-hint');
-  if (!hint || !hint.dataset.tip) return;
-  clearTimeout(aiTipTimer);
-  aiTipTimer=setTimeout(()=>{
-    const tip=ensureAiTip();
-    tip.textContent=hint.dataset.tip;
-    tip.classList.remove('show');
-    const rect=hint.getBoundingClientRect();
-    const size=tip.getBoundingClientRect();
-    let top=rect.top-size.height-8;
-    // 图标贴近顶部时翻转到下方，横向夹在视口内。
-    if (top<8) top=rect.bottom+8;
-    tip.style.top=`${Math.round(top)}px`;
-    tip.style.left=`${Math.round(Math.max(8,Math.min(rect.left+rect.width/2-size.width/2,window.innerWidth-size.width-8)))}px`;
-    tip.classList.add('show');
-  },120);
+// 关闭字段辅助说明浮层，并清理尚未触发的延迟显示任务。
+let mappingTipTimer=null;
+function hideMappingAssistanceTip() {
+  clearTimeout(mappingTipTimer);
+  document.querySelector('#mapping-assistance-tooltip')?.remove();
+}
+// 在字段标记旁显示悬浮说明，不改变表格行高。
+function showMappingAssistanceTip(marker) {
+  hideMappingAssistanceTip();
+  const tip=document.createElement('div');
+  tip.id='mapping-assistance-tooltip'; tip.className='mapping-assistance-tooltip'; tip.setAttribute('role','tooltip');
+  const title=document.createElement('strong'); title.textContent='AI 辅助说明';
+  const copy=document.createElement('p'); copy.className='mapping-assistance-copy'; copy.textContent=marker.dataset.mappingTip||'';
+  tip.append(title,copy); document.body.append(tip);
+  const rect=marker.getBoundingClientRect(), tipRect=tip.getBoundingClientRect();
+  const left=Math.max(8,Math.min(rect.left,window.innerWidth-tipRect.width-8));
+  const below=rect.bottom+6;
+  const top=below+tipRect.height<=window.innerHeight-8?below:Math.max(8,rect.top-tipRect.height-6);
+  tip.style.left=`${Math.round(left)}px`; tip.style.top=`${Math.round(top)}px`;
+}
+// 指针或键盘聚焦字段标记时显示说明，并允许将提示片段引用到规则浮层。
+document.addEventListener('mouseover',event=>{
+  const target=event.target instanceof Element?event.target:null;
+  if (target?.closest('#mapping-assistance-tooltip')) { clearTimeout(mappingTipTimer); return; }
+  const marker=target?.closest('.mapping-assistance-marker');
+  if (!marker) return;
+  clearTimeout(mappingTipTimer); mappingTipTimer=setTimeout(()=>showMappingAssistanceTip(marker),120);
 });
-document.addEventListener('mouseout', event => {
-  const hint=event.target.closest?.('.mapping-ai-hint');
-  if (!hint || hint.contains(event.relatedTarget)) return;
-  clearTimeout(aiTipTimer);
-  document.querySelector('.ai-tip')?.classList.remove('show');
+document.addEventListener('mouseout',event=>{
+  const target=event.target instanceof Element?event.target:null;
+  const marker=target?.closest('.mapping-assistance-marker');
+  const tip=target?.closest('#mapping-assistance-tooltip');
+  if (!marker&&!tip) return;
+  if (event.relatedTarget instanceof Node && (marker?.contains(event.relatedTarget)||document.querySelector('#mapping-assistance-tooltip')?.contains(event.relatedTarget))) return;
+  clearTimeout(mappingTipTimer); mappingTipTimer=setTimeout(hideMappingAssistanceTip,220);
 });
-document.addEventListener('scroll', ()=>{ clearTimeout(aiTipTimer); document.querySelector('.ai-tip')?.classList.remove('show'); }, true);
+document.addEventListener('focusin',event=>{
+  const marker=event.target instanceof Element?event.target.closest('.mapping-assistance-marker'):null;
+  if (marker) showMappingAssistanceTip(marker);
+});
+document.addEventListener('focusout',event=>{
+  const marker=event.target instanceof Element?event.target.closest('.mapping-assistance-marker'):null;
+  if (!marker) return;
+  if (event.relatedTarget instanceof Node && document.querySelector('#mapping-assistance-tooltip')?.contains(event.relatedTarget)) return;
+  clearTimeout(mappingTipTimer); mappingTipTimer=setTimeout(hideMappingAssistanceTip,220);
+});
+document.addEventListener('scroll',hideMappingAssistanceTip,true);
 window.addEventListener('hashchange',()=>{ const canvas=document.querySelector('.prototype-canvas'); canvas.scrollLeft=0; canvas.scrollTop=0; render(); });
-window.addEventListener('resize',()=>updateAnnotations(currentRoute()));
+window.addEventListener('resize',()=>{ hideMappingAssistanceTip(); updateAnnotations(currentRoute()); });
 document.addEventListener('scroll',()=>updateAnnotations(currentRoute()),true);
 render();

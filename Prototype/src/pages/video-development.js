@@ -1,5 +1,5 @@
-import { state, safe } from '../state.js?v=20261122a';
-import { action, agentHeader, message, portalContent, workflowCard } from '../components/video-common.js?v=20261122a';
+import { state, safe } from '../state.js?v=20261122b';
+import { action, agentHeader, message, portalContent, workflowCard } from '../components/video-common.js?v=20261122b';
 import { icon } from '../components/icons.js?v=20261123d';
 
 const api = '查询新闻列表';
@@ -74,17 +74,18 @@ function debugArtifactPicker(kind) {
   return `<details class="debug-target-picker"><summary>${label}<span class="dd-chevron" aria-hidden="true"></span></summary><div class="debug-target-tree" role="tree"><div class="debug-target-group">${pageTarget?'页面':'接口'}</div><button class="debug-target-item ${state.selectedArtifact===(pageTarget?'page':'api')?'selected':''}" data-select-debug-artifact="${pageTarget?'page':'api'}" data-debug-url="${pageTarget?'http://localhost:5173/page/home':'http://localhost:8000/api/news'}" role="treeitem">${label}</button></div></details>`;
 }
 
-// 产物未完成时调试面板仍可进入：地址栏保留但目标下拉无可选项，内容区提示先完成开发。
+// 产物未完成时调试面板仍可进入：地址栏保留但目标下拉无可选项；服务与日志属于工程能力，不依赖产物、随时可用。
 function debugEmptyPanel(kind) {
   const isPage=kind==='page';
   const artifact=isPage?page:api;
+  const serviceKind=isPage?'frontend':'backend';
   const addressRow=isPage
     ? `<span class="debug-preview-nav">‹　›　↻</span><div class="debug-address-field-group">${debugArtifactPicker('page')}<input id="page-debug-url" aria-label="预览地址" value="about:blank"></div><button data-action="preview-visit">访问</button>`
     : `${debugArtifactPicker('api')}<details class="debug-target-picker debug-method-picker"><summary>${state.apiDebugMethod}<span class="dd-chevron" aria-hidden="true"></span></summary><div class="debug-target-tree" role="tree">${['GET','POST','PUT','PATCH','DELETE'].map(method=>`<button class="debug-target-item ${state.apiDebugMethod===method?'selected':''}" data-api-method="${method}" role="treeitem">${method}</button>`).join('')}</div></details><div class="debug-address-field-group"><input id="api-debug-url" aria-label="请求地址" value="about:blank"></div><button data-action="api-call">发送</button>`;
-  return `<div class="${isPage?'page-debugger':'api-debugger'}"><div class="debug-header-stack"><div class="api-request-row debug-address-row">${addressRow}</div></div><div class="${isPage?'page-debug-content':'api-debug-content'}"><div class="panel-empty">完成「${artifact}」开发后即可在此${isPage?'选择页面并预览调试':'选择接口并发送调试请求'}。</div></div></div>`;
+  return `<div class="${isPage?'page-debugger':'api-debugger'}"><div class="debug-header-stack"><div class="api-request-row debug-address-row">${addressRow}${debugServiceToolbar(serviceKind)}</div></div><div class="${isPage?'page-debug-content':'api-debug-content'}"><div class="panel-empty">完成「${artifact}」开发后即可在此${isPage?'选择页面并预览调试':'选择接口并发送调试请求'}。</div></div>${state.debugLogOpen?serviceLogPanel(serviceKind):''}</div>`;
 }
 
-// 按 Postman 的基本请求与响应区域展示当前 API 契约调试入口；接口产物未完成时只提供空目标下拉。
+// 按 Postman 的基本请求与响应区域展示当前 API 契约调试入口；接口产物未完成时提供空目标下拉，服务与日志照常可用。
 export function apiDebugPanel() {
   if (!state.completed.includes(api)) return debugEmptyPanel('api');
   const params=state.apiDebugParams;
@@ -153,26 +154,28 @@ function serviceManagementPanel(kind) {
   return `<section class="debug-service-menu"><div class="row between"><strong>${info.title}维护</strong><span class="tag">${info.status} · 端口 ${info.port}</span></div><div class="service-actions">${mainAction}${restartAction}${action('诊断并修复','service-diagnose')}</div>${info.failed?`<div class="service-failure">${safe(state.serviceFailure)}</div><section class="simple-card service-repair-plan"><div class="row between"><strong>启动失败修复计划</strong><span class="tag">待确认</span></div><p>检查${info.title}启动配置，修复后重新启动当前服务。</p>${action('确认并修复','service-repair-confirm','class="primary"')}</section>`:''}</section>`;
 }
 
-// 数据来源、查询条件、返回字段构成配置表单；AI 生成映射一键落表，仅在匹配异常的字段旁标注星光警告。
+// 数据来源、补充规则和 AI 分析共同构成可反复调整的映射流程。
 export function mappingPanel() {
   const sourceAvailable = (state.databaseTables[state.database]||[]).includes('portal_news');
   const sourceReady = sourceAvailable && state.mappingSourceSelected;
   const hints = state.mappingHints||{};
-  const aiButton = state.mappingGenerating ? '<button type="button" disabled>生成中…</button>' : action('AI 生成映射','mapping-generate');
   const rows = returnFields.map(([f])=>{
     const selected=state.fieldMappings[f]||'';
     const hint=hints[f];
-    const hintIcon=hint?`<span class="mapping-ai-hint ${hint.level==='warn'?'warn':'info'}" data-tip="${safe(hint.text)}" aria-label="${safe(hint.text)}">${icon('ai')}</span>`:'';
     const options=['','业务处理','pageSize','current','id','title','summary','dimension','publish_date','source','content'];
-    return `<tr><td>${f}</td><td>${selected?'数据来源 / 接口参数':'待配置'}</td><td><span class="mapping-field-cell${hint?` hint-${hint.level==='warn'?'warn':'info'}`:''}"><select name="mapping-field" data-field="${f}" aria-label="${f} 的取值内容">${options.map(v=>`<option value="${v}" ${v===selected?'selected':''}>${v||'请选择'}</option>`).join('')}</select>${hintIcon}</span></td></tr>`;
+    const assistance=hint?`<span class="mapping-assistance-marker ${hint.level==='warn'?'warn':'info'}" tabindex="0" role="img" data-mapping-tip="${safe(hint.text)}" aria-label="${safe(f)} 的 AI 辅助说明">AI</span>`:'';
+    return `<tr><td>${f}</td><td>${selected?'数据来源 / 接口参数':'待配置'}</td><td><div class="mapping-value-cell"><select name="mapping-field" data-field="${f}" aria-label="${f} 的取值内容">${options.map(v=>`<option value="${v}" ${v===selected?'selected':''}>${v||'请选择'}</option>`).join('')}</select>${assistance}</div></td></tr>`;
   }).join('');
   const mappingReady = returnFields.every(([f])=>Boolean(state.fieldMappings[f]));
   const sourceChoice = `<div class="source-types"><button type="button" class="selected">数据库</button><button type="button" data-action="source-external">外部 API</button><button type="button" data-action="source-static">静态数据</button></div><label for="mapping-source-table">选择已添加的数据表</label><select id="mapping-source-table" name="mapping-source-table"><option value="">请选择数据表</option>${sourceAvailable?`<option value="portal_news">${safe(state.database)} · portal_news</option>`:''}</select>${sourceAvailable?'':'<p class="hint">尚未添加 portal_news，请先在数据源中添加。</p>'}`;
-  // 上半区压缩：来源/操作/查询条件合并为一行元信息，说明压成两行，减少返回字段表的滚动距离。
-  const sourceCard = sourceReady
-    ? `<section class="simple-card"><div class="row between"><span class="mapping-meta-line"><span><strong>数据来源</strong>　${safe(state.database)} · portal_news</span><span><strong>数据库操作</strong>　查询</span></span>${action('更换数据源','mapping-source')}</div><label class="mapping-desc-label" for="mapping-description">接口映射说明</label><textarea id="mapping-description" rows="2" aria-label="接口映射说明">${safe(state.mappingDescription)}</textarea></section><section class="simple-card"><strong>查询条件</strong><div class="grid"><span>dimension　等于</span><span>接口参数　dimension</span></div></section>`
-    : `<section class="simple-card"><strong>数据来源</strong>${sourceChoice}</section>`;
-  return `<div class="artifact-layout mapping-layout"><aside class="artifact-tree"><strong>应用 API</strong><p>⌄　门户新闻查询</p><button class="selected">　${icon('api')}　查询新闻列表</button></aside><div class="mapping-content"><div class="row between"><div><p class="hint">门户新闻查询</p><h2>查询新闻列表</h2><p>GET　/api/news</p></div><div class="actions">${sourceReady?`${aiButton} `:''}${action('暂存','mapping-draft')} ${action('保存并确认','mapping-save',`class="primary" ${sourceReady && mappingReady?'':'disabled'}`)}</div></div>${sourceCard}${sourceReady?`<section class="simple-card"><strong>返回字段</strong>${Object.keys(hints).length?'<p class="hint">悬停警告图标查看 AI 分析与建议。</p>':''}<table class="video-table"><thead><tr><th>返回字段</th><th>值来源</th><th>取值内容</th></tr></thead><tbody>${rows}</tbody></table></section>`:''}</div></div>`;
+  const sourceSummary = sourceReady
+    ? `<div class="mapping-source-summary"><div><strong>数据来源</strong><span>${safe(state.database)} · portal_news</span></div><div><strong>数据库操作</strong><span>查询</span></div>${action('更换数据源','mapping-source')}</div><div class="mapping-query-summary"><strong>查询条件</strong><span>dimension　等于　接口参数 dimension</span></div>`
+    : `<div class="mapping-source-setup"><strong>数据来源</strong>${sourceChoice}</div>`;
+  const mappingConfiguration = `<section class="simple-card mapping-config"><div class="row between mapping-config-heading"><strong>映射配置</strong>${sourceReady?'<span class="hint">数据源、查询条件与 API 返回字段</span>':''}</div>${sourceSummary}${sourceReady?`<div class="mapping-return-fields"><div class="row between"><strong>返回字段</strong><span class="hint">${returnFields.length} 个字段</span></div><table class="video-table"><thead><tr><th>返回字段</th><th>值来源</th><th>取值内容</th></tr></thead><tbody>${rows}</tbody></table></div>`:''}</section>`;
+  const assistantLabel='AI 生成映射';
+  const popoverTitle=Object.keys(hints).length?'继续优化映射':assistantLabel;
+  const assistantPopover=state.mappingAssistantOpen&&sourceReady?`<aside class="mapping-ai-popover" aria-label="${popoverTitle}"><div class="mapping-ai-popover-head"><div><strong>${popoverTitle}</strong><p class="hint">${Object.keys(hints).length?'悬停字段旁的 AI 标记查看辅助说明，可补充规则后重新生成。':'补充规则为选填，首次生成后才会出现字段辅助说明。'}</p></div><button type="button" class="ghost" data-action="mapping-ai-close" aria-label="关闭">×</button></div><div class="mapping-ai-scope">${safe(state.database)} · portal_news　→　GET /api/news</div><label for="mapping-description">补充映射规则（选填）</label><textarea id="mapping-description" rows="3" placeholder="例如：序号使用新闻记录的 id；总数按筛选条件统计">${safe(state.mappingDescription||'')}</textarea><div class="mapping-ai-popover-actions"><button type="button" class="primary" data-action="mapping-generate" ${state.mappingGenerating?'disabled':''}>${state.mappingGenerating?'生成中…':Object.keys(hints).length?'重新生成映射':'生成映射'}</button></div></aside>`:'';
+  return `<div class="artifact-layout mapping-layout"><aside class="artifact-tree"><strong>应用 API</strong><p>⌄　门户新闻查询</p><button class="selected">　${icon('api')}　查询新闻列表</button></aside><div class="mapping-content"><div class="row between"><div><p class="hint">门户新闻查询</p><h2>查询新闻列表</h2><p>GET　/api/news</p></div><div class="actions">${sourceReady?`<button type="button" class="mapping-ai-trigger" data-action="mapping-ai-open">${assistantLabel}</button>`:''}${action('暂存','mapping-draft')} ${action('保存并确认','mapping-save',`class="primary" ${sourceReady && mappingReady?'':'disabled'}`)}</div></div>${assistantPopover}${mappingConfiguration}</div></div>`;
 }
 
 // 用户确认开发任务计划后，才继续模拟执行。
@@ -190,17 +193,19 @@ export function applicationFilesPanel() {
     ['docs/ui-designs.json','UI 设计稿','页面采用顶部应用标识、首页菜单与分区新闻列表布局。'],
     ['docs/technical-plan.md','技术规划方案','前端页面通过 GET /api/news 获取新闻；后端从 portal_news 数据表读取数据。'],
     ['docs/project-plan.md','项目计划','完成门户首页、新闻列表查询接口、数据映射和构建检查。'],
-    ['README.md','项目说明','苏州分行门户示例项目，记录应用用途与本地开发入口。'],
-    ['frontend/pages/home.tsx','门户首页源码','前端页面呈现四个新闻区块，按 dimension 参数请求新闻列表。'],
-    ['backend/news-controller.java','新闻接口源码','提供 GET /api/news，支持 dimension、current、pageSize 参数。']
+    ['README.md','项目说明','苏州分行门户示例项目，记录应用用途与本地开发入口。']
   ];
+  // 源码文件跟随产物完成情况进入文件树：对应产物未开发时不展示，避免"文件已存在"与旅程状态矛盾。
+  if (state.completed.includes('门户首页')) files.push(['frontend/pages/home.tsx','门户首页源码','前端页面呈现四个新闻区块，按 dimension 参数请求新闻列表。']);
+  if (state.completed.includes('查询新闻列表')) files.push(['backend/news-controller.java','新闻接口源码','提供 GET /api/news，支持 dimension、current、pageSize 参数。']);
   const selectedPath = state.selectedFilePath || files[0][0];
   const selected = files.find(([path])=>path===selectedPath) || files[0];
   const fileButton = ([path,label])=>`<button data-file="${path}" class="${path===selected[0]?'selected':''}">${safe(label)} <small>${path}</small></button>`;
   const docs = files.filter(([path])=>path.startsWith('docs/')||path==='README.md').map(fileButton).join('');
   const frontend = files.filter(([path])=>path.startsWith('frontend/')).map(fileButton).join('');
   const backend = files.filter(([path])=>path.startsWith('backend/')).map(fileButton).join('');
-  return `<div class="artifact-layout"><aside class="artifact-tree"><strong>项目文件</strong><p>⌄　文档</p>${docs}<p>⌄　frontend</p>${frontend}<p>⌄　backend</p>${backend}</aside><div class="artifact-detail"><div class="artifact-heading"><div><strong>${safe(selected[1])}</strong><small>${safe(selected[0])}</small></div><span>只读</span></div><section class="simple-card"><strong>文件内容摘要</strong><p>${safe(selected[2])}</p></section></div></div>`;
+  // 分组标题仅在组内有文件时展示，避免出现空的 frontend/backend 分组。
+  return `<div class="artifact-layout"><aside class="artifact-tree"><strong>项目文件</strong><p>⌄　文档</p>${docs}${frontend?`<p>⌄　frontend</p>${frontend}`:''}${backend?`<p>⌄　backend</p>${backend}`:''}</aside><div class="artifact-detail"><div class="artifact-heading"><div><strong>${safe(selected[1])}</strong><small>${safe(selected[0])}</small></div><span>只读</span></div><section class="simple-card"><strong>文件内容摘要</strong><p>${safe(selected[2])}</p></section></div></div>`;
 }
 
 // 渲染应用页面；后端联调入口只在接口产物完成后开放，服务启动中给出过渡提示。
@@ -221,7 +226,7 @@ export function previewPanel() {
   return `<div class="video-preview"><div class="preview-toolbar row"><span>‹　›　↻</span><input aria-label="预览地址" value="${address}"><button data-action="preview-visit">访问</button></div>${pagePreviewContent(true)}</div>`;
 }
 
-// 页面调试将前端服务状态、维护操作和页面预览放在同一面板；页面产物未完成时只提供空目标下拉。
+// 页面调试将前端服务状态、维护操作和页面预览放在同一面板；页面产物未完成时提供空目标下拉，服务与日志照常可用。
 export function pageDebugPanel() {
   if (!state.completed.includes(page)) return debugEmptyPanel('page');
   const address=state.frontendServiceRunning?safe(state.pageDebugUrl || 'http://localhost:5173'):'about:blank';

@@ -1,5 +1,5 @@
-import { state, safe } from '../state.js?v=20261122a';
-import { exampleApi } from '../data/demo-case.js?v=20261123l';
+import { state, safe } from '../state.js?v=20261122b';
+import { exampleApi } from '../data/demo-case.js?v=20261124a';
 import { icon } from './icons.js?v=20261123d';
 
 const labels = {

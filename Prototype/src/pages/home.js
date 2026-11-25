@@ -1,4 +1,4 @@
-import { state, projectMemory, safe } from '../state.js?v=20261122a';
+import { state, projectMemory, safe } from '../state.js?v=20261122b';
 import { phases } from '../data/mock-data.js?v=20261118o';
 import { icon } from '../components/icons.js?v=20261123d';
 

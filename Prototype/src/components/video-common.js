@@ -1,4 +1,4 @@
-import { state, safe } from '../state.js?v=20261122a';
+import { state, safe } from '../state.js?v=20261122b';
 
 // 按教学视频的阶段展示对应 Agent。
 export function agentHeader(phase = state.phase) {
