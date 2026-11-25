@@ -12,10 +12,6 @@ from app.domain.application_revision import (
     RevisionContinuationRequest,
     StartRevisionRequest,
 )
-from app.domain.development_continuation import (
-    DevelopmentContinuationConsumeRequest,
-    DevelopmentContinuationReference,
-)
 from app.services.entity_design import normalize_entity_design_action
 from app.services.api_design import ApiDesignError, normalize_api_design_gate_action
 from app.domain.application_planning_interaction import ApplicationPlanningInteraction
@@ -40,10 +36,6 @@ from app.services.application_revision_lifecycle import (
 )
 from app.services.application_lifecycle import load_application_lifecycle
 from app.services.design_revision_admission import design_revision_input
-from app.services.development_continuation import (
-    validate_development_continuation,
-    validate_entity_binding_continuation,
-)
 from app.services.workspace_inspector import snapshot_hash
 from app.protocols.workflow.revision import (
     bind_revision_draft_interaction,
@@ -185,10 +177,6 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
         or _optional_text(forwarded_props.get("workflowAction"))
         or _optional_text(forwarded_props.get("workflow_action"))
     )
-    development_continuation = _development_continuation_request(
-        forwarded_props.get("developmentContinuation"),
-        consume=workflow_action == "continue_after_entity_binding",
-    )
     revision_continuation = _revision_continuation_request(
         forwarded_props.get("revisionContinuation")
     )
@@ -198,10 +186,6 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
     )
     if workflow_action == "continue_revision_build" and revision_continuation is None:
         raise ValueError("continue_revision_build 必须提供 revisionContinuation。")
-    if workflow_action in {"start_entity_binding", "continue_after_entity_binding"} and (
-        development_continuation is None
-    ):
-        raise ValueError(f"{workflow_action} 必须提供 developmentContinuation。")
     if workflow_action == "start_revision" and revision_start is None:
         raise ValueError("start_revision 必须提供 revisionRequest。")
     if workflow_action == "submit_revision_interaction" and revision_interaction is None:
@@ -476,51 +460,6 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
         or _optional_text(forwarded_props.get("sessionId"))
         or _optional_text(forwarded_props.get("session_id"))
     )
-    request_thread_id = (
-        _optional_text(payload.get("thread_id"))
-        or _optional_text(payload.get("threadId"))
-    )
-    development_continuation_id = ""
-    development_continuation_source_run_id = ""
-    if workflow_action == "start_entity_binding":
-        assert isinstance(development_continuation, DevelopmentContinuationReference)
-        if not selected_entity_id or not request_thread_id:
-            raise ValueError("start_entity_binding 必须提供实体与独立 thread。")
-        validate_entity_binding_continuation(
-            workspace,
-            continuation_id=development_continuation.id,
-            entity_id=selected_entity_id,
-            binding_thread_id=request_thread_id,
-        )
-        development_continuation_id = development_continuation.id
-    elif workflow_action == "continue_after_entity_binding":
-        assert isinstance(development_continuation, DevelopmentContinuationConsumeRequest)
-        if not request_thread_id:
-            raise ValueError("continue_after_entity_binding 必须提供原 execution thread。")
-        validated_continuation = validate_development_continuation(
-            workspace,
-            continuation_id=development_continuation.id,
-            token=development_continuation.token,
-            thread_id=request_thread_id,
-        )
-        request = validated_continuation.request
-        resume_from = "api_design_readiness_gate"
-        resume_values_from_state = {}
-        development_continuation_id = validated_continuation.id
-        development_continuation_source_run_id = validated_continuation.source_run_id
-        target = validated_continuation.target
-        if target.type == "page":
-            selectedPageId = str(target.page_id or "")
-            selected_api_contract_id = ""
-            selected_endpoint_id = ""
-            selected_entity_id = ""
-            detail_target_type = "page"
-        else:
-            selectedPageId = ""
-            selected_api_contract_id = str(target.api_contract_id or "")
-            selected_endpoint_id = str(target.endpoint_id or "")
-            selected_entity_id = ""
-            detail_target_type = "endpoint"
     continuation_change_id = ""
     revision_continuation_replaces_run_id = ""
     revision_build_target_type = ""
@@ -697,14 +636,6 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
         )
     if resume_state is not None and not api_design_gate_action and isinstance(server_state.get("build_execution_scope"), dict):
         build_execution_scope = dict(server_state["build_execution_scope"])
-    # 续接的目标和作用域只由后端登记决定，不能被客户端旧实体 scope 覆盖。
-    if workflow_action == "continue_after_entity_binding":
-        build_execution_scope = (
-            {"type": "page", "targetId": selectedPageId}
-            if detail_target_type == "page"
-            else {"type": "endpoint", "targetId": selected_endpoint_id,
-                  "apiContractId": selected_api_contract_id}
-        )
     # endpoint scope 是正式 handoff 的权威目标；即使客户端只发送 scope，也要补回门禁所需的显式 ID。
     if build_execution_scope.get("type") == "endpoint":
         selected_api_contract_id = selected_api_contract_id or _optional_text(
@@ -723,10 +654,7 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
         if workflow_scope not in APPLICATION_PLANNING_SCOPES
         else []
     )
-    resume_execution_run_id = (
-        development_continuation_source_run_id
-        or explicit_resume_execution_run_id
-    )
+    resume_execution_run_id = explicit_resume_execution_run_id
     if workflow_action == "retry_code_review" and not resume_execution_run_id:
         raise ValueError("retry_code_review 必须携带失败执行的 resumeExecutionRunId。")
     resume_values = {
@@ -809,18 +737,6 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
         **({"selected_endpoint_id": selected_endpoint_id} if selected_endpoint_id else {}),
         **({"selected_entity_id": selected_entity_id} if selected_entity_id else {}),
         **({"detail_target_type": detail_target_type} if detail_target_type else {}),
-        **({
-            "selectedPageId": selectedPageId,
-            "selected_api_contract_id": selected_api_contract_id,
-            "selected_endpoint_id": selected_endpoint_id,
-            "selected_entity_id": "",
-            "clarification": {},
-        } if workflow_action == "continue_after_entity_binding" else {}),
-        **(
-            {"development_continuation_id": development_continuation_id}
-            if development_continuation_id
-            else {}
-        ),
         **({"page_template": page_template} if page_template else {}),
         "build_execution_scope": build_execution_scope,
         "execution_resource_claims": [
@@ -894,11 +810,6 @@ def workflow_run_inputs(payload: dict[str, Any], *, server_state: dict[str, Any]
         # 凭据仅留在当前请求适配器内，不写入公开 Workflow 或开发 checkpoint。
         "revision_continuation_consume": (
             revision_continuation.model_dump() if workflow_action == "continue_revision_build" else None
-        ),
-        "development_continuation_consume": (
-            development_continuation.model_dump()
-            if workflow_action == "continue_after_entity_binding"
-            else None
         ),
         "application_planning_interaction": application_planning_interaction,
         "resume_from": resume_from,
@@ -1193,8 +1104,6 @@ def _supported_workflow_action(value: str) -> str:
             "start_revision",
             "continue_revision_build",
             "submit_revision_interaction",
-            "start_entity_binding",
-            "continue_after_entity_binding",
             "retry_template_reconcile",
         }
         else ""
@@ -1270,25 +1179,6 @@ def _revision_continuation_request(value: Any) -> RevisionContinuationRequest | 
     if not isinstance(value, dict):
         raise ValueError("revisionContinuation 必须是对象。")
     return RevisionContinuationRequest.model_validate(value)
-
-
-def _development_continuation_request(
-    value: Any,
-    *,
-    consume: bool,
-) -> DevelopmentContinuationReference | DevelopmentContinuationConsumeRequest | None:
-    """严格解析实体前置续接引用，禁止客户端附带目标或原请求。"""
-
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError("developmentContinuation 必须是对象。")
-    model = (
-        DevelopmentContinuationConsumeRequest
-        if consume
-        else DevelopmentContinuationReference
-    )
-    return model.model_validate(value)
 
 
 def _revision_start_request(value: Any) -> StartRevisionRequest | None:

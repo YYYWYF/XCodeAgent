@@ -99,6 +99,22 @@ class ApplicationLifecycleTests(unittest.TestCase):
         self.assertEqual(state.initialization.thread_id, "thread-init")
         self.assertEqual(state.revision, 1 + len(sequence))
 
+    def test_new_application_snapshot_has_no_entity_development_handoff(self) -> None:
+        """新应用真实写盘和重读均不产生旧实体开发续接登记表。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = create_application_lifecycle(
+                application_id="new-application", application_name="新应用",
+                initialization_thread_id="planning-thread",
+            )
+            write_application_lifecycle(directory, state, expected_revision=0)
+            payload = json.loads(application_lifecycle_path(directory).read_text(encoding="utf-8"))
+            self.assertNotIn("developmentContinuations", payload)
+            loaded = load_application_lifecycle(directory)
+            self.assertEqual(loaded.application.id, "new-application")
+            self.assertEqual(loaded.initialization.thread_id, "planning-thread")
+            self.assertEqual(loaded.active_executions, {})
+
     def test_three_creation_interruptions_survive_reload(self) -> None:
         """澄清、需求确认和计划确认都应在重启读取后保持初始化阶段。"""
 

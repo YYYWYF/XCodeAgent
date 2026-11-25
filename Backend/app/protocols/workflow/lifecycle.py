@@ -8,7 +8,6 @@ from typing import Any
 from app.domain.application_lifecycle import (
     ApplicationLifecycle,
     ApplicationLifecycleError,
-    DevelopmentContinuationTarget,
     ExecutionResourceClaim,
     ExecutionResourceReason,
     ExecutionResourceRole,
@@ -31,11 +30,6 @@ from app.services.application_revision_lifecycle import (
     complete_active_revision,
     register_revision_impact,
     update_active_revision_progress,
-)
-from app.services.development_continuation import (
-    development_continuation_payload,
-    issue_development_continuation,
-    register_development_continuation,
 )
 from app.services.planning_refresh_recovery import resolve_planning_refresh_state
 
@@ -150,10 +144,6 @@ def begin_workflow_lifecycle(
                 workflow_inputs.get("workflow_debug_enabled")
                 and workflow_inputs.get("resume_from")
             ),
-            allow_entity_binding_continuation=(
-                workflow_inputs.get("workflow_action")
-                == "continue_after_entity_binding"
-            ),
             api_design_refresh=api_design_action if api_design_refresh_requested else None,
             api_contract_id=scope.get("apiContractId"),
             owner_session_id=owner_session_id,
@@ -208,7 +198,6 @@ def begin_workflow_lifecycle(
             or None
         ),
         resource_claims=resource_claims,
-        development_continuation_consume=workflow_inputs.get("development_continuation_consume"),
         revision_continuation_consume=workflow_inputs.get("revision_continuation_consume"),
         initial_development_entry=(
             (phase == "api_design_readiness_gate" or use_executed_scope)
@@ -261,7 +250,6 @@ def _validate_resumable_execution(
     scope: str,
     target_id: str,
     allow_debug_reentry: bool = False,
-    allow_entity_binding_continuation: bool = False,
     api_design_refresh: dict[str, Any] | None = None,
     api_contract_id: str | None = None,
     owner_session_id: str | None = None,
@@ -340,12 +328,6 @@ def _validate_resumable_execution(
         and execution.pending_interaction is not None
         and execution.pending_interaction.type == PendingInteractionType.AGENT_APPROVAL
     )
-    entity_binding_continuation = (
-        allow_entity_binding_continuation
-        and execution.status == WorkbenchExecutionStatus.AWAITING_USER
-        and execution.pending_interaction is not None
-        and execution.pending_interaction.type == PendingInteractionType.ENTITY_SOURCE_BINDING
-    )
     # API 映射保存不推进 Workflow；只有原目标的显式 refresh 可以接管该等待门。
     pending = execution.pending_interaction
     api_design_continuation = (
@@ -390,7 +372,6 @@ def _validate_resumable_execution(
         and not acceptance_phase_confirmation
         and not page_acceptance_confirmation
         and not agent_approval_confirmation
-        and not entity_binding_continuation
         and not api_design_continuation
     ):
         raise ApplicationLifecycleConflictError("只有已停止或失败的工作台执行可以继续。")
@@ -472,17 +453,6 @@ def project_workflow_lifecycle_boundary(
             pending_type=pending_type,
             pending_payload=pending_payload,
         )
-        if clarification_mode(update) == "entity_source_binding_required":
-            continuation = _register_entity_binding_continuation(
-                workspace,
-                state=state,
-                run_id=run_id,
-                update=update,
-            )
-            update["development_continuation"] = development_continuation_payload(
-                continuation
-            )
-            state = load_application_lifecycle(workspace) or state
         if pending_type == PendingInteractionType.IMPACT_CONFIRMATION:
             _register_revision_impact_boundary(
                 workspace,
@@ -531,12 +501,6 @@ def project_workflow_lifecycle_boundary(
             }
         return payload
     if node_name == "entity_source_binding" and status == "completed":
-        continuation_id = str(update.get("development_continuation_id") or "").strip()
-        if continuation_id:
-            update["development_continuation"] = issue_development_continuation(
-                workspace,
-                continuation_id=continuation_id,
-            )
         completed = complete_workbench_execution(
             workspace,
             run_id=run_id,
@@ -681,7 +645,6 @@ def _pending_interaction(
         "acceptance_phase_confirmation": PendingInteractionType.ACCEPTANCE_PHASE_CONFIRMATION,
         "page_acceptance": PendingInteractionType.PAGE_ACCEPTANCE,
         "entity_source_binding": PendingInteractionType.ENTITY_SOURCE_BINDING,
-        "entity_source_binding_required": PendingInteractionType.ENTITY_SOURCE_BINDING,
         "api_design_required": PendingInteractionType.API_DESIGN,
         "agent_approval": PendingInteractionType.AGENT_APPROVAL,
         "revision_draft_confirmation": PendingInteractionType.REVISION_DRAFT_CONFIRMATION,
@@ -695,51 +658,6 @@ def clarification_mode(update: dict[str, Any]) -> str:
 
     clarification = update.get("clarification")
     return str(clarification.get("mode") or "") if isinstance(clarification, dict) else ""
-
-
-def _register_entity_binding_continuation(
-    workspace: str,
-    *,
-    state: ApplicationLifecycle,
-    run_id: str,
-    update: dict[str, Any],
-):
-    """把开发门禁目标登记为服务端 continuation，供独立实体 execution 引用。"""
-
-    execution = state.active_executions.get(run_id)
-    clarification = update.get("clarification")
-    clarification = clarification if isinstance(clarification, dict) else {}
-    raw_target = clarification.get("development_target")
-    raw_target = raw_target if isinstance(raw_target, dict) else {}
-    target_type = str(raw_target.get("type") or "")
-    target_id = str(raw_target.get("id") or "").strip()
-    if execution is None or target_type not in {"page", "endpoint"} or not target_id:
-        raise ApplicationLifecycleConflictError("实体门禁缺少可续接的原开发目标。")
-    target = DevelopmentContinuationTarget(
-        type=target_type,
-        pageId=target_id if target_type == "page" else None,
-        apiContractId=(
-            str(raw_target.get("api_contract_id") or "").strip()
-            if target_type == "endpoint"
-            else None
-        ),
-        endpointId=target_id if target_type == "endpoint" else None,
-        label=str(raw_target.get("label") or target_id),
-    )
-    missing_entities = clarification.get("missing_entities")
-    entity_ids = [
-        str(item.get("entity_id") or "").strip()
-        for item in missing_entities
-        if isinstance(item, dict) and str(item.get("entity_id") or "").strip()
-    ] if isinstance(missing_entities, list) else []
-    return register_development_continuation(
-        workspace,
-        source_thread_id=execution.thread_id,
-        source_run_id=execution.run_id,
-        request=str(update.get("request") or "继续原开发任务。"),
-        target=target,
-        required_entity_ids=entity_ids,
-    )
 
 
 def _register_revision_impact_boundary(

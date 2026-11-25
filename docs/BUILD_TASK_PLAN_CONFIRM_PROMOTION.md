@@ -115,7 +115,7 @@ Regenerate 是 AG-UI 结构化动作，并与 Confirm 一样绑定精确 DraftId
 .venv/bin/python -m unittest tests.test_build_task_plan_lifecycle tests.test_build_task_plan_regenerate tests.test_pending_build_task_plan_documents
 .venv/bin/python -m unittest tests.test_build_task_plan_recovery tests.test_agent_file_documents
 .venv/bin/python -m unittest tests.test_build_task_planner tests.test_build_unit_skeleton tests.test_prepare_build_tasks_guard tests.test_build_dag_v3_contract tests.test_page_build_context_resolver
-.venv/bin/python -m unittest tests.test_application_planning_interrupts tests.test_application_planning_structured_actions tests.test_development_continuation tests.test_development_continuation_stream
+.venv/bin/python -m unittest tests.test_application_planning_interrupts tests.test_application_planning_structured_actions
 ```
 
 后三组分别是完整 R-PERSIST、R-PLAN 和 R-WORKFLOW。新增测试包括八项任务要求、

@@ -54,7 +54,6 @@ import type {
   WorkflowDebugOptions,
   WorkflowAction,
   WorkflowDesignStageRevisionStart,
-  WorkflowDevelopmentContinuation,
   WorkflowWorkbenchPlanRevisionStart,
   WorkflowRevisionDraftInteraction,
   WorkflowRevisionImpact,
@@ -77,7 +76,6 @@ import { workflowClarification } from '../components/WorkflowRunCard/workflowCla
 import { latestDevelopmentTarget } from '../developmentNextStep'
 import type { AgentChatMessage } from '../types'
 import { ownedWorkbenchExecution, workbenchExecutionRunning } from '../workbenchRunPresentation'
-import { developmentContinuationFromWorkflow } from '../developmentContinuation'
 import {
   beginOptimisticSkillSend,
   rollbackSkillSelection,
@@ -310,9 +308,6 @@ type UseWorkflowConversationResult = {
     continuation: WorkflowRevisionContinuation,
     sessionIdentity: SessionIdentity
   ) => Promise<boolean>
-  handleContinueDevelopment: (
-    continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
-  ) => Promise<boolean>
   handleExecuteRecoveryAction: (
     recovery: ExecutionRecoveryCandidate
   ) => Promise<boolean>
@@ -350,7 +345,6 @@ type UseWorkflowConversationResult = {
     entityId: string
     entityLabel: string
     hasDetailPlan?: boolean
-    continuation?: WorkflowDevelopmentContinuation
   }) => Promise<boolean>
   handleSubmitClarification: (
     workflow: WorkflowRunPayload,
@@ -1042,30 +1036,6 @@ export function useWorkflowConversation({
     })
   }
 
-  /** 消费实体绑定签发的一次性 continuation，并在原 thread 恢复原开发 execution。 */
-  const handleContinueDevelopment = async (
-    continuation: import('../../../service/chatSessions').ChatSessionDevelopmentContinuation
-  ): Promise<boolean> => {
-    if (loading || workspaceBusy) return false
-    const identity = await ensureActiveSession()
-    let accepted = false
-    const completed = await sendWorkflowMessage(`继续开发${continuation.target.type === 'page' ? '页面' : '接口'}。`, {
-      workflowAction: 'continue_after_entity_binding',
-      developmentContinuation: {
-        id: continuation.id,
-        token: continuation.token
-      },
-      executionThreadId: continuation.sourceThreadId,
-      sessionIdentity: identity,
-      titleFrom: `继续开发：${continuation.target.label}`,
-      onExecutionStarted: () => { accepted = true },
-      conversation: false
-    })
-    // 新 execution 已登记即代表 token 已消费；后续扫描/构建失败走该运行的重试，
-    // 不能把已消费的续接卡错误恢复成可点击状态。
-    return accepted || completed
-  }
-
   /** 重新读取当前 Execution Recovery Incident，避免 stale action 继续占据控制面。 */
   const refreshExecutionRecoveryLifecycle = async (fresh = false): Promise<boolean> => {
     const requestGeneration = ++connectionRequestGenerationRef.current
@@ -1256,7 +1226,6 @@ export function useWorkflowConversation({
       titleFrom?: string
       workflowDebug?: WorkflowDebugOptions
       workflowAction?: WorkflowAction
-      developmentContinuation?: { id: string; token?: string }
       executionThreadId?: string
       onExecutionStarted?: () => void
       buildExecutionScope?: WorkflowBuildExecutionScope
@@ -1652,7 +1621,6 @@ export function useWorkflowConversation({
         conversationConfigDecision: options?.conversationConfigDecision,
         revisionRequest: options?.revisionRequest,
         revisionContinuation: options?.revisionContinuation,
-        developmentContinuation: options?.developmentContinuation,
         revisionInteraction: options?.revisionInteraction,
         workflowScope: options?.workflowScope,
         executionRecovery: options?.executionRecovery,
@@ -1704,19 +1672,6 @@ export function useWorkflowConversation({
         rawToolCalls.length > 0 ? rawToolCalls : streamedToolCalls,
         streamedProcessSteps
       )
-      // 在运行完成边界生成并持久化续接卡，避免依赖当前选中实体或组件 effect，
-      // 即使用户切换了大纲/历史会话，原对话的确认结果仍然完整。
-      const continuation = !stopped && developmentContinuationFromWorkflow(finalWorkflow)
-      if (continuation) {
-        completedMessages.push({
-          id: assistantMessageId + 1,
-          role: 'assistant',
-          content: '',
-          developmentContinuation: continuation,
-          createdAt: Date.now()
-        })
-        setSessionMessages(identity.key, completedMessages)
-      }
       if (finalWorkflow) {
         setLiveWorkflows((current) => ({
           ...current,
@@ -1836,7 +1791,7 @@ export function useWorkflowConversation({
       if (options?.clearDraft && !failedWorkflow && !runError && !executionStartedNotified &&
         !options.workflowAction && !options.planControlAction && !options.executionRecovery &&
         !options.clarificationAnswers && !options.applicationPlanningInteraction && !options.revisionInteraction &&
-        !options.revisionContinuation && !options.developmentContinuation && !options.conversationHandoffDecision &&
+        !options.revisionContinuation && !options.conversationHandoffDecision &&
         !options.conversationImpactInteractionId &&
         !options.resumeReference && !options.workflowDebug?.enabled && !streamedContent &&
         streamedToolCalls.length === 0 && streamedProcessSteps.length === 0) {
@@ -2618,12 +2573,11 @@ export function useWorkflowConversation({
     })
   }
 
-  /** 在当前通用历史会话中以独立 execution 启动实体绑定，并保留后端续接合同。 */
+  /** 在当前通用历史会话中以独立 execution 启动实体数据源绑定。 */
   const handleStartEntityDetailConfirmation = async (target: {
     entityId: string
     entityLabel: string
     hasDetailPlan?: boolean
-    continuation?: WorkflowDevelopmentContinuation
   }): Promise<boolean> => {
     if (!target.entityId || loading || workspaceBusy) return false
     const identity = await ensureActiveSession()
@@ -2636,10 +2590,6 @@ export function useWorkflowConversation({
         selectedApiContractId: '',
         selectedEndpointId: '',
         detailTargetType: 'entity',
-        workflowAction: target.continuation ? 'start_entity_binding' : undefined,
-        developmentContinuation: target.continuation
-          ? { id: target.continuation.id }
-          : undefined,
         executionThreadId: randomUUID(),
         buildExecutionScope: { type: 'data_source', targetId: target.entityId },
         sessionIdentity: identity,
@@ -2811,7 +2761,6 @@ export function useWorkflowConversation({
     error,
     handleAcceptPreview,
     handleContinueRevisionBuild,
-    handleContinueDevelopment,
     handleExecuteRecoveryAction,
     handleRetryCodeReview,
     handleRetryBuildTask,

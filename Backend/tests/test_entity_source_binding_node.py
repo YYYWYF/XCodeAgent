@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from unittest.mock import patch
 
 from app.graph.nodes.planning import _entity_source_binding_implementation
+from app.protocols.workflow.lifecycle import begin_workflow_lifecycle, project_workflow_lifecycle_boundary
+from app.protocols.workflow.request import workflow_run_inputs
+from app.services.application_lifecycle import load_application_lifecycle, start_workbench_execution
 from app.services.project_plan import create_project_plan
 from app.services.requirement_spec import create_requirement_spec
+from tests.test_execution_resource_locks import _write_ready_lifecycle
 
 
 def _plan_with_entity() -> tuple[dict, str]:
@@ -17,6 +22,40 @@ def _plan_with_entity() -> tuple[dict, str]:
 
 
 class EntitySourceBindingNodeTests(unittest.TestCase):
+    def test_independent_entity_execution_finishes_without_touching_page_execution(self) -> None:
+        """实体可独立入场并完成，只释放自己的执行和锁，不接替另一页面任务。"""
+
+        with tempfile.TemporaryDirectory() as workspace:
+            _write_ready_lifecycle(workspace)
+            start_workbench_execution(
+                workspace, scope="page", target_id="orders-page", page_id="orders-page",
+                thread_id="page-thread", owner_session_id="page-session",
+                run_id="page-run", phase="build",
+            )
+            inputs = workflow_run_inputs({
+                "request": "开始实体数据源绑定",
+                "forwardedProps": {
+                    "workspaceRoot": workspace, "sessionId": "entity-session",
+                    "selectedEntityId": "Order", "detailTargetType": "entity",
+                    "buildExecutionScope": {"type": "data_source", "targetId": "Order"},
+                },
+            })
+            begin_workflow_lifecycle(
+                inputs, thread_id="entity-thread", run_id="entity-run", phase="entity_source_binding",
+            )
+            running = load_application_lifecycle(workspace)
+            self.assertEqual(running.active_executions["entity-run"].scope, "data_source")
+            self.assertEqual(running.resource_locks.data_sources["Order"].run_id, "entity-run")
+            result = project_workflow_lifecycle_boundary(
+                workspace, run_id="entity-run", node_name="entity_source_binding",
+                update={"status": "completed"},
+            )
+            finished = load_application_lifecycle(workspace)
+            self.assertEqual(set(finished.active_executions), {"page-run"})
+            self.assertEqual(finished.resource_locks.data_sources, {})
+            self.assertEqual(finished.resource_locks.pages["orders-page"].run_id, "page-run")
+            self.assertNotIn("developmentContinuations", result)
+
     def test_empty_submission_does_not_skip_ai_assist_action(self) -> None:
         """空确认状态不得截断 AI 选表动作，建议必须投射回实体设计卡片。"""
 

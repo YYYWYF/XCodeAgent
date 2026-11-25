@@ -618,9 +618,6 @@ def entity_source_binding(state: ProjectState) -> dict:
     result.setdefault("phase", "entity_source_binding")
     result["timeline"] = ["entity_source_binding"]
     result["entity_source_binding_submission"] = {}
-    # 每轮设计确认只从该实体 thread 的 checkpoint 取关联，不能依赖客户端
-    # 回传或本轮 initial_state；确认通常已经是独立的后续 AG-UI run。
-    result["development_continuation_id"] = str(state.get("development_continuation_id") or "")
     clarification = result.get("clarification")
     if isinstance(clarification, dict):
         clarification.setdefault("workflow_phase", result["phase"])

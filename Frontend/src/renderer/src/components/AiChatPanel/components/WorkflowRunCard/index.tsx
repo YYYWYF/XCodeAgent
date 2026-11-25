@@ -62,7 +62,6 @@ import { sortBuildTasksForDisplay } from './buildExecutionPresentation'
 import DetailReview from './DetailReview'
 import ApiDesignReadinessGateCard from './ApiDesignReadinessGateCard'
 import type { ApiDesignConfigTarget } from './ApiDesignConfigModal'
-import EntityDesignGateCard from './EntityDesignGateCard'
 import ProjectLaunchCard from './ProjectLaunchCard'
 import PlanningStageEntryCard from './PlanningStageEntryCard'
 import TestPhaseConfirmationCard from './TestPhaseConfirmationCard'
@@ -137,7 +136,6 @@ type WorkflowRunCardProps = {
   historicalClarificationAnswers?: Record<string, string>
   /** 当前技术规划会话繁忙时禁用已确认卡上的修改入口。 */
   reviseConfirmedTechnicalPlanDisabled?: boolean
-  onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
   /** 已确认的技术规划通过当前规划会话发起正式修订。 */
   onReviseConfirmedTechnicalPlan?: (request: string) => void | Promise<void>
@@ -179,7 +177,6 @@ export default function WorkflowRunCard({
   historicalClarificationAnswers,
   interactionAvailability,
   workflowCardResult,
-  onEntityDesignGateJump,
   onOpenApiDesignConfig,
   onReviseConfirmedTechnicalPlan,
   reviseConfirmedTechnicalPlanDisabled,
@@ -223,17 +220,8 @@ export default function WorkflowRunCard({
   const clarificationQuestions = staleFrontendPerformanceConfirmation
     ? []
     : clarification?.questions || []
-  const entityDesignGate = clarification?.mode === 'entity_source_binding_required'
   const apiDesignRequired = clarification?.mode === 'api_design_required'
   const apiDesignReadinessGate = apiDesignRequired
-  const gateQuestion = clarification?.questions?.[0]
-  const entityGateEntities = (clarification?.missing_entities || []).filter((item) =>
-    Boolean(
-      item &&
-        typeof item === 'object' &&
-        String((item as { entity_id?: string }).entity_id || '').trim()
-    )
-  )
   const detailReview =
     clarification?.mode === 'entity_source_binding' ? clarification.review : undefined
   // 实体设计评审：确认对象包含实体目标或实体设计摘要时，视为实体设计场景，
@@ -542,7 +530,7 @@ export default function WorkflowRunCard({
         reviewPhaseConfirmation ||
         acceptancePhaseConfirmation) && (
         <div className={cx('workflow-clarification', apiDesignReadinessGate && 'workflow-clarification-api-design-readiness')}>
-          {!artifactConfirmation && !reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !entityDesignGate && !planningStageEntry && (
+          {!artifactConfirmation && !reviewStage && !apiDesignReadinessGate && !revisionImpact && !entityDesignReview && !planningStageEntry && (
             <div className={cx('workflow-clarification-header')}>
               <div>
                 <Text strong>{staleConfirmation ? '原确认内容' : '待确认事项'}</Text>
@@ -722,13 +710,6 @@ export default function WorkflowRunCard({
                 })
               }
               statements={databaseApproval.statements}
-            />
-          ) : entityDesignGate ? (
-            <EntityDesignGateCard
-              disabled={disabled}
-              entities={entityGateEntities}
-              explanation={clarification?.message || String(gateQuestion?.question || '')}
-              onJump={(entityId) => onEntityDesignGateJump?.(entityId, workflow)}
             />
           ) : artifactConfirmation && (requiresConfirmation || clarification?.mode === 'technical_plan_confirmation') ? (
             clarification?.mode === 'requirement_document_confirmation' ? (

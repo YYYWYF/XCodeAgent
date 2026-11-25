@@ -402,7 +402,6 @@ def _workflow_progress_summary(
         "revisionImpact": result.get("revision_impact"),
         "revisionDraft": result.get("revision_draft"),
         "revisionContinuation": result.get("revision_continuation"),
-        "developmentContinuation": result.get("development_continuation"),
         "codeChangesSummary": code_changes.get("summary") if code_changes else None,
         "artifacts": _workflow_artifacts(result),
         "clarification": result.get("clarification", {}),
@@ -660,7 +659,6 @@ def _public_workflow_state(
             "technical_plan_repair_errors",
             "technical_plan_repair_source_run_id",
             "technical_plan_generation_input_sha256",
-            "development_continuation_id",
         }
         and not (key.endswith("_path") and str(item).lower().endswith(".json"))
     }
@@ -712,9 +710,6 @@ def _public_workflow_state(
         public_state["workspaceInspection"] = inspection
     if "requirements_confirmed" in value:
         public_state["requirementsConfirmed"] = value.get("requirements_confirmed") is True
-    if "development_continuation" in value:
-        public_state.pop("development_continuation", None)
-        public_state["developmentContinuation"] = value["development_continuation"]
     if "template_preparation" in value:
         public_state.pop("template_preparation", None)
         public_state["templatePreparation"] = value["template_preparation"]
@@ -1559,7 +1554,6 @@ def _workflow_summary(
         "revisionImpact": result.get("revision_impact"),
         "revisionDraft": result.get("revision_draft"),
         "revisionContinuation": result.get("revision_continuation"),
-        "developmentContinuation": result.get("development_continuation"),
         "apiDesignReadiness": result.get("api_design_readiness"),
         **({"buildSummary": build_summary} if build_summary else {}),
         "buildTaskPlan": result.get("build_task_plan", {}),
@@ -1635,7 +1629,6 @@ def _workflow_user_input_message(
         "ui_design_confirmation": "UI设计稿已生成，请逐页确认后继续。",
         "batch_review": "页面与数据源设计已生成，请确认后继续。",
         "entity_source_binding": "实体数据源绑定已生成，请确认后继续。",
-        "entity_source_binding_required": "请先完成当前目标依赖实体的数据源绑定。",
         "api_design_required": "请查看当前目标依赖的字段映射并确认检测后继续。",
         "small_task_scope_confirmation": "小任务需要确认新增代码范围后继续。",
         "unit_test_confirmation": "构建检查已完成，单元测试不是必须步骤，可以选择跳过。跳过单元测试不会对代码质量产生较大影响。",
@@ -1765,7 +1758,6 @@ def _workflow_visual_payload(
         "buildTaskPlanPersisted": result.get("build_task_plan_persisted"),
         "selectedSkillNames": result.get("selected_skill_names", []),
         "revisionContinuation": result.get("revision_continuation"),
-        "developmentContinuation": result.get("development_continuation"),
         "lifecycle": result.get("lifecycle"),
         "ui_designs": result.get("ui_designs"),
         # 跨迭代增量合并产物：带 _change_status 标记的"展示版"RequirementSpec，

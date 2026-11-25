@@ -28,7 +28,6 @@ import type {
   WorkflowDebugOptions,
   WorkflowBuildTaskPlanConfirmation,
   WorkflowClarificationAnswers,
-  WorkflowDevelopmentContinuation,
   WorkflowDesignStageRevisionStart,
   WorkflowWorkbenchPlanRevisionStart,
   WorkflowRevisionContinuation,
@@ -40,7 +39,6 @@ import { composePreviewUrl, cx, openPreviewWindow, previewOrigin } from '../../u
 import { OPEN_SETTINGS_EVENT } from '../../utils/openSettingsEvent'
 import { readWorkspaceFile } from '../../service/workspaceTools'
 import type {
-  ChatSessionDevelopmentContinuation,
   ChatSessionDevelopmentTarget
 } from '../../service/chatSessions'
 import { type ApplicationPlanningCurrentState } from '../../service/activeApplicationPlanning'
@@ -193,7 +191,6 @@ import {
 import { chatCopy } from './constants'
 import type { AgentChatMessage, RightPanelLayout, WorkspaceDocKey } from './types'
 import type { EndpointDesignSaveResult } from '../../typings'
-import { workflowDevelopmentContinuation } from './developmentContinuation'
 import {
   bindDagConfirmationDraftIdentity,
   currentDagConfirmationDraftIdentity,
@@ -2587,7 +2584,6 @@ export default function AiChatPanel({
     workbenchRefreshConnection,
     error,
     handleAcceptPreview,
-    handleContinueDevelopment: continueDevelopmentExecution,
     handleExecuteRecoveryAction,
     handleRetryCodeReview,
     endingPlan,
@@ -4417,9 +4413,7 @@ export default function AiChatPanel({
     entityRunWasLiveRef.current = true
   }, [activeSessionId, activeDetailTarget, entitySessionActive, loading])
 
-  // 实体设计确认后，恢复原开发目标的展示；续接卡由运行完成边界负责持久化。
-  // 直接从大纲进入实体设计时仍回到实体信息页。设计过程中的每次动作都是一次
-  // requires_user_input 子 run，不能据此触发续接或清空当前会话。
+  // 独立实体绑定确认后回到实体信息页；等待用户的子 Run 不能清空当前会话。
   useEffect(() => {
     if (activeDetailTarget.type !== 'entity') return
     // 只对当前会话内刚结束的实时运行触发跳转，避免打开历史设计会话时误跳。
@@ -4437,39 +4431,12 @@ export default function AiChatPanel({
     if (!runId || handledEntityDesignRunRef.current.has(runId)) return
     handledEntityDesignRunRef.current.add(runId)
     entityRunWasLiveRef.current = false
-    const continuation = workflowDevelopmentContinuation(
-      workflow,
-      displayedPlanningPages,
-      developmentPlanningApiContracts
-    )
-    if (continuation && activeSession) {
-      if (continuation.target.type === 'page') {
-        setActiveDetailTarget({ type: 'page', pageId: continuation.target.pageId })
-        setInteractingDetailTargetKey(pageDetailTargetKey(continuation.target.pageId))
-      } else {
-        setActiveDetailTarget({
-          type: 'endpoint',
-          apiContractId: continuation.target.apiContractId,
-          endpointId: continuation.target.endpointId,
-          endpointKey: `${continuation.target.apiContractId}:${continuation.target.endpointId}`,
-          label: continuation.target.label
-        })
-        setInteractingDetailTargetKey(
-          endpointDetailTargetKey(continuation.target.apiContractId, continuation.target.endpointId)
-        )
-      }
-      setGeneratingDetailTargetKey('')
-    } else {
-      clearActiveSession()
-    }
+    clearActiveSession()
     onPlanningArtifactsRefresh()
   }, [
     activeDetailTarget,
-    activeSession,
     activeWorkflow,
     clearActiveSession,
-    developmentPlanningApiContracts,
-    displayedPlanningPages,
     loading,
     onPlanningArtifactsRefresh
   ])
@@ -4667,14 +4634,11 @@ export default function AiChatPanel({
     return started
   }
 
-  /** 从快捷任务或实体门禁启动实体数据源绑定，并刷新开发产物状态。 */
+  /** 从快捷任务启动独立实体数据源绑定，并刷新开发产物状态。 */
   const handleStartEntityDesign = async (
     entityId: string,
     entityLabel: string,
-    hasDetailPlan: boolean,
-    targetContext?: {
-      continuation?: WorkflowDevelopmentContinuation
-    }
+    hasDetailPlan: boolean
   ): Promise<void> => {
     if (pendingPlanActionable) return
     const targetKey = `entity:${entityId}`
@@ -4684,8 +4648,7 @@ export default function AiChatPanel({
     const started = await handleStartEntityDetailConfirmation({
       entityId,
       entityLabel,
-      hasDetailPlan,
-      continuation: targetContext?.continuation
+      hasDetailPlan
     })
     if (started) {
       onPlanningArtifactsRefresh()
@@ -4751,91 +4714,6 @@ export default function AiChatPanel({
     ? candidateNextDevelopmentStep : undefined
   const nextDevelopmentTasks = buildQuickTasks(displayedPlanningPages,
     developmentPlanningApiContracts, [], applicationLifecycle?.developmentArtifacts)
-
-  /** 消费实体完成续接卡，在同一历史会话中重新启动原页面或 Endpoint 正式任务。 */
-  const handleContinueDevelopment = async (
-    messageId: number,
-    continuation: ChatSessionDevelopmentContinuation
-  ): Promise<void> => {
-    if (!activeSession || continuation.status === 'started' || loading || workspaceBusy) return
-    /** 只更新指定续接消息的消费状态，并保留当前会话中随后追加的运行消息。 */
-    const updateContinuationStatus = (
-      status: ChatSessionDevelopmentContinuation['status']
-    ): AgentChatMessage[] =>
-      getSessionMessages(activeSession.key).map((item) =>
-        item.id === messageId && item.developmentContinuation
-          ? {
-            ...item,
-            developmentContinuation: { ...item.developmentContinuation, status }
-          }
-          : item
-      )
-    /** 同步续接卡状态到内存与当前会话文件。 */
-    const persistContinuationStatus = async (nextMessages: AgentChatMessage[]): Promise<void> => {
-      setSessionMessages(activeSession.key, nextMessages)
-      await persistSession({
-        editorMode: activeSession.editorMode,
-        messages: nextMessages,
-        sessionId: activeSession.sessionId,
-        threadId: activeSession.threadId
-      })
-    }
-
-    const startedMessages = updateContinuationStatus('started')
-    try {
-      await persistContinuationStatus(startedMessages)
-      const started = await continueDevelopmentExecution(continuation)
-      const target = continuation.target
-      if (started) {
-        if (target.type === 'page') {
-          setActiveDetailTarget({ type: 'page', pageId: target.pageId })
-          setInteractingDetailTargetKey(pageDetailTargetKey(target.pageId))
-        } else {
-          setActiveDetailTarget({
-            type: 'endpoint',
-            apiContractId: target.apiContractId,
-            endpointId: target.endpointId,
-            endpointKey: `${target.apiContractId}:${target.endpointId}`,
-            label: target.label
-          })
-          setInteractingDetailTargetKey(
-            endpointDetailTargetKey(target.apiContractId, target.endpointId)
-          )
-        }
-      }
-      if (!started) await persistContinuationStatus(updateContinuationStatus('ready'))
-    } catch (error) {
-      await persistContinuationStatus(updateContinuationStatus('ready')).catch(() => undefined)
-      message.error(formatError(error, '继续开发失败'))
-    }
-  }
-
-  /** 从实体设计门禁卡片一键跳转到对应实体的设计流程。 */
-  const handleEntityDesignGateJump = async (
-    entityId: string,
-    workflow: WorkflowRunPayload
-  ): Promise<void> => {
-    const entity = developmentPlanningEntities.find((item) => item.id === entityId)
-    const continuation = workflowDevelopmentContinuation(
-      workflow,
-      displayedPlanningPages,
-      developmentPlanningApiContracts
-    )
-    if (
-      !continuation ||
-      continuation.status !== 'awaiting_entity_binding' ||
-      continuation.action !== 'start_entity_binding'
-    ) {
-      message.error('当前实体门禁缺少有效的开发续接合同，请重新发起页面或接口开发。')
-      return
-    }
-    await handleStartEntityDesign(
-      entityId,
-      entity?.label || entityId,
-      Boolean(entity?.hasDetailPlan),
-      { continuation }
-    )
-  }
 
   /** 从对话管理恢复原有会话，保留工作流与目标的既有归属。 */
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
@@ -5660,8 +5538,6 @@ export default function AiChatPanel({
                 }
                 messages={displayedMessages}
                 apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
-                onContinueDevelopment={handleContinueDevelopment}
-                onEntityDesignGateJump={handleEntityDesignGateJump}
                 onOpenApiDesignConfig={handleOpenApiDesignConfig}
                 onOpenCodeChangeFile={handleOpenCodeChangeFile}
                 onOpenRevisionSession={handleOpenRevisionSession}

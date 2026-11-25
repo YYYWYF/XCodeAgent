@@ -2182,12 +2182,6 @@ def build_workflow_ag_ui_stream(
                                 message="应用二次修改已通过最终验收。",
                                 data={"changeId": completion.get("changeId")},
                             )
-                        development_continuation = lifecycle_update.get(
-                            "development_continuation"
-                        )
-                        if isinstance(development_continuation, dict):
-                            update["development_continuation"] = development_continuation
-                            boundary_state["development_continuation"] = development_continuation
                         if lifecycle_payload is not None:
                             update["lifecycle"] = lifecycle_payload
                             # 先广播最新 revision，再继续发送节点投影。

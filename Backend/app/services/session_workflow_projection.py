@@ -48,14 +48,12 @@ async def project_session_workflow(workspace: str, *, session_id: str, thread_id
             values.pop("application_planning_interrupt", None)
         if status in {"cancelled", "stopped", "interrupted"}:
             values.pop("revision_continuation", None)
-            values.pop("development_continuation", None)
     if execution.status.value in {"cancelled", "stopped"}:
         values.update(status=execution.status.value, message="本轮任务已结束，已有文件已保留。")
-        for field in ("clarification", "application_planning_interrupt", "revision_continuation", "development_continuation"):
+        for field in ("clarification", "application_planning_interrupt", "revision_continuation"):
             values.pop(field, None)
-    for field in ("revision_continuation", "development_continuation"):
-        continuation = values.get(field)
-        if not isinstance(continuation, dict) or len(str(continuation.get("token") or "")) < 32:
-            values.pop(field, None)
+    continuation = values.get("revision_continuation")
+    if not isinstance(continuation, dict) or len(str(continuation.get("token") or "")) < 32:
+        values.pop("revision_continuation", None)
     return _workflow_visual_payload(run_id=execution.run_id, thread_id=thread_id,
         summary=_workflow_summary(values, []), events=[], result=values, workspace=workspace)

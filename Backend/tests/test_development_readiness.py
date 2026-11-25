@@ -4,8 +4,6 @@ import unittest
 from unittest.mock import patch
 
 from app.graph.nodes.development_readiness import development_readiness_gate
-from app.services.development_readiness import development_readiness
-from tests.entity_design_test_utils import confirm_entity_designs
 
 
 def _technical_plan() -> dict:
@@ -40,27 +38,6 @@ def _technical_plan() -> dict:
 
 
 class DevelopmentReadinessTests(unittest.TestCase):
-    def test_page_reports_missing_entity_source_binding(self) -> None:
-        readiness = development_readiness(
-            _technical_plan(),
-            target_type="page",
-            target_id="orders_page",
-        )
-
-        self.assertFalse(readiness["ready"])
-        self.assertEqual(readiness["missing_entities"], [{"entity_id": "Order", "entity_name": "订单"}])
-
-    def test_endpoint_is_ready_after_entity_source_binding(self) -> None:
-        plan = confirm_entity_designs(_technical_plan(), source_type="database")
-        readiness = development_readiness(
-            plan,
-            target_type="endpoint",
-            target_id="orders.list",
-            api_contract_id="orders-api",
-        )
-
-        self.assertTrue(readiness["ready"])
-
     def test_gate_uses_endpoint_mapping_without_entity_binding(self) -> None:
         """显式旧入口只走 API 映射门禁，不再要求实体绑定。"""
 

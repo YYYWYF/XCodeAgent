@@ -183,18 +183,10 @@ def workflow_capabilities() -> dict[str, Any]:
                 ),
                 "continue_revision_build": (
                     "消费任一 formal revision 的 TechnicalPlan 确认后签发的一次性 token，"
-                    "application 目标直接进入工作区扫描，page/endpoint 目标先经过实体绑定门禁；"
+                    "application 目标直接进入工作区扫描，page/endpoint 目标先经过 API 字段映射门禁；"
                     "target、入口和构建范围均由 lifecycle 决定；token 绑定 application/change/thread/"
                     "TechnicalPlan hash/lifecycle revision/target；独立 application_planning 分支直接创建开发 execution，"
                     "主 Workflow 分支如携带有效来源 execution 则执行原子替换。"
-                ),
-                "start_entity_binding": (
-                    "引用开发门禁登记的 continuation，在独立 thread 启动缺失实体的 "
-                    "EntitySourceBinding execution。"
-                ),
-                "continue_after_entity_binding": (
-                    "消费实体确认后由后端签发的一次性 token，校验原 execution、目标与 "
-                    "TechnicalPlan 哈希后恢复原开发 thread，并重新执行开发前置检查。"
                 ),
             },
             "clientNodeSelectionAllowed": False,

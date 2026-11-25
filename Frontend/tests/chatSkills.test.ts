@@ -3639,56 +3639,6 @@ test('会话恢复保留有效的二次修改交接回执并拒绝残缺回执',
   })
 })
 
-test('会话恢复保留消息级开发续接目标且不接受残缺目标', () => {
-  const normalized = normalizePersistentSessionMessage({
-    id: 5,
-    role: 'assistant',
-    content: '',
-    createdAt: 5,
-    developmentContinuation: {
-      id: 'devcont-movies',
-      status: 'ready',
-      sourceThreadId: 'thread-movies',
-      sourceRunId: 'run-movies',
-      token: 't'.repeat(48),
-      technicalPlanSha256: 'a'.repeat(64),
-      target: {
-        type: 'endpoint',
-        apiContractId: 'movies-api',
-        endpointId: 'list-movies',
-        label: 'GET /movies',
-        unsafe: 'ignored'
-      }
-    }
-  })
-  const malformed = normalizePersistentSessionMessage({
-    id: 6,
-    role: 'assistant',
-    content: '',
-    createdAt: 6,
-    developmentContinuation: {
-      status: 'ready',
-      target: { type: 'page', label: '首页' }
-    }
-  })
-
-  assert.deepEqual(normalized.developmentContinuation, {
-    id: 'devcont-movies',
-    status: 'ready',
-    sourceThreadId: 'thread-movies',
-    sourceRunId: 'run-movies',
-    token: 't'.repeat(48),
-    technicalPlanSha256: 'a'.repeat(64),
-    target: {
-      type: 'endpoint',
-      apiContractId: 'movies-api',
-      endpointId: 'list-movies',
-      label: 'GET /movies'
-    }
-  })
-  assert.equal('developmentContinuation' in malformed, false)
-})
-
 test('二次修改会话身份必须完整绑定来源、原规划线程和可选 changeId', () => {
   assert.deepEqual(
     normalizeRevisionSessionContext({

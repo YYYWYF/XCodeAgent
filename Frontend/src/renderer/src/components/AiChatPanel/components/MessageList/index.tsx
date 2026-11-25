@@ -50,9 +50,7 @@ import type { ApiDesignConfigTarget } from '../WorkflowRunCard/ApiDesignConfigMo
 import { workflowClarification } from '../WorkflowRunCard/workflowClarification'
 import { isTechnicalPlanGenerationFailure } from '../../globalFallbackState'
 import EntityDesignChatCard from '../WorkflowRunCard/EntityDesignChatCard'
-import DevelopmentContinuationCard from '../WorkflowRunCard/DevelopmentContinuationCard'
 import { canEnterModifiedTesting, performanceTestRestartTarget } from '../../modifiedTestEntry'
-import RemainingEntityBindingsCard from '../WorkflowRunCard/RemainingEntityBindingsCard'
 import TemplatePreparingCard, {
   isTemplatePreparing
 } from '../WorkflowRunCard/TemplatePreparingCard'
@@ -65,9 +63,7 @@ import {
 } from '../../../../service/processStepHistory'
 import type { AgentChatMessage } from '../../types'
 import type { DagPendingPlanCompletion } from '../../dagPendingPlanPresentation'
-import type { ChatSessionDevelopmentContinuation } from '../../../../service/chatSessions'
 import { conversationRevisionHandoffCommitted, isConversationWorkflow } from '../../conversationMode'
-import { workflowDevelopmentContinuation } from '../../developmentContinuation'
 import {
   isEntityDesignWorkflow,
   shouldShowIncompleteChangesHint,
@@ -350,13 +346,7 @@ type MessageListProps = {
   planningState?: ApplicationPlanningCurrentState
   loading: boolean
   messages: AgentChatMessage[]
-  onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
-  /** 在当前会话中恢复实体门禁前的页面或 Endpoint 正式任务。 */
-  onContinueDevelopment?: (
-    messageId: number,
-    continuation: ChatSessionDevelopmentContinuation
-  ) => void
   /** 从来源会话回执打开对应的独立需求设计会话。 */
   onOpenRevisionSession?: (handoff: NonNullable<AgentChatMessage['revisionHandoff']>) => void
   onRevertCodeChanges: (messageId: number, codeChanges: WorkspaceCodeChangeSet) => void
@@ -418,9 +408,7 @@ export default function MessageList({
   planningState,
   loading,
   messages,
-  onEntityDesignGateJump,
   onOpenApiDesignConfig,
-  onContinueDevelopment,
   onOpenRevisionSession,
   onOpenCodeChangeFile,
   onRevertCodeChanges,
@@ -973,7 +961,6 @@ export default function MessageList({
               // 正文、状态和卡片都没有可见内容时，整条 assistant 消息连同 Agent 头一起隐藏。
               const hasVisibleAssistantBody = Boolean(
                 message.revisionHandoff ||
-                  message.developmentContinuation ||
                   showPlanningLoading ||
                   (planningActivityVisible && planningCardWorkflow) ||
                   technicalOutputRecordVisible ||
@@ -987,10 +974,6 @@ export default function MessageList({
                   (!messageLoading && visibleCodeChanges) ||
                   displayAssistantContent.trim() ||
                   (message.workflow && (entityDesignCardVisible || showWorkflowCard)) ||
-                  (message.workflow?.summary.phase === 'entity_source_binding' &&
-                    message.workflow.summary.status === 'completed' &&
-                    workflowDevelopmentContinuation(message.workflow)?.status ===
-                      'awaiting_entity_binding') ||
                   (entityDesignSession && messageLoading && !requiresClarification)
               )
               if (message.role === 'assistant' && !hasVisibleAssistantBody) return null
@@ -1017,15 +1000,6 @@ export default function MessageList({
                           <RevisionHandoffCard
                             handoff={message.revisionHandoff}
                             onOpen={onOpenRevisionSession}
-                          />
-                        ) : null}
-                        {message.developmentContinuation ? (
-                          <DevelopmentContinuationCard
-                            continuation={message.developmentContinuation}
-                            disabled={mutationDisabled}
-                            onContinue={() =>
-                              onContinueDevelopment?.(message.id, message.developmentContinuation!)
-                            }
                           />
                         ) : null}
                         {/* 通用失败只由底部控制面展示，历史消息也不渲染错误卡。 */}
@@ -1166,7 +1140,6 @@ export default function MessageList({
                               interactionAvailability={interactionAvailability}
                               workflowCardResult={message.workflowCardResult}
                               apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
-                              onEntityDesignGateJump={onEntityDesignGateJump}
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
                               onSubmitClarification={onSubmitClarification}
                               performanceTestRestart={
@@ -1202,14 +1175,6 @@ export default function MessageList({
                               workspaceRoot={workspaceRoot}
                             />
                           ) : null)}
-                        {message.workflow ? (
-                          <RemainingEntityBindingsCard
-                            disabled={mutationDisabled || messageIndex !== messages.length - 1}
-                            lifecycle={applicationLifecycle}
-                            onJump={onEntityDesignGateJump}
-                            workflow={message.workflow}
-                          />
-                        ) : null}
                         {entityDesignSession && messageLoading && !requiresClarification && (
                           <EntityDesignChatCard loading />
                         )}
