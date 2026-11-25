@@ -68,7 +68,7 @@ class _DdlResult(BaseModel):
     error: str | None = Field(min_length=1, max_length=300)
 
 
-@observe_model_operation("generate_entity_ddl", business_stage="technical_plan")
+@observe_model_operation("generate_entity_ddl", business_stage="entity_ddl")
 def generate_entity_ddl(entity: dict, *, previous_sql: str | None = None, feedback: str = "") -> str:
     """使用现有模型配置生成 SQL，并将失败转换为可重试的预览提示。"""
 

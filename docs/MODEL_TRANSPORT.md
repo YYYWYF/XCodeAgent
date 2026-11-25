@@ -44,6 +44,8 @@ MODEL_TRANSMIT_TRUST_ENV=false
 | `metadata.extensions.context` | 业务阶段 `business_stage`、操作 `business_operation`、节点 `node_name` 和目标 `target`；只传已有业务事实 |
 | `metadata.extensions.workflow_scope/operation_id/conversation_id` | 调用上下文显式提供时传递 |
 
+实体建表 SQL 的草稿生成和修订使用 `business_stage=entity_ddl` 和 `business_operation=generate_entity_ddl`。
+
 首次实际模型调用懒加载 `/model-info/run`。服务认证使用 `Authorization: Bearer <MODEL_TRANSMIT_TOKEN>`，不向服务传递本地上游模型密钥。同步、异步、流式和工具调用均由同一适配器生成上述请求；直连 SDK 不接收这些转发专用字段。
 
 ## 错误合同
