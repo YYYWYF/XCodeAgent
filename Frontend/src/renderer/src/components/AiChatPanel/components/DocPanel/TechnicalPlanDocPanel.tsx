@@ -2,14 +2,13 @@ import { useState } from 'react'
 import type { ReactElement } from 'react'
 import { cx } from '../../../../utils'
 import {
-  ArchitectureSection,
   ContractSection,
   EntitiesSection,
   PageBindingsSection,
   type SectionKey
 } from './TechnicalPlanDocSections'
 import { AuthorizationSection } from './TechnicalPlanAuthorizationSection'
-import { asRecord, recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
+import { recordItems, textValue, type JsonRecord } from './TechnicalPlanDocPanelData'
 import type { ChangeGroup } from './technicalPlanDiff'
 import './TechnicalPlanDocPanel.less'
 import './TechnicalPlanContractResponsive.less'
@@ -26,7 +25,6 @@ type Props = {
 }
 
 const technicalPlanSections: Array<{ key: SectionKey; label: string }> = [
-  { key: 'architecture', label: '架构' },
   { key: 'entities', label: '实体' },
   { key: 'api-contracts', label: 'API 契约' },
   { key: 'page-bindings', label: '页面绑定' }
@@ -41,7 +39,6 @@ export default function TechnicalPlanDocPanel({
   updating,
   onReviseAuthorization
 }: Props): ReactElement {
-  const architecture = asRecord(plan.architecture)
   const entities = recordItems(plan.entities)
   const contracts = recordItems(plan.api_contracts)
   const endpointCount = contracts.reduce(
@@ -116,9 +113,6 @@ export default function TechnicalPlanDocPanel({
           )
         })}
       </div>
-      {resolvedActiveSection === 'architecture' ? (
-        <ArchitectureSection architecture={architecture} sectionKey="architecture" changeKinds={changeKinds} hasBaseline={hasBaseline} />
-      ) : null}
       {resolvedActiveSection === 'entities' ? (
         <EntitiesSection entities={entities} sectionKey="entities" changeKinds={changeKinds} hasBaseline={hasBaseline} />
       ) : null}
