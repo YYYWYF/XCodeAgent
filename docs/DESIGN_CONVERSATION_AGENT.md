@@ -53,7 +53,7 @@ suggested_phase:
 
 RequirementSpec 未确认时，任何正式产品修改最早回到 requirements；ProductPlan 未确认时，UI 修改最早回到 product_planning。未知组合、旧 Graph target、技术节点或异常输出没有目标节点，默认零写入。
 
-Product Coordinator 根据用户真正要求改变的内容判断 out_of_scope；明确要求技术方案、代码实现或测试执行时整体越界，不得只执行其中的产品部分。
+Product Coordinator 根据用户真正要求改变的内容判断 out_of_scope；明确要求直接修改源码、确定技术实现细节或执行测试时整体越界，不得只执行其中的产品部分。新增页面、页面清单、业务信息或可见结果等产品能力描述，即使同时出现“开发”“前端”“接口”等实现措辞，也必须先识别为最早受影响产品产物的修改；技术名词本身不构成越界。
 
 Policy 不读取原始文本，也不维护 API、数据库、代码或测试关键词。它只允许 `requirement_change + requirement`、`requirement_change + product_behavior`、`ui_change + ui` 三种结构化组合获得正式节点权限，其余组合一律零权限。
 

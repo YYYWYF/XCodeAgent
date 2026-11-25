@@ -135,6 +135,9 @@ def _fallback_semantics(
     )
     if any(signal in text for signal in question_signals) or text.endswith(("?", "？")):
         return "read_only", "none", "none"
+    # 明确创建页面属于需求范围，不能因同时提到开发、前端或接口而误归为局部 UI 调整。
+    if re.search(r"(?:新增|增加|添加|新建|创建|开发).{0,12}页面", text):
+        return "requirement_change", "requirement", "none"
     if any(signal in text for signal in ui_signals):
         return "ui_change", "ui", "none"
     if any(signal in text for signal in requirement_signals) or any(

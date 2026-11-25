@@ -23,6 +23,7 @@ import { shouldSettleAdjust } from '../../service/uiDesignAdjustSettlement'
 import { planningWorkflowPhase } from '../../service/applicationPlanningWorkflowState'
 import { parseDesignMentions } from '../../service/designMention'
 import { uiDesignGenerationProgress } from '../../service/uiDesignGenerationProgress'
+import { isNonMutatingProductConversation } from '../AiChatPanel/components/MessageList/productConversationPresentation'
 import {
   designOriginKind,
   designOriginLabel,
@@ -210,18 +211,23 @@ export default function UiDesignConfirmationPanel({
   // 用户输入指令 → 卡片短暂显示「正在分析需要调整的页面…」→ 直接进入产品意图
   // 识别流程，与在下方产品输入框输入同一段指令的体验完全一致。
   const transferFiredRef = useRef<string>('')
+  const nonMutatingProductReply = isNonMutatingProductConversation(workflow)
+  const awaitingUserInput = workflow.summary.status === 'requires_user_input'
   useEffect(() => {
     if (!structuralChangeInstruction) {
       transferFiredRef.current = ''
       return
     }
-    if (!onTransferToProductAgent) return
+    if (!onTransferToProductAgent || !awaitingUserInput) return
+    // 非修改产品回复会恢复同一个 structural_change 审阅门。卡片跨 run 重建后，
+    // 本地 ref 无法记住旧指令已转交，必须依据 preserve 结果停止自动重放。
+    if (nonMutatingProductReply) return
     // 同一段指令只触发一次：clarification 在 polling 期间会被多次重放，
     // 没这层去重会把同一请求发给后端 N 次。
     if (transferFiredRef.current === structuralChangeInstruction) return
     transferFiredRef.current = structuralChangeInstruction
     void onTransferToProductAgent(structuralChangeInstruction)
-  }, [structuralChangeInstruction, onTransferToProductAgent])
+  }, [structuralChangeInstruction, onTransferToProductAgent, nonMutatingProductReply, awaitingUserInput])
   const [feedback, setFeedback] = useState('')
   const [internalActivePageId, setInternalActivePageId] = useState<string>('')
   // 受控模式（外部传入 activePageId）优先，否则用内部状态。

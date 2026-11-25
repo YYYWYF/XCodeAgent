@@ -104,6 +104,10 @@ class ProductConversationPolicyTests(unittest.TestCase):
 
         cases = {
             "增加供应商管理模块": ("requirement_change", "requirement"),
+            "开发一个前端页面，页面上一个接口返回字符串“早上好！”，前端展示这个字符串": (
+                "requirement_change",
+                "requirement",
+            ),
             "订单支持批量归档": ("requirement_change", "product_behavior"),
             "首页改成左侧导航": ("ui_change", "ui"),
         }
@@ -111,6 +115,33 @@ class ProductConversationPolicyTests(unittest.TestCase):
             with self.subTest(request=request):
                 decision = self._fallback(request)
                 self.assertEqual((decision.intent, decision.change_level), expected)
+
+    def test_new_page_feature_prompt_precedes_implementation_wording(self) -> None:
+        """正常模型路由必须明确把新增页面的实现措辞识别为产品需求。"""
+        request = "开发一个前端页面，页面上一个接口返回字符串“早上好！”，前端展示这个字符串"
+        with patch("app.agents.design_conversation.router.create_chat_model") as model:
+            model.return_value.invoke.return_value.content = json.dumps({
+                "intent": "requirement_change",
+                "change_level": "requirement",
+                "reason": "新增页面及页面可见结果",
+                "affected_page_ids": [],
+                "response": "",
+                "suggested_phase": "none",
+                "clarification_question": "",
+            })
+            decision = classify_design_conversation(
+                request,
+                requirement_spec={"confirmation_status": "confirmed"},
+                product_plan={"confirmation_status": "confirmed"},
+                ui_designs={"confirmation_status": "pending_user_confirmation"},
+                settings=SimpleNamespace(),
+            )
+
+        prompt = model.return_value.invoke.call_args.args[0]
+        self.assertIn("Technical nouns do not make a product feature request out_of_scope", prompt)
+        self.assertIn(request, prompt)
+        self.assertEqual((decision.intent, decision.change_level), ("requirement_change", "requirement"))
+        self.assertEqual(decision.suggested_phase, "none")
 
     def test_read_only_questions_never_resolve_to_mutation_target(self) -> None:
         """产品事实问答只能回复，不能进入任何正式产物节点。"""

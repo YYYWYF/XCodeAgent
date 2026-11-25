@@ -20,7 +20,19 @@ function ReviewHost(props: ComponentProps<typeof UiDesignConfirmationPanel>) {
 async function withPanel(run: (context: {
   root: () => ReactTestRenderer
   submissions: WorkflowClarificationAnswers[]
-  render: (pages: Page[], status?: string, disabled?: boolean, includePages?: boolean, phase?: string) => Promise<void>
+  transfers: string[]
+  render: (
+    pages: Page[],
+    status?: string,
+    disabled?: boolean,
+    includePages?: boolean,
+    phase?: string,
+    options?: {
+      runId?: string
+      structuralInstruction?: string
+      preserveProductReply?: boolean
+    }
+  ) => Promise<void>
 }) => Promise<void>): Promise<void> {
   const restore = installRendererDom()
   // React Test Renderer 没有真实布局节点，尺寸观察器沿无 Element 宿主分支跳过测量。
@@ -36,18 +48,38 @@ async function withPanel(run: (context: {
   // 不访问真实工作区；声明 IPC 可用，避免组件启用无 IPC 的刷新定时器。
   Object.assign(window, { devAgentStudio: { workspace: { readUiDesigns: async () => ({}) } } })
   const submissions: WorkflowClarificationAnswers[] = []
+  const transfers: string[] = []
   let root: ReactTestRenderer | undefined
   /** 用真实状态帧驱动入队 Run 的开始和结束。 */
   const render = async (pages: Page[], status = 'requires_user_input', disabled = false, includePages = true,
-    phase = 'ui_confirmation'): Promise<void> => {
+    phase = 'ui_confirmation', options: {
+      runId?: string
+      structuralInstruction?: string
+      preserveProductReply?: boolean
+    } = {}): Promise<void> => {
+    const runId = options.runId || 'design-run'
+    const structuralInstruction = options.structuralInstruction || ''
     const workflow = {
-      runId: 'design-run', threadId: 'design-thread',
+      runId, threadId: 'design-thread',
       summary: { phase, status,
-        clarification: includePages ? { mode: 'ui_design_confirmation', pages } : undefined }
+        clarification: includePages ? {
+          mode: 'ui_design_confirmation',
+          pages,
+          ...(structuralInstruction ? {
+            structural_change: true,
+            structural_change_instruction: structuralInstruction
+          } : {})
+        } : undefined,
+        productConversationResult: options.preserveProductReply ? {
+          kind: 'out_of_scope', mutating: false, response: '暂不修改产品产物',
+          presentation: { artifactPresentation: 'preserve' }
+        } : undefined
+      }
     } as unknown as WorkflowRunPayload
     await act(async () => {
-      const element = createElement(ReviewHost, { workflow, disabled, showPreview: false,
-        onSubmit: (_workflow, answers) => { submissions.push(answers) } })
+      const element = createElement(ReviewHost, { key: runId, workflow, disabled, showPreview: false,
+        onSubmit: (_workflow, answers) => { submissions.push(answers) },
+        onTransferToProductAgent: (instruction) => { transfers.push(instruction) } })
       if (root) root.update(element)
       else root = create(element, {
         /** 为真实 TextArea 的 ref 提供测量和选区所需的最小宿主。 */
@@ -58,7 +90,7 @@ async function withPanel(run: (context: {
       })
     })
   }
-  try { await run({ root: () => root!, submissions, render }) } finally {
+  try { await run({ root: () => root!, submissions, transfers, render }) } finally {
     if (root) await act(async () => { root!.unmount() })
     restore()
   }
@@ -152,5 +184,33 @@ test('连续提交三个页面，后两页在首个入队回执后提交，第�
     await render(generating.map((page, index) => index === 0 ? { ...page, status: 'confirmed' } : page))
     assert.equal(Boolean(buttons(root(), 'ui-design-action-btn-regenerate').at(-1)!.props.disabled), false,
       '任一页生成完成后，第四页立即获得空位')
+  })
+})
+
+test('非修改产品回复恢复原审阅卡时不重复自动转交结构性指令', async () => {
+  await withPanel(async ({ render, transfers }) => {
+    const pages = [{ pageId: 'a', name: '页面甲', status: 'confirmed' }]
+    const instruction = '开发一个前端页面，页面上一个接口返回字符串“早上好！”，前端展示这个字符串'
+    const structuralOptions = { structuralInstruction: instruction }
+    await render(pages, 'requires_user_input', false, true, 'ui_confirmation', {
+      ...structuralOptions, runId: 'adjust-run'
+    })
+    assert.deepEqual(transfers, [instruction], '新的结构性分析只自动转交一次')
+
+    for (const runId of ['product-reply-1', 'product-reply-2']) {
+      await render(pages, 'requires_user_input', false, true, 'ui_confirmation', {
+        ...structuralOptions, runId, preserveProductReply: true
+      })
+    }
+    assert.deepEqual(transfers, [instruction], '跨 run 重挂原卡也不能反复提交同一指令')
+
+    await render(pages, 'running', false, true, 'ui_confirmation', {
+      ...structuralOptions, runId: 'new-adjust-run'
+    })
+    assert.deepEqual(transfers, [instruction], '新调整尚未得出结构性结果前不重放旧指令')
+    await render(pages, 'requires_user_input', false, true, 'ui_confirmation', {
+      ...structuralOptions, runId: 'new-adjust-run'
+    })
+    assert.deepEqual(transfers, [instruction, instruction], '用户重新分析同一指令仍可再次转交')
   })
 })

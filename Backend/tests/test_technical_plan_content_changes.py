@@ -1,6 +1,7 @@
 """通用 ChangeSet 与操作执行器的结构、原子性和全局引用约束回归。"""
 
 from copy import deepcopy
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -289,24 +290,37 @@ class ChangeSetTests(unittest.TestCase):
         self.assertEqual(after["architecture"]["data"], "人员记录包含姓名和岗位")
 
     def test_native_structured_output_is_validated_not_full_candidate_fallback(self) -> None:
-        """模型只输出操作批次，平台校验后绑定完整请求，不回退整份生成。"""
+        """直连显式使用函数调用，转发保持原参数，平台只校验操作批次。"""
 
         from app.agents.main.technical_plan_revision import plan_technical_plan_changeset
-        model = MagicMock()
         changeset = _changeset(self.plan, "改说明", [{"op": "replace", "path": self.path, "expectedBefore": "基线说明", "value": "新说明"}])
         batch = RevisionOperationBatch.model_validate({
             "schemaVersion": changeset["schemaVersion"], "baseSha256": changeset["baseSha256"],
             "operations": changeset["intents"][0]["operations"],
         })
-        model.with_structured_output.return_value.invoke.return_value = {"raw": MagicMock(response_metadata={}), "parsed": batch, "parsing_error": None}
-        with patch("app.agents.main.technical_plan_revision.create_chat_model", return_value=model):
-            result = plan_technical_plan_changeset({}, self.document, "改说明")
         expected = TechnicalPlanChangeSet.model_validate({
             "schemaVersion": changeset["schemaVersion"], "baseSha256": changeset["baseSha256"],
             "intents": [{"id": "current-request", "sourceText": "改说明", "operations": changeset["intents"][0]["operations"]}],
         })
-        self.assertEqual(result, expected)
-        model.with_structured_output.assert_called_once_with(RevisionOperationBatch, include_raw=True)
+        for transport in ("direct", "transmit"):
+            with self.subTest(transport=transport):
+                model = MagicMock()
+                model.with_structured_output.return_value.invoke.return_value = {
+                    "raw": MagicMock(response_metadata={}), "parsed": batch, "parsing_error": None,
+                }
+                with (
+                    patch("app.agents.main.technical_plan_revision.create_chat_model", return_value=model),
+                    patch(
+                        "app.agents.main.technical_plan_revision.Settings.from_env",
+                        return_value=SimpleNamespace(model_transport=transport),
+                    ),
+                ):
+                    result = plan_technical_plan_changeset({}, self.document, "改说明")
+                self.assertEqual(result, expected)
+                options = {"include_raw": True}
+                if transport == "direct":
+                    options["method"] = "function_calling"
+                model.with_structured_output.assert_called_once_with(RevisionOperationBatch, **options)
 
 
 if __name__ == "__main__":

@@ -67,8 +67,13 @@ def _changeset_prompt(requirement_spec: dict, document: dict, request: str, feed
 def plan_technical_plan_changeset(requirement_spec: dict, document: dict, request: str, *, feedback: list[str] | None = None) -> TechnicalPlanChangeSet:
     """沿统一模型工厂使用 LangChain 原生结构化工具输出，并由 Pydantic 二次校验。"""
 
-    model = create_chat_model(Settings.from_env(), extra_model_kwargs=thinking_disabled_kwargs())
-    structured = model.with_structured_output(RevisionOperationBatch, include_raw=True)
+    settings = Settings.from_env()
+    model = create_chat_model(settings, extra_model_kwargs=thinking_disabled_kwargs())
+    # 直连模型的结构化输出统一使用函数调用，避免 OpenAI 兼容服务因默认 json_schema 而拒绝请求。
+    structured_options = {"method": "function_calling"} if settings.model_transport == "direct" else {}
+    structured = model.with_structured_output(
+        RevisionOperationBatch, include_raw=True, **structured_options,
+    )
     result = structured.invoke(_changeset_prompt(requirement_spec, document, request, feedback or []))
     check_output_finish(result["raw"])
     if result.get("parsing_error") or result.get("parsed") is None:
