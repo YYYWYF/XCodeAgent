@@ -290,7 +290,7 @@ class ChangeSetTests(unittest.TestCase):
         self.assertEqual(after["architecture"]["data"], "人员记录包含姓名和岗位")
 
     def test_native_structured_output_is_validated_not_full_candidate_fallback(self) -> None:
-        """直连显式使用函数调用，转发保持原参数，平台只校验操作批次。"""
+        """OpenAI直连关闭思考后使用函数调用，其余通道保持各自协议参数。"""
 
         from app.agents.main.technical_plan_revision import plan_technical_plan_changeset
         changeset = _changeset(self.plan, "改说明", [{"op": "replace", "path": self.path, "expectedBefore": "基线说明", "value": "新说明"}])
@@ -302,21 +302,31 @@ class ChangeSetTests(unittest.TestCase):
             "schemaVersion": changeset["schemaVersion"], "baseSha256": changeset["baseSha256"],
             "intents": [{"id": "current-request", "sourceText": "改说明", "operations": changeset["intents"][0]["operations"]}],
         })
-        for transport in ("direct", "transmit"):
-            with self.subTest(transport=transport):
+        for transport, provider in (
+            ("direct", "openai"),
+            ("direct", "anthropic"),
+            ("transmit", "openai"),
+        ):
+            with self.subTest(transport=transport, provider=provider):
                 model = MagicMock()
                 model.with_structured_output.return_value.invoke.return_value = {
                     "raw": MagicMock(response_metadata={}), "parsed": batch, "parsing_error": None,
                 }
+                settings = SimpleNamespace(model_transport=transport, model_provider=provider)
                 with (
-                    patch("app.agents.main.technical_plan_revision.create_chat_model", return_value=model),
                     patch(
-                        "app.agents.main.technical_plan_revision.Settings.from_env",
-                        return_value=SimpleNamespace(model_transport=transport),
-                    ),
+                        "app.agents.main.technical_plan_revision.create_chat_model", return_value=model,
+                    ) as create_model,
+                    patch("app.agents.main.technical_plan_revision.Settings.from_env", return_value=settings),
+                    patch("app.agents.main.technical_plan_revision.thinking_disabled_kwargs", return_value={}),
                 ):
                     result = plan_technical_plan_changeset({}, self.document, "改说明")
                 self.assertEqual(result, expected)
+                model_kwargs = (
+                    {"thinking": {"type": "disabled"}}
+                    if transport == "direct" and provider == "openai" else {}
+                )
+                create_model.assert_called_once_with(settings, extra_model_kwargs=model_kwargs)
                 options = {"include_raw": True}
                 if transport == "direct":
                     options["method"] = "function_calling"

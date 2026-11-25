@@ -68,7 +68,11 @@ def plan_technical_plan_changeset(requirement_spec: dict, document: dict, reques
     """沿统一模型工厂使用 LangChain 原生结构化工具输出，并由 Pydantic 二次校验。"""
 
     settings = Settings.from_env()
-    model = create_chat_model(settings, extra_model_kwargs=thinking_disabled_kwargs())
+    model_kwargs = thinking_disabled_kwargs()
+    if settings.model_transport == "direct" and settings.model_provider == "openai":
+        # 函数调用会强制 tool_choice；兼容服务默认开启 thinking 时可能拒绝该组合。
+        model_kwargs["thinking"] = {"type": "disabled"}
+    model = create_chat_model(settings, extra_model_kwargs=model_kwargs)
     # 直连模型的结构化输出统一使用函数调用，避免 OpenAI 兼容服务因默认 json_schema 而拒绝请求。
     structured_options = {"method": "function_calling"} if settings.model_transport == "direct" else {}
     structured = model.with_structured_output(
