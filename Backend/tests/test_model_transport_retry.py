@@ -1,14 +1,73 @@
 """模型传输层重试：断连类错误有界重试，内容类错误原样抛出。"""
 
 import asyncio
+import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from ag_ui.core import CustomEvent, RunFinishedEvent, RunStartedEvent
 from ag_ui.encoder import EventEncoder
+from langchain.agents import create_agent
 
+from app.agents.transmit_chat_model import TransmitChatModel
+from app.graph.nodes.direct_modification import respond_to_workspace_question
+from app.protocols.temporary_chat import build_temporary_chat_ag_ui_stream
+from app.services.application_lifecycle import ensure_application_lifecycle
 from app.services.model_transmit_client import ModelTransmitClient, ModelTransmitError
 from app.services.model_transport_retry import run_with_transport_retry
+from app.services.run_workers import bind_run_workers
+
+
+def test_transmit_workspace_question_projects_identity_for_both_entry_points(monkeypatch, tmp_path):
+    """经真实 Agent 和转发请求校验普通、临时问答，以及无项目工作区之间的身份隔离。"""
+    requests = []
+
+    def handle(request):
+        """收集实际 HTTP 请求并返回最小合法 AG-UI 响应。"""
+        payload = json.loads(request.content)
+        if request.url.path == "/model-info/run":
+            name, value = "model-info.result", {"model": "test-model", "provider": "openai", "upstream": "direct"}
+        else:
+            requests.append(payload["forwardedProps"]["modelInference"]["metadata"])
+            name, value = "model-inference.result", {"choices": [
+                {"message": {"role": "assistant", "content": "工作区问答结果"}, "finish_reason": "stop"},
+            ]}
+        ids = {"thread_id": payload["threadId"], "run_id": payload["runId"]}
+        encoder = EventEncoder()
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content="".join(
+            encoder.encode(event) for event in [
+                RunStartedEvent(**ids), CustomEvent(name=name, value=value), RunFinishedEvent(**ids),
+            ]
+        ))
+
+    model = TransmitChatModel(transmit_url="https://transmit.test", transport=httpx.MockTransport(handle))
+    agent = create_agent(model=model)
+    monkeypatch.setattr("app.agents.create_agent_bundle", lambda *_: SimpleNamespace(workspace_assistant=agent))
+
+    async def temporary_question(workspace):
+        """消费临时问答的正式 AG-UI 流，确认工作线程也成功返回。"""
+        stream = build_temporary_chat_ag_ui_stream(payload={"forwardedProps": {
+            "temporaryChat": {"workspaceRoot": str(workspace), "request": "这个项目怎么构建？"},
+        }})
+        frames = [frame async for frame in stream]
+        assert '"status":"completed"' in "".join(frames)
+
+    regular, temporary, unregistered = (tmp_path / name for name in ("regular", "temporary", "unregistered"))
+    for root in (regular, temporary, unregistered):
+        root.mkdir()
+    ensure_application_lifecycle(regular, application_id="app-regular", application_name="普通问答")
+    ensure_application_lifecycle(temporary, application_id="app-temporary", application_name="临时问答")
+    with bind_run_workers("regular-run", str(regular)):
+        result = respond_to_workspace_question({"workspace": str(regular), "request": "前端用什么？"})
+    assert result["status"] == "completed"
+    asyncio.run(temporary_question(temporary))
+    asyncio.run(temporary_question(unregistered))
+    model.invoke("已显式绑定项目", config={"metadata": {"project_id": "app-explicit", "workspace": str(regular)}})
+
+    assert [request.get("projectId") for request in requests] == ["app-regular", "app-temporary", None, "app-explicit"]
+    for request in requests[:3]:
+        assert request["extensions"]["context"]["business_operation"] == "answer_workspace_question"
 
 
 def test_transport_error_retries_until_success(monkeypatch):

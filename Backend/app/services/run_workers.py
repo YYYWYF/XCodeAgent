@@ -36,6 +36,11 @@ def current_run_id() -> str:
     return _current_worker_identity()[0]
 
 
+def current_run_workspace() -> str:
+    """读取显式绑定并随 Graph 和线程池传播的工作区。"""
+    return _run.get()[1]
+
+
 @contextmanager
 def bind_run_workers(run_id: str, workspace: str):
     """只在本次 Graph producer 内绑定运行，避免缓存 Agent 固定到旧身份。"""

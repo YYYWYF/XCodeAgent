@@ -18,12 +18,33 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openai.chat_models.base import _convert_message_to_dict
 from pydantic import ConfigDict, Field, PrivateAttr
 
-from app.agents.model_business_context import current_model_action_run_id, current_model_context
+from app.agents.model_business_context import (
+    current_model_action_run_id, current_model_action_workspace, current_model_context,
+)
 from app.agents.transmit_model_messages import completion_result, final_stream_chunk, generation_chunk
 from app.services.model_transmit_client import ModelTransmitClient, ModelTransmitError
-from app.services.run_workers import current_run_id
+from app.services.run_workers import current_run_id, current_run_workspace
 
 _OPEN_STREAMS: ContextVar[list[Any] | None] = ContextVar("model_transmit_open_streams", default=None)
+
+
+def _project_id(metadata: dict[str, Any]) -> str | None:
+    """沿用显式项目身份，缺失时从当前工作区正式生命周期读取。"""
+    project = metadata.get("project_id")
+    if isinstance(project, str) and project.strip():
+        return project
+    workspace = current_run_workspace() or current_model_action_workspace() or metadata.get("workspace")
+    if not isinstance(workspace, str) or not workspace.strip():
+        return None
+
+    from app.services.application_lifecycle import read_application_lifecycle_snapshot
+
+    try:
+        lifecycle = read_application_lifecycle_snapshot(workspace)
+    except (OSError, RuntimeError, ValueError):
+        # 项目归属用于观测，读取失败不打断原本可执行的模型请求。
+        return None
+    return lifecycle.application.id if lifecycle and lifecycle.application.id.strip() else None
 
 
 class TransmitChatModel(BaseChatModel):
@@ -71,10 +92,12 @@ class TransmitChatModel(BaseChatModel):
         run_id = business_run_id or request_id
         thread_id = str(configurable.get("thread_id") or metadata.get("session_id") or request_id)
         result = {"sessionId": thread_id, "requestId": request_id}
-        for source, target in (("user_id", "userId"), ("project_id", "projectId"),
+        for source, target in (("user_id", "userId"),
                                ("studio_data_ref", "studioDataRef"), ("extensions", "extensions")):
             if source in metadata:
                 result[target] = deepcopy(metadata[source])
+        if project_id := _project_id(metadata):
+            result["projectId"] = project_id
         extensions = result.setdefault("extensions", {})
         business_context = current_model_context(metadata)
         if business_context:

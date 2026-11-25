@@ -35,7 +35,7 @@ async def build_task_repair_stream(*, payload: dict, accept: str | None = None):
 
             async for frame in build_ag_ui_action_stream(payload=payload, event_name="build-task-repair",
                     state_key="buildTaskRepair", run_id_prefix="build-task-repair", progress_operation=operation,
-                    error_message_prefix="任务修复失败", accept=accept):
+                    error_message_prefix="任务修复失败", accept=accept, model_workspace=request.workspaceRoot):
                 yield frame
             return
     except Exception as exc:

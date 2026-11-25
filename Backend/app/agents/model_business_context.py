@@ -8,7 +8,7 @@ import inspect
 from langchain_core.runnables import RunnableConfig
 
 _CONTEXT = ContextVar("model_business_context", default=None)
-_ACTION_RUN_ID: ContextVar[str] = ContextVar("model_action_run_id", default="")
+_ACTION_RUN: ContextVar[tuple[str, str | None]] = ContextVar("model_action_run", default=("", None))
 _STAGES = {
     "requirements": "requirements", "product_planning": "requirements",
     "ui_confirmation": "ui_design", "technical_planning_generate": "technical_planning",
@@ -55,18 +55,23 @@ def model_business_context(value):
 
 
 @contextmanager
-def bind_model_action_run(run_id: str):
-    """在独立 AG-UI 动作执行期间传递业务 Run ID。"""
-    token = _ACTION_RUN_ID.set(run_id)
+def bind_model_action_run(run_id: str, *, workspace: str | None = None):
+    """在独立 AG-UI 动作或后台任务执行期间传递 Run ID 和工作区。"""
+    token = _ACTION_RUN.set((run_id, workspace))
     try:
         yield
     finally:
-        _ACTION_RUN_ID.reset(token)
+        _ACTION_RUN.reset(token)
 
 
 def current_model_action_run_id() -> str:
     """读取当前独立 AG-UI 动作的业务 Run ID。"""
-    return _ACTION_RUN_ID.get()
+    return _ACTION_RUN.get()[0]
+
+
+def current_model_action_workspace() -> str | None:
+    """读取当前模型动作所属的工作区。"""
+    return _ACTION_RUN.get()[1]
 
 
 def current_model_context(metadata):

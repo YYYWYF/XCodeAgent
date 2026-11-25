@@ -109,7 +109,8 @@ def build_technical_planning_conversation_stream(*, graph, payload: dict[str, An
             return classify_technical_planning_conversation(request.request, current)
 
         decision = await RunnableLambda(classify_context).ainvoke(context,
-            config={"configurable": {"thread_id": str(payload.get("threadId") or request.planningThreadId)}})
+            config={"configurable": {"thread_id": str(payload.get("threadId") or request.planningThreadId)},
+                    "metadata": {"project_id": lifecycle.application.id}})
         intent, message = decision.intent, decision.message
         if intent == "revise" and not prepared["technical_plan"] and request.conversationTarget is None:
             intent, message = "reply", "当前尚无技术规划，请使用上方重试入口重新生成；生成后可以在这里提出修改要求。"

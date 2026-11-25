@@ -133,6 +133,7 @@ def build_endpoint_designs_ag_ui_stream(
         error_data=lambda exc: {"action": str(request_input.get("action") or "get"),
                                 **({"assistFailure": exc.failure} if isinstance(exc, MappingGenerationFailure) else {})},
         accept=accept,
+        model_workspace=request_input.get("workspaceRoot", request_input.get("workspace_root")),
     )
 
 

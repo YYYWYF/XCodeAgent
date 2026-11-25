@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+转发推理的 `metadata.projectId` 由 `agents/transmit_chat_model.py` 优先读取 Runnable 项目身份，再按当前 worker 或独立 AG-UI 动作的工作区只读生命周期 `application.id`。覆盖普通／临时工作区问答、独立模型辅助动作和后台 UI 生成，技术规划问答使用已校验的应用 ID。工作区缺少正式身份仍可调用模型。回归见 `tests.test_model_transport_retry`。
+
 模型 TTFT 由 `observability/model_stream_timing.py` 识别文本、推理及工具名称/参数增量，统一 Telemetry 与 `agent_execution_trace.py` 分别按原毫秒取整方式采集；两个分量共享起止边界并满足总耗时加和，缺失证据保留 null。Transmit 完整结果补全 Chunk 带最小观测标记，避免官方流式入口将其误采。`build_model_timing_report.py` 为 Baseline 提供有效配对、nearest-rank P95 和覆盖率统计，不参与原质量门禁。回归见 `tests.test_model_stream_timing`、`tests.test_build_observability`、`tests.test_frontend_agent_trace`。
 
 权限资源结果复用时，`services/build_unit_compiler.py` 仅在冻结的 `backend_auth_resources.applied` 为真时，识别固定平台任务 `backend-auth-resources` 的归属，按原跨 Unit 编译规则清除保留 Bootstrap 的旧执行依赖；不添加或重复执行权限资源任务。清单变化仍生成新的 pending 资源任务，缺少成功证据与其他未知缺失依赖仍阻断。生成与确认重验共用编译器。回归：`tests.test_backend_auth_resource_dependencies`。

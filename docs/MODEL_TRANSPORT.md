@@ -38,7 +38,8 @@ MODEL_TRANSMIT_TRUST_ENV=false
 | `maxRetries` | 本次上游 SDK 重试预算，0 保持零重试 |
 | `metadata.sessionId` | 当前会话身份 |
 | `metadata.requestId` | 每次模型请求独立生成的身份 |
-| `metadata.userId/projectId/studioDataRef` | 调用上下文显式提供时传递 |
+| `metadata.userId/studioDataRef` | 调用上下文显式提供时传递 |
+| `metadata.projectId` | 优先使用调用配置的 `project_id`。字段缺失时只读当前工作区生命周期中的 `application.id`。无正式身份时省略 |
 | `metadata.spaid` | 调用上下文或全局 `MODEL_TRANSMIT_SPAID` 提供时传递 |
 | `metadata.extensions.context` | 业务阶段 `business_stage`、操作 `business_operation`、节点 `node_name` 和目标 `target`；只传已有业务事实 |
 | `metadata.extensions.workflow_scope/operation_id/conversation_id` | 调用上下文显式提供时传递 |
@@ -59,6 +60,7 @@ MODEL_TRANSMIT_TRUST_ENV=false
 - `agents/transmit_chat_model.py` 适配标准 invoke/stream、异步及工具调用；`services/model_transmit_client.py` 使用官方 AG-UI 类型和 httpx-sse。
 - `agents/model_business_context.py` 与 `model_operations.py` 保存任务隔离的阶段、操作和目标上下文，直连与转发共用。协议转换只在转发适配器中发生。
 - 转发沿用业务 Run/Thread，每次模型请求生成独立 requestId；取消关闭当前连接，并发调用不共享可变身份。
+- 普通和临时工作区问答、Endpoint 映射辅助、页面开发规划、单任务修复草稿和变更摘要沿当前工作区补齐推理请求的项目身份。技术规划问答复用已校验的应用 ID，后台 UI 生成沿工作区 worker 绑定取值。转发服务据此投影 ES 的 `identity_projectId`。
 - 超时和零重试覆盖保留；转发 HTTP 层不添加重试，上游 SDK 重试预算交给服务。原业务层明确配置的瞬时故障重试范围保留；认证和参数错误不进入它。
 - 产品 AG-UI 端点、工具执行位置、工作流确认门、文档采纳统计及存储合同保持不变。
 

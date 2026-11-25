@@ -85,6 +85,7 @@ def build_ag_ui_action_stream(
     emit_error_text: bool = True,
     workspace_root: str | None = None,
     register_workspace_run: bool = True,
+    model_workspace: str | None = None,
 ) -> AsyncIterator[str]:
     """
     业务异常会被编码为失败结果，并正常发送 RUN_FINISHED，使 HttpAgent可以用与成功响应相同的流结构消费失败信息。
@@ -99,6 +100,8 @@ def build_ag_ui_action_stream(
             "operation、progress_operation 和 streaming_operation 必须且只能提供一个。"
         )
 
+    # 模型归属只取操作明确提供的工作区；登记工作区仍沿用原有发现规则。
+    model_workspace = model_workspace or workspace_root
     # 独立产品动作也登记工作区，确保预览维护不能与隐式写入并发。
     if (
         register_workspace_run
@@ -122,8 +125,8 @@ def build_ag_ui_action_stream(
     async def run_operation(
         action: Callable[..., Awaitable[AgUiActionResult]], *args: Any
     ) -> AgUiActionResult:
-        """使动作内部的模型请求继承当前 AG-UI Run ID。"""
-        with bind_model_action_run(run_id):
+        """使动作内部的模型请求继承当前 AG-UI Run ID 和工作区。"""
+        with bind_model_action_run(run_id, workspace=model_workspace):
             return await action(*args)
 
     async def stream() -> AsyncIterator[str]:

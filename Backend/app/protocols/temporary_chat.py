@@ -99,6 +99,7 @@ def build_temporary_chat_ag_ui_stream(
         error_message_prefix="临时对话失败",
         error_data=lambda _exc: {},
         accept=accept,
+        model_workspace=raw_input.get("workspaceRoot", raw_input.get("workspace_root")),
         # 临时问答不登记工作区执行，也不写入预览交互或工作流状态。
         register_workspace_run=False,
     )
