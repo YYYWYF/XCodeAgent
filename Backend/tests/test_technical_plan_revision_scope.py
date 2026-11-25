@@ -60,6 +60,14 @@ class TechnicalPlanRevisionScopeTests(unittest.TestCase):
         self.assertEqual((targets, schemas), ({}, {}))
         self.assertIn("GET、POST", questions[0])
 
+    def test_new_endpoint_does_not_require_an_existing_catalog_target(self):
+        """明确新增的接口由 ChangeSet 校验，目标识别不能因旧目录不存在而阻断。"""
+
+        targets, schemas, questions = validate_revision_scope(TechnicalPlanRevisionScope.model_validate({
+            "endpoints": [{"method": "GET", "path": "/api/new-logs", "operation": "add"}],
+        }), _plan())
+        self.assertEqual((targets, schemas, questions), ({}, {}, []))
+
     def test_missing_method_or_duplicate_name_cannot_choose_a_target(self):
         """模型只提取路径或接口名时，平台仍独立检查候选是否唯一。"""
 

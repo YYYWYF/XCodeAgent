@@ -139,7 +139,6 @@ type WorkflowRunCardProps = {
   reviseConfirmedTechnicalPlanDisabled?: boolean
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
-  onOpenTechnicalPlanChanges?: () => void
   /** 已确认的技术规划通过当前规划会话发起正式修订。 */
   onReviseConfirmedTechnicalPlan?: (request: string) => void | Promise<void>
   onSubmitClarification?: (
@@ -182,7 +181,6 @@ export default function WorkflowRunCard({
   workflowCardResult,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
-  onOpenTechnicalPlanChanges,
   onReviseConfirmedTechnicalPlan,
   reviseConfirmedTechnicalPlanDisabled,
   onSubmitClarification,
@@ -751,7 +749,6 @@ export default function WorkflowRunCard({
               <PlanConfirmationCard
                 artifact={confirmationArtifact}
                 changeSummary={clarification?.mode === 'technical_plan_confirmation' ? technicalChangeSummary : undefined}
-                onViewChanges={!disabled && interactionAvailability === 'active' && technicalChanges ? onOpenTechnicalPlanChanges : undefined}
                 disabled={Boolean(disabled || interactionAvailability !== 'active')}
                 onAbandon={() =>
                   onSubmitClarification?.(workflow, { [artifactAnswerKey]: '需要修改，请重新生成' })

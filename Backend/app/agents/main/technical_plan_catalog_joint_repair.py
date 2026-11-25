@@ -138,7 +138,9 @@ def repair_contract_conflict(requirement: dict, registry: dict, conflict: Catalo
         return _validate_repair(value, registry=registry, affected=affected, entities=entities,
             completed=completed, product=requirement["confirmed_product_plan"], with_endpoints=with_endpoints)
 
-    repaired = fragment(key, _prompt("catalog_joint_repair（冲突分组联合修正）", rules, context, requirement), validate)
+    names = "、".join(f"「{item['name']}」" for item in affected)
+    repaired = fragment(key, _prompt("catalog_joint_repair（冲突分组联合修正）", rules, context, requirement), validate,
+        label=f"{names}{'接口目录' if with_endpoints else '接口分组'}冲突修正")
     # 缓存响应也复验；成功保存响应与原子替换之间退出时，下次仍须按同一来源核对。
     repaired = validate(repaired)["contracts"]
     candidate = _replace_groups(registry, ids, repaired)

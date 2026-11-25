@@ -4,6 +4,48 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { saveSession, readSessionPage } from '../src/main/sessionHistory'
+import { appendTechnicalPlanningOutput } from '../src/renderer/src/service/technicalPlanningOutput'
+import { readWorkflowPayload } from '../src/renderer/src/service/agUiAgent'
+import type { WorkflowRunPayload } from '../src/renderer/src/typings'
+
+test('过程记录只留在当前内存，保存和重读会话保留确认门但不包含输出正文', async () => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'session-transient-output-'))
+  try {
+    const file = path.join(workspace, 'session.json')
+    const workflow: WorkflowRunPayload = {
+      runId: 'output-run', threadId: 'output-thread', events: [],
+      summary: { phase: 'technical_planning', status: 'requires_user_input' },
+      state: { application_planning_interrupt: {
+        gateId: 'technical-gate', artifact: 'technical_plan', artifactRevision: 'draft-revision'
+      } }
+    }
+    const text = 'TRANSIENT_PROCESS_BODY_ONLY'
+    const live = appendTechnicalPlanningOutput(workflow, {
+      runId: workflow.runId, threadId: workflow.threadId,
+      kind: 'text', text, timestamp: '2026-11-25T04:00:00Z'
+    })!
+    const output = live.technicalPlanningOutput
+    await saveSession(file, {
+      workspaceRoot: workspace,
+      messages: [{ id: 1, role: 'assistant', content: '等待确认技术规划', workflow: live }]
+    })
+    const stored = await fs.readFile(file, 'utf8')
+    assert.doesNotMatch(stored, /technicalPlanningOutput|TRANSIENT_PROCESS_BODY_ONLY/)
+    assert.equal(live.technicalPlanningOutput, output)
+    assert.equal(live.technicalPlanningOutput?.entries[0].text, text)
+
+    const page = await readSessionPage(file)
+    const restored = readWorkflowPayload(page.session.messages[0].workflow)!
+    assert.equal(restored.technicalPlanningOutput, undefined)
+    assert.equal(restored.runId, live.runId)
+    assert.equal(restored.threadId, live.threadId)
+    assert.equal(restored.summary.status, 'requires_user_input')
+    assert.deepEqual(restored.state?.application_planning_interrupt, live.state?.application_planning_interrupt)
+    assert.deepEqual(await fs.readdir(workspace), ['session.json'])
+  } finally {
+    await fs.rm(workspace, { recursive: true, force: true })
+  }
+})
 
 test('精简展示直接保存在消息中，打开历史不依赖独立展示文件或产物正文', async () => {
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'session-workflow-'))

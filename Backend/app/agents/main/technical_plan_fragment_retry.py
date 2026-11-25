@@ -41,7 +41,7 @@ def dependency_repair_key(error: ValueError) -> str | None:
     return None
 
 
-def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str], str], validate: Callable[[dict], dict], save: Callable[[str, dict], None]) -> dict:
+def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str], str], validate: Callable[[dict], dict], save: Callable[[str, dict], None], *, label: str) -> dict:
     """每个未完成片段独享三次解析校验机会，只有成功持久化后才发布缓存。"""
 
     if key in cache:
@@ -50,7 +50,7 @@ def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str]
     feedback = ""
     for attempt in range(1, FRAGMENT_ATTEMPTS + 1):
         activity_id = emit_technical_planning_activity(
-            f"正在生成技术规划片段（第 {attempt}/{FRAGMENT_ATTEMPTS} 次尝试）",
+            f"正在生成{label}（第 {attempt}/{FRAGMENT_ATTEMPTS} 次尝试）",
             retry=attempt > 1,
         )
         # 保留阶段首行和原只读上下文位置，仅在本片段提示中插入最新反馈。
@@ -79,7 +79,7 @@ def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str]
             raise
         except (TypeError, ValueError) as exc:
             logger.warning("technical_plan_fragment_retry: fragment=%s attempt=%s/%s error=%s", key, attempt, FRAGMENT_ATTEMPTS, exc)
-            emit_technical_planning_activity("当前规划片段未通过校验", call_id=activity_id, status="failed")
+            emit_technical_planning_activity(f"{label}未通过校验", call_id=activity_id, status="failed")
             if attempt == FRAGMENT_ATTEMPTS:
                 raise PlanningFragmentFailed(key, attempt, str(exc)) from exc
             # 每轮只追加最新诊断；基础提示和原始要求不变，其他片段不接收这份反馈。
@@ -92,5 +92,5 @@ def generate_fragment(cache: dict, key: str, prompt: str, invoke: Callable[[str]
             except (TypeError, ValueError) as exc:
                 raise PlanningFragmentFailed(key, attempt, f"片段保存失败：{exc}") from exc
         cache[key] = validated
-        emit_technical_planning_activity("技术规划片段已生成并通过校验", call_id=activity_id, status="completed")
+        emit_technical_planning_activity(f"{label}已生成并通过校验", call_id=activity_id, status="completed")
         return deepcopy(validated)

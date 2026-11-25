@@ -14,7 +14,6 @@ const { Text } = Typography
 export function PlanConfirmationCard({
   artifact,
   changeSummary,
-  onViewChanges,
   confirmed = false,
   disabled,
   onAbandon,
@@ -28,7 +27,6 @@ export function PlanConfirmationCard({
 }: {
   artifact?: WorkflowConfirmationArtifact
   changeSummary?: string
-  onViewChanges?: () => void
   confirmed?: boolean
   disabled: boolean
   onAbandon: () => void
@@ -117,7 +115,6 @@ export function PlanConfirmationCard({
               {title}{revisionOnly ? '可继续修改' : confirmed ? '已确认' : '已生成'}
             </span>
             <span className={cx('artifact-auth-actions')}>
-              {onViewChanges ? <Button onClick={onViewChanges}>查看本次变更</Button> : null}
               {canView ? (
                 <Button
                   className={cx('requirement-spec-edit-btn')}

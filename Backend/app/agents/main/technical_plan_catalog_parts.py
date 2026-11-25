@@ -41,7 +41,8 @@ def generate_catalog(requirement: dict, *, cache: dict, fragment, publish) -> di
     product = requirement["confirmed_product_plan"]
     prefix = "catalog-part:" + fragment_digest({"initial": True}) + ":"
     frozen = deepcopy(requirement)
-    relationships = fragment(prefix + "relationships", relationships_prompt(frozen), validate_relationships)
+    relationships = fragment(prefix + "relationships", relationships_prompt(frozen), validate_relationships,
+        label="实体身份与从属关系")
     entity_identities = relationships["entities"]
     entity_registry_digest = fragment_digest(entity_identities)
     registry_key = prefix + "registry:" + entity_registry_digest
@@ -50,7 +51,7 @@ def generate_catalog(requirement: dict, *, cache: dict, fragment, publish) -> di
         if registry_key in cache:
             validate_registry(cache[registry_key], product, entities=entity_identities)
         contract_registry = fragment(registry_key, registry_prompt(frozen, entity_identities),
-            lambda value: validate_registry(value, product, entities=entity_identities))
+            lambda value: validate_registry(value, product, entities=entity_identities), label="接口分组目录")
     except CatalogContractConflict as exc:
         repaired = repair_contract_conflict(frozen, {**relationships, "contracts": exc.contracts}, exc,
             entities=entity_identities, completed=[], prefix=prefix, registry_key=registry_key,
@@ -73,7 +74,7 @@ def generate_catalog(requirement: dict, *, cache: dict, fragment, publish) -> di
             fragment_inputs["owned_fields"] = fragment_digest(owned_entities)
         key = prefix + "entity:" + fragment_digest(fragment_inputs)
         fields = fragment(key, entity_prompt(frozen, registry, registered_entity, owned_entities=owned_entities),
-            lambda value, identity=identity: validate_entity_fields(value, identity))
+            lambda value, identity=identity: validate_entity_fields(value, identity), label=f"「{identity['name']}」实体字段")
         generated_entities[entity_id] = {**identity, **fields}
     # 对外目录沿用 registry 顺序，生成顺序只用于准备当前实体的上下文。
     entities = [generated_entities[entity_id] for entity_id in entities_by_id]
@@ -97,7 +98,8 @@ def generate_catalog(requirement: dict, *, cache: dict, fragment, publish) -> di
                     current_requirement = {**frozen, "technical_plan_validation_feedback":
                         str(frozen.get("technical_plan_validation_feedback") or "") + "\n" + str(exc)}
             endpoints = fragment(key, endpoints_prompt(current_requirement, identity, entities, contracts, registry=registry),
-                lambda value, identity=identity: validate_endpoint_directory(value, identity=identity, entities=entities, completed=contracts, product=product, registry=registry))
+                lambda value, identity=identity: validate_endpoint_directory(value, identity=identity, entities=entities, completed=contracts, product=product, registry=registry),
+                label=f"「{identity['name']}」接口目录")
         except CatalogContractConflict as exc:
             pair = tuple(sorted(exc.contract_ids))
             repair_counts[pair] = repair_counts.get(pair, 0) + 1
@@ -116,7 +118,8 @@ def generate_catalog(requirement: dict, *, cache: dict, fragment, publish) -> di
             continue
         key = prefix + "bindings:" + fragment_digest({"page": page, "contracts": contracts})
         bindings = fragment(key, bindings_prompt(frozen, page, catalog),
-            lambda value, page=page: validate_page_bindings(value, page=page, catalog=catalog))
+            lambda value, page=page: validate_page_bindings(value, page=page, catalog=catalog),
+            label=f"「{page['name']}」页面操作与接口映射")
         catalog["action_bindings"].extend(bindings["action_bindings"])
     validated = validate_catalog(catalog, product)
     published = {**cache, "catalog": validated}

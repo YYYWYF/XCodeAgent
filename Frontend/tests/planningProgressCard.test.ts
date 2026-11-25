@@ -9,6 +9,8 @@ import type { WorkflowRunPayload } from '../src/renderer/src/typings'
 import type { ApplicationPlanningCurrentState } from '../src/renderer/src/service/activeApplicationPlanning'
 import type { ApplicationPlanningRecoveryProjection } from '../src/renderer/src/service/applicationPlanningRecovery'
 import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
+import { persistentWorkflowView } from '../src/shared/workflowPresentation'
+import { readWorkflowPayload } from '../src/renderer/src/service/agUiAgent'
 
 import { appendPlanningEndMessage } from '../src/renderer/src/components/AiChatPanel/components/MessageList/planningEndMessage'
 
@@ -131,6 +133,10 @@ test('技术规划实时输出在生成中、待确认和失败后始终嵌在�
     const markup = renderPlanningMessage(workflow)
     assertOutputInsideCard(markup, status === 'requires_user_input' ? 'xa-workflow-run-card' : 'xa-planning-workflow-activity')
     if (status !== 'running') assert.doesNotMatch(markup, /anticon-loading/)
+    const restored = readWorkflowPayload(persistentWorkflowView({ ...workflow }))!
+    const restoredMarkup = renderPlanningMessage(restored)
+    assert.doesNotMatch(restoredMarkup, /technical-planning-output|查看过程记录/)
+    if (status === 'requires_user_input') assert.match(restoredMarkup, /确认保存/)
   }
 })
 

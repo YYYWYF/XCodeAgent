@@ -60,10 +60,10 @@ class TechnicalPlanCatalogJointRepairTests(TestCase):
         self.cache.clear()
         self.cache.update(deepcopy(value))
 
-    def fragment(self, key, prompt, validate):
+    def fragment(self, key, prompt, validate, *, label):
         """调用真实三次预算片段执行器，不替换任何校验器。"""
 
-        return generate_fragment(self.cache, key, prompt, self.invoke, validate, self.save)
+        return generate_fragment(self.cache, key, prompt, self.invoke, validate, self.save, label=label)
 
     def generate(self):
         """执行真实目录生成及确认前的候选发布，不进入正式产物或用户确认。"""

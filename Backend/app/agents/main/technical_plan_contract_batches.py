@@ -17,6 +17,12 @@ from app.agents.main.technical_plan_generation_prompts import contract_prompt
 from app.agents.main.technical_plan_generation_validation import validate_contract
 
 
+def _batch_label(names: list[str]) -> str:
+    """用前两项名称及总数描述真实批次，避免标题展开成整份字段清单。"""
+
+    return "、".join(names[:2]) + (f" 等 {len(names)} 项" if len(names) > 2 else "")
+
+
 def _discard_contract(cache: dict, key: str, prefix: str, publish, *, batched: bool = False) -> None:
     """冻结 Schema 决策有误时撤下当前 Contract，保留其他业务能力的已完成候选。"""
 
@@ -41,25 +47,27 @@ def generate_contract(requirement: dict, catalog: dict, spec: dict, *, cache: di
                 str(requirement.get("technical_plan_validation_feedback") or "") + "\n" + str(exc)}
     if not needs_batches(catalog, spec, max_output_tokens) and prefix + "mode" not in cache:
         try:
-            return fragment(key, contract_prompt(requirement, catalog, spec), lambda value: validate_contract(value, catalog, spec))
+            return fragment(key, contract_prompt(requirement, catalog, spec), lambda value: validate_contract(value, catalog, spec),
+                label=f"「{spec['name']}」接口契约")
         except PlanningOutputTruncated:
             # 明确截断交给独立的依赖调整预算，下次从分批任务继续。
             publish({**cache, prefix + "mode": {"batched": True}})
             raise
-    plan = fragment(prefix + "plan", schema_plan_prompt(requirement, catalog, spec), lambda value: validate_schema_plan(value, spec, catalog))
+    plan = fragment(prefix + "plan", schema_plan_prompt(requirement, catalog, spec), lambda value: validate_schema_plan(value, spec, catalog),
+        label=f"「{spec['name']}」数据结构目录")
     identity = fragment_digest(plan)
     _, target = output_targets(max_output_tokens)
 
-    def group_parts(kind: str, items: list, prompt, validate) -> list[dict]:
+    def group_parts(kind: str, items: list, prompt, validate, describe) -> list[dict]:
         """按内容身份复用片段；只有明确截断才记录二分，下一轮复用已经成功的邻居。"""
 
         task = prefix + kind + ":" + fragment_digest({"plan": identity, "items": items})
         split_key = task + ":split"
         if split_key in cache:
             middle = len(items) // 2
-            return group_parts(kind, items[:middle], prompt, validate) + group_parts(kind, items[middle:], prompt, validate)
+            return group_parts(kind, items[:middle], prompt, validate, describe) + group_parts(kind, items[middle:], prompt, validate, describe)
         try:
-            return [fragment(task, prompt(items), lambda value: validate(value, items))]
+            return [fragment(task, prompt(items), lambda value: validate(value, items), label=describe(items))]
         except PlanningOutputTruncated as exc:
             if len(items) <= 1:
                 raise PlanningFragmentFailed(task, exc.fragment_attempt, "单个接口或 Schema 字段仍达到输出上限，无法继续二分；请精简定义或提高输出预算") from exc
@@ -75,7 +83,8 @@ def generate_contract(requirement: dict, catalog: dict, spec: dict, *, cache: di
             try:
                 parts = group_parts("schema:" + schema["name"], fields,
                     lambda current: schema_fields_prompt(requirement, catalog, spec, plan, schema, current),
-                    lambda value, current: validate_schema_fields(value, schema=schema, fields=current, catalog=catalog, spec=spec, plan=plan))
+                    lambda value, current: validate_schema_fields(value, schema=schema, fields=current, catalog=catalog, spec=spec, plan=plan),
+                    lambda current: f"「{spec['name']}」数据结构「{schema['name']}」字段（{_batch_label(current)}）")
             except SchemaPlanRepairRequired as exc:
                 # 字段阶段不能修订冻结的引用决策；原子撤下所属 Contract 后定向重建目录。
                 exc.fragment_key = prefix + "plan"
@@ -102,7 +111,8 @@ def generate_contract(requirement: dict, catalog: dict, spec: dict, *, cache: di
     for group in groups:
         parts = group_parts("endpoints", group,
             lambda current: endpoint_batch_prompt(requirement, catalog, spec, plan, schemas, current),
-            lambda value, current: validate_endpoint_batch(value, endpoints=current, schemas=schemas, plan=plan, catalog=catalog, spec=spec))
+            lambda value, current: validate_endpoint_batch(value, endpoints=current, schemas=schemas, plan=plan, catalog=catalog, spec=spec),
+            lambda current: f"「{spec['name']}」接口定义（{_batch_label([item['name'] for item in current])}）")
         endpoints.extend(endpoint for part in parts for endpoint in part["endpoints"])
     # 接口顺序由目录决定，不受模型返回或缩批顺序影响；最终仍走原 Contract 完整校验。
     by_id = {endpoint["id"]: endpoint for endpoint in endpoints}

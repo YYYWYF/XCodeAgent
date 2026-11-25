@@ -352,7 +352,6 @@ type MessageListProps = {
   messages: AgentChatMessage[]
   onEntityDesignGateJump?: (entityId: string, workflow: WorkflowRunPayload) => void
   onOpenApiDesignConfig?: (target: ApiDesignConfigTarget, workflow: WorkflowRunPayload) => void
-  onOpenTechnicalPlanChanges?: () => void
   /** 在当前会话中恢复实体门禁前的页面或 Endpoint 正式任务。 */
   onContinueDevelopment?: (
     messageId: number,
@@ -421,7 +420,6 @@ export default function MessageList({
   messages,
   onEntityDesignGateJump,
   onOpenApiDesignConfig,
-  onOpenTechnicalPlanChanges,
   onContinueDevelopment,
   onOpenRevisionSession,
   onOpenCodeChangeFile,
@@ -1170,7 +1168,6 @@ export default function MessageList({
                               apiDesignSavedMappingKeys={apiDesignSavedMappingKeys}
                               onEntityDesignGateJump={onEntityDesignGateJump}
                               onOpenApiDesignConfig={onOpenApiDesignConfig}
-                              onOpenTechnicalPlanChanges={onOpenTechnicalPlanChanges}
                               onSubmitClarification={onSubmitClarification}
                               performanceTestRestart={
                                 restartPerformanceWorkflow ? {
@@ -1309,7 +1306,6 @@ export default function MessageList({
                 disabled={mutationDisabled}
                 interactionAvailability="active"
                 workflow={currentPlanningConfirmation}
-                onOpenTechnicalPlanChanges={onOpenTechnicalPlanChanges}
                 application={application}
                 onSubmitClarification={onSubmitClarification}
                 onTransferToProductAgent={onTransferToProductAgent}

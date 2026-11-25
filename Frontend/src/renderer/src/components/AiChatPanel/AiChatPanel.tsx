@@ -5635,11 +5635,6 @@ export default function AiChatPanel({
                 onContinueDevelopment={handleContinueDevelopment}
                 onEntityDesignGateJump={handleEntityDesignGateJump}
                 onOpenApiDesignConfig={handleOpenApiDesignConfig}
-                onOpenTechnicalPlanChanges={() => {
-                  // 查看差异只展开当前文档，不提交确认或发起新一轮生成。
-                  setRightPanel({ type: 'doc', docKey: 'technical-plan', reviewKey: crypto.randomUUID() })
-                  if (rightPanelLayout === 'hidden') setRightPanelLayout('split')
-                }}
                 onOpenCodeChangeFile={handleOpenCodeChangeFile}
                 onOpenRevisionSession={handleOpenRevisionSession}
                 onRevertCodeChanges={requestCodeChangeRevert}

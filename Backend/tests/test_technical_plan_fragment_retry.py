@@ -128,12 +128,12 @@ class TechnicalPlanFragmentRetryTests(TestCase):
             return value
 
         save = Mock()
-        generate_fragment(cache, "page:first", "阶段\n原始业务要求", invoke, validate, save)
+        generate_fragment(cache, "page:first", "阶段\n原始业务要求", invoke, validate, save, label="首页接口绑定")
         self.assertIn("第一次专属诊断", prompts[1])
         self.assertNotIn("第一次专属诊断", prompts[2])
         self.assertIn("第二次专属诊断", prompts[2])
         neighbor = Mock(return_value='{"ok":true}')
-        generate_fragment(cache, "page:next", "阶段\n原始业务要求", neighbor, validate, save)
+        generate_fragment(cache, "page:next", "阶段\n原始业务要求", neighbor, validate, save, label="详情页接口绑定")
         neighbor.assert_called_once_with("阶段\n原始业务要求")
 
     def test_storage_and_model_boundary_errors_do_not_retry_generation(self):
@@ -149,7 +149,7 @@ class TechnicalPlanFragmentRetryTests(TestCase):
                     invoke.side_effect = ValueError("模型配置错误")
                 cache = {}
                 with self.assertRaises(PlanningFragmentFailed) as caught:
-                    generate_fragment(cache, "page:test", "阶段\n原始业务要求", invoke, dict, save)
+                    generate_fragment(cache, "page:test", "阶段\n原始业务要求", invoke, dict, save, label="测试页面接口绑定")
                 self.assertEqual(caught.exception.attempts, 1)
                 self.assertEqual(invoke.call_count, 1)
                 self.assertEqual(cache, {})
@@ -169,7 +169,7 @@ class TechnicalPlanFragmentRetryTests(TestCase):
 
         try:
             with bind_run_workers(run_id, ""), self.assertRaisesRegex(RuntimeError, "当前运行已停止"):
-                generate_fragment({}, "page:test", "阶段\n要求", invoke, dict, Mock())
+                generate_fragment({}, "page:test", "阶段\n要求", invoke, dict, Mock(), label="测试页面接口绑定")
         finally:
             workspace_process_registry.allow_run(run_id)
         self.assertEqual(len(calls), 1)

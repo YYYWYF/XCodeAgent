@@ -26,7 +26,7 @@ class EndpointRevisionTarget(BaseModel):
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] | None = None
     path: str | None = None
     name: str | None = None
-    operation: Literal["modify", "delete"] = "modify"
+    operation: Literal["add", "modify", "delete"] = "modify"
     new_path: str | None = None
 
 
@@ -71,6 +71,9 @@ def validate_revision_scope(
     schemas: dict[str, set[str]] = {}
     contracts = plan.get("api_contracts", [])
     for selected in scope.endpoints:
+        # 新增接口不要求旧目录已有目标；具体新增及重复路由由 ChangeSet 的现行校验处理。
+        if selected.operation == "add":
+            continue
         matches = [(contract, endpoint) for contract in contracts
                    for endpoint in contract.get("endpoints", [])
                    if (not selected.contract_id or contract.get("id") == selected.contract_id)
@@ -134,12 +137,14 @@ def resolve_technical_plan_revision_scope(
         "禁止用相似路径、名称或猜测的方法替换目标。"
         "同一路径有多个方法且用户未明确、同名接口无法区分、修改与删除矛盾时，"
         "在 questions 中用简体中文说明具体歧义和已有候选，询问缺少的信息，不代替用户决定。"
+        "用户明确新增接口时 operation=add，新路径不要求在当前目录存在；不要把新增误判为修改旧接口。"
         "仅当用户要求删除整个接口时 operation=delete；删除响应字段、不要删除接口都不是删除接口。"
         "只有明确要求修改接口路径才填写 new_path，新路径不能作为已有接口身份。"
         "用户以接口为修改对象时，必须在 endpoints 提取该接口选择条件，不能仅返回 schemas。"
         "即使只是改接口响应字段，也要先定位唯一接口；同路径 GET/POST 未明确时必须提问，"
         "不能通过选择某个 Schema 绕过接口歧义。schemas 只用于用户直接指定类型名称的修改，"
-        "不能因为接口可能引用某个类型就选择它；接口修改所需的关联类型由后续编辑器处理。"
+        "不能因为接口可能引用某个类型就选择它；接口修改所需的关联类型由后续 ChangeSet 处理。"
+        "新建 Schema 不放入 schemas 既有类型选择器，交给 ChangeSet 按完整原始要求新增。"
         "仅修改架构、实体或页面且不涉及既有接口/类型时，endpoints 和 schemas 为空即可，"
         "不要为这些修改编造接口目标或提出无关问题。信息足够时 questions 为空。"
         "用户对上一轮问题的补充用于消除歧义，保留原修改目的。\n"

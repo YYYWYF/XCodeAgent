@@ -85,15 +85,16 @@ test('真实 AG-UI SDK 在结束前发布正文，后续快照保留输出且不
   }
 })
 
-test('实时窗口提供真实内容、空态和结束态，没有自动跟随控件或结束后的旋转动画', () => {
+test('过程记录提供真实内容与结束态，没有内存记录时不显示面板', () => {
   const current = appendTechnicalPlanningOutput(workflow(), output('等待修正', { kind: 'activity', id: 'edit', status: 'running' }))!
   const markup = renderToStaticMarkup(createElement(TechnicalPlanningOutput, { runId: current.runId, output: current.technicalPlanningOutput, running: false }))
   assert.match(markup, /输出已结束/)
   assert.match(markup, /aria-expanded="false"/)
-  assert.match(markup, /展开实时输出/)
+  assert.match(markup, /展开过程记录/)
   assert.doesNotMatch(markup, /等待修正/)
   assert.doesNotMatch(markup, /自动跟随|anticon-loading/)
-  const empty = renderToStaticMarkup(createElement(TechnicalPlanningOutput, { runId: current.runId, running: true }))
-  assert.match(empty, /等待模型返回内容/)
-  assert.match(empty, /aria-expanded="true"/)
+  for (const running of [true, false]) {
+    const empty = renderToStaticMarkup(createElement(TechnicalPlanningOutput, { runId: current.runId, running }))
+    assert.equal(empty, '')
+  }
 })

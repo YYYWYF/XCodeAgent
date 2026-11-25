@@ -63,13 +63,13 @@ def generate_technical_plan_sections(
             store.save(fingerprint, key, value)
 
     model_requests = 0
-    def read_fragment(key: str, prompt: str, validate) -> dict:
+    def read_fragment(key: str, prompt: str, validate, *, label: str) -> dict:
         """各片段独立重试并持久化，记录未命中请求以隔离修复反馈。"""
 
         nonlocal model_requests
         if key not in cache:
             model_requests += 1
-        return _fragment(cache, key, prompt, invoke, validate, save_fragment)
+        return _fragment(cache, key, prompt, invoke, validate, save_fragment, label=label)
 
     catalog = generate_catalog(frozen, cache=cache, fragment=read_fragment, publish=publish_fragments)
     if model_requests:
@@ -91,6 +91,7 @@ def generate_technical_plan_sections(
         pages.append(read_fragment(
             f"page:{page['pageId']}", page_prompt(frozen, catalog, page, contracts),
             lambda value, page=page: validate_page(value, page, contracts),
+            label=f"「{page['name']}」页面接口绑定",
         ))
         if model_requests > requests_before:
             frozen["technical_plan_validation_feedback"] = ""
