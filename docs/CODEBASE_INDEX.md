@@ -1030,7 +1030,7 @@ The product and technical brand is **DevAgent Studio**. User-visible labels use 
 
 - 历史预览在切到「代码」、返回当前开发分支或退出工作台时停机。`/revision-preview/run` 的 `start` 和 `stop` 用 `previewId` 匹配本轮启动；已登记的启动可取消其短期 Git、Maven 和依赖安装命令，切换时忽略旧轮次的停止和地址回执。`/preview-runtime/run` 的 `leave` 清理该应用的标准和历史预览，即使原历史预览订阅已断开。新的历史启动等待上一轮退出清理结束。
 
-- `.devagentstudio/runtime/revision-preview/<分支>/` 保存该应用唯一的 detached worktree。`services/revision_preview.py` 按工作区串行执行停止、回收和检出，检查磁盘目录及对应 Git 登记，清理失败时阻止新检出。停机后删除 worktree、空父目录和对应的 `launch-revision-*` 日志及进程登记目录，工作区清扫也会回收仅剩日志的历史目录。Java 从该 worktree 构建并分配独立 loopback 端口，前端的 Rsbuild/Vite 代理将 `/api` 指向它。没有 Maven 工程的分支直接启动前端。
+- `.devagentstudio/runtime/revision-preview/<分支>/` 保存该应用唯一的 detached worktree。`services/revision_preview.py` 按工作区串行执行停止、回收和检出，检查磁盘目录及对应 Git 登记，清理失败时阻止新检出。登记读取统一使用 `git worktree list --porcelain`，据记录边界提取路径并精确匹配预览父目录和分支目录标识，适用于缺少 `-z` 选项的 Git。停机后删除 worktree、空父目录和对应的 `launch-revision-*` 日志及进程登记目录，工作区清扫也会回收仅剩日志的历史目录。Java 从该 worktree 构建并分配独立 loopback 端口，前端的 Rsbuild/Vite 代理将 `/api` 指向它。没有 Maven 工程的分支直接启动前端。回归见 `tests.test_revision_preview`。
 
 - `services/preview_authorization_advisory.py` 根据当前应用配置、正式 TechnicalPlan、Builtin 本地操作与编排状态提供只读权限状态。Seed 未就绪时，启动和重启仍按实际服务结果收口。`/preview-runtime/run` 的 get/watch 动态发布 `runtime.authorizationAdvisory`，工作流启动结果发布 `authorization_advisory`。用户可在「权限数据库初始化」卡查看和刷新状态。模板权限请求继续使用原鉴权。
 

@@ -32,6 +32,7 @@ from app.services.revision_preview import (
     stop_revision_preview,
     stop_workspace_revision_previews,
 )
+from app.services.version_control import _run_git
 from app.services.workspace_process_registry import workspace_process_registry
 from app.utils.process_liveness import pid_is_running
 from tests.frontend_node_fixture import stub_frontend_node
@@ -120,19 +121,23 @@ class RevisionPreviewTests(unittest.TestCase):
             self.assertTrue(marker.exists(), "重复物化不应重建目录")
 
     def test_materialize_recovers_missing_registered_worktree(self) -> None:
-        """物理目录丢失但 Git 仍有注册时，应清理失效记录后重新物化。"""
+        """带中文和空格的路径可用旧版 Git 支持的命令回收残留登记。"""
 
         with tempfile.TemporaryDirectory() as workspace:
-            root = self._init_repository(Path(workspace))
+            root = Path(workspace).resolve() / "历史应用 workspace"
+            root.mkdir()
+            self._init_repository(root)
             self._git(root, "tag", "v1.0")
             materialized = materialize_revision(root, "v1.0")
 
             # 模拟应用退出或外部清理只删掉目录、没有执行 git worktree remove 的中断状态。
             shutil.rmtree(materialized)
             listed = self._git(root, "worktree", "list", "--porcelain")
-            self.assertIn(str(materialized), listed, "测试前置必须保留一条失效注册")
+            self.assertIn(f"worktree {materialized.as_posix()}\n", listed, "测试前置必须保留一条失效注册")
 
-            recovered = materialize_revision(root, "v1.0")
+            with patch("app.services.revision_preview._run_git", wraps=_run_git) as run_git:
+                recovered = materialize_revision(root, "v1.0")
+            run_git.assert_any_call(root, ["worktree", "list", "--porcelain"])
 
             self.assertEqual(recovered, materialized)
             self.assertTrue(recovered.is_dir(), "失效注册清理后应重新创建版本工作区")

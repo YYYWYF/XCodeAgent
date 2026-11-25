@@ -52,6 +52,11 @@ REVISION_PREVIEW_INSTALL_TIMEOUT_SECONDS = 600
 # 目录名只保留安全字符；分支名可以含 `/`（如 feature/login），不能直接当目录名。
 _UNSAFE_DIR_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 _REVISION_RUNTIME_SLUG = re.compile(r"[A-Za-z0-9._-]{1,60}-[0-9a-f]{8}")
+# Porcelain 每条记录先输出路径，再输出 HEAD 或 bare，路径本身可以包含空格和换行。
+_WORKTREE_PATH_FIELD = re.compile(
+    r"(?:\A|\n\n)worktree (.+?)\n(?=HEAD (?:[0-9a-f]{40}|[0-9a-f]{64})\n|bare\n)",
+    re.DOTALL,
+)
 
 
 class RevisionPreviewError(ValueError):
@@ -149,16 +154,16 @@ def _registered_preview_worktrees(root: Path) -> set[str]:
 
     if not (root / ".git").exists():
         return set()
-    result = _run_git(root, ["worktree", "list", "--porcelain", "-z"])
+    # Git 2.36 才引入 -z，历史预览统一使用各版本已有的 porcelain 格式。
+    result = _run_git(root, ["worktree", "list", "--porcelain"])
     if result.returncode != 0:
         raise RevisionPreviewError(f"无法读取历史预览的 Git worktree 登记：{result.stderr.strip()}")
     parent = os.path.normcase(str(root / REVISION_PREVIEW_ROOT))
     worktrees: set[str] = set()
-    for field in result.stdout.split("\0"):
-        if field.startswith("worktree "):
-            path = Path(field.removeprefix("worktree "))
-            if os.path.normcase(str(path.parent)) == parent and _REVISION_RUNTIME_SLUG.fullmatch(path.name):
-                worktrees.add(path.name)
+    for field in _WORKTREE_PATH_FIELD.findall(result.stdout):
+        path = Path(field)
+        if os.path.normcase(str(path.parent)) == parent and _REVISION_RUNTIME_SLUG.fullmatch(path.name):
+            worktrees.add(path.name)
     return worktrees
 
 
