@@ -313,6 +313,7 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
     changed_pages = changes.get("pages") or {}
     changed_entities = changes.get("entities") or {}
     changed_endpoints = changes.get("endpoints") or {}
+    snapshot_change_id = str(changes.get("changeId") or "").strip()
     # 本轮已按最新正式产物重新开发并通过门禁的产物：快照是"本轮相对基线"的一次性冻结结论，
     # 不会因开发完成而更新，所以必须单独记录这些目标已经重做完成，否则每次 reconcile
     # 都会把它们重新标回 changed，被测试入口门禁永远算作未完成。
@@ -367,7 +368,11 @@ def reconcile_development_artifacts(workspace: str | Path, state: ApplicationLif
         # 本轮变更类型：只有"已完成 + 本轮改过"才需要重做，未完成的产物本来就要开发。
         # 已经针对本轮变更重新开发完成的目标，变更结论已经落实，不再算作待重做。
         status = _target_change_status(target, changed_pages, changed_endpoints)
-        if status in {"added", "modified", "deleted"} and development_artifact_key(target) not in redeveloped:
+        checked_current_snapshot = bool(snapshot_change_id) and progress.checked_change_id == snapshot_change_id
+        if checked_current_snapshot:
+            # 同一快照的详细分析结果不能被写盘时的通用校准覆盖，否则每次检查都会反复改写状态。
+            pass
+        elif status in {"added", "modified", "deleted"} and development_artifact_key(target) not in redeveloped:
             progress = progress.model_copy(update={
                 "change_status": "changed",
                 "change_reason": (

@@ -152,26 +152,42 @@ class DevelopmentChangeSnapshotTests(unittest.TestCase):
         lifecycle.extensions = {"redevelopedChangedTargets": ["page:home"]}
         write_application_lifecycle(self.workspace, lifecycle)
 
-    def test_new_facts_reset_but_same_facts_preserve_redeveloped_targets(self) -> None:
-        """变化快照清空旧证据；相同快照再次写入不重复清空。"""
+    def test_new_revision_resets_but_same_revision_retry_preserves_redeveloped_targets(self) -> None:
+        """相同修订重试保留证据；新修订即使变更集合相同也必须清空旧证据。"""
 
         self._seed_redeveloped()
-        write_change_snapshot(self.workspace, technical_plan=self._plan(), product_plan=self._product())
+        write_change_snapshot(
+            self.workspace, technical_plan=self._plan(), product_plan=self._product(), change_id="revision-1",
+        )
         self.assertNotIn(
             "redevelopedChangedTargets",
             load_application_lifecycle(self.workspace).extensions,
         )
 
         self._seed_redeveloped()
-        write_change_snapshot(self.workspace, technical_plan=self._plan(), product_plan=self._product())
+        write_change_snapshot(
+            self.workspace, technical_plan=self._plan(), product_plan=self._product(), change_id="revision-1",
+        )
         self.assertEqual(
             load_application_lifecycle(self.workspace).extensions["redevelopedChangedTargets"],
             ["page:home"],
         )
 
+        write_change_snapshot(
+            self.workspace, technical_plan=self._plan(), product_plan=self._product(), change_id="revision-2",
+        )
+        self.assertNotIn(
+            "redevelopedChangedTargets",
+            load_application_lifecycle(self.workspace).extensions,
+        )
+        self.assertEqual(read_change_snapshot(self.workspace)["changeId"], "revision-2")
+
+        self._seed_redeveloped()
         changed = self._plan()
         changed["pages"][0]["_change_status"] = "deleted"
-        write_change_snapshot(self.workspace, technical_plan=changed, product_plan=self._product())
+        write_change_snapshot(
+            self.workspace, technical_plan=changed, product_plan=self._product(), change_id="revision-2",
+        )
         self.assertNotIn(
             "redevelopedChangedTargets",
             load_application_lifecycle(self.workspace).extensions,

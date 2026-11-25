@@ -462,6 +462,7 @@ def _technical_planning(state: ProjectState) -> dict:
             workspace,
             technical_plan=merged_state.get("technical_plan") or {},
             product_plan=merged_state.get("product_plan") or {},
+            change_id=lifecycle.active_formal_revision.change_id if lifecycle.active_formal_revision else None,
         )
         lifecycle = _sync_design_revision_artifact(
             workspace,

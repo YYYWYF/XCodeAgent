@@ -23,7 +23,6 @@ from app.branding import WORKSPACE_ARTIFACT_DIR
 
 def analyze_completed_target(
     *, project_plan: dict, baseline: dict, context: dict, target: DevelopmentArtifactTarget,
-    workspace: Path | None = None,
 ) -> tuple[str, str]:
     """复用正式 DAG 的覆盖与缺项规则，只返回当前目标状态，不调模型或组装 DAG。"""
 
@@ -40,7 +39,6 @@ def analyze_completed_target(
     facts = resolve_reuse_facts(
         confirmed_plan=baseline, unit_skeleton=skeleton, build_context=build_context,
         workspace_snapshot={}, formal_plan=project_plan,
-        workspace_root=workspace,
     )
     # 已确认但尚未执行的任务不能证明旧实现已经满足当前职责。
     completed = tuple(key for key, task in baseline["task_registry"].items()
@@ -70,7 +68,7 @@ def _target_analysis(workspace: Path, target: DevelopmentArtifactTarget, plan: d
     context = resolve_confirmation_context(workspace, scope, project_plan=plan)["build_context"]
     context = compile_authorization_overlay(plan, {**context, "scope": scope},
                                             application_config=read_application_config(workspace))
-    return analyze_completed_target(project_plan=plan, baseline=baseline, context=context, target=target, workspace=workspace)
+    return analyze_completed_target(project_plan=plan, baseline=baseline, context=context, target=target)
 
 
 def analyze_completed_development(workspace: str, *, change_id: str) -> dict[str, int]:
@@ -115,7 +113,11 @@ def analyze_completed_development(workspace: str, *, change_id: str) -> dict[str
                     raise ValueError(input_error)
                 status, reason = _target_analysis(root, target, plan, baseline)
             except (OSError, ValueError, TypeError, KeyError) as exc:
-                status, reason = "unavailable", f"变更检查暂无法完成：{exc}"
+                if progress.change_status == "changed":
+                    # 快照已确认本轮变化时，详细检查失败不能把已知变更降级为未知。
+                    status, reason = "changed", progress.change_reason or "本轮正式产物已变更，需要重新开发。"
+                else:
+                    status, reason = "unavailable", f"变更检查暂无法完成：{exc}"
             progress.change_status = status
             progress.change_reason = reason
             progress.checked_change_id = change_id

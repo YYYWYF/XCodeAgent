@@ -225,7 +225,7 @@ def candidate_tasks(context: dict) -> list[dict]:
 
     units = set(context["required_unit_ids"])
     name = context["endpoint_ids"][0].split(".")[0]
-    endpoint_unit = f"backend:endpoint:{name}-api:{name}.list"
+    endpoint_unit = f"backend:module:{name}-api"
     tasks = []
     if "backend:bootstrap" in units:
         tasks.append(task("backend:bootstrap::config", "backend:bootstrap", "backend.bootstrap", "backend/pom.xml", "backend:bootstrap"))

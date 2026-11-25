@@ -33,14 +33,15 @@ class CompletedDevelopmentAnalysisTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name)
         self.plan = project_plan()
         self.baseline = confirmed_baseline(self.plan, execution_scope())
-        for task in self.baseline["task_registry"].values():
-            task["status"] = "completed"
+        for task_record in self.baseline["task_registry"].values():
+            task_record["status"] = "completed"
         # 基础夹具仅声明裸 Unit；这里补齐真实新规划要求的精确 capability 覆盖。
         self.baseline["task_registry"]["orders:page"]["provides_capabilities"] = ["frontend.page:orders"]
         self.baseline["task_registry"]["backend:bootstrap::config"]["provides_capabilities"] = ["backend.bootstrap:database"]
         self.baseline["task_registry"]["orders:controller"]["provides_capabilities"] = [
             f"{kind}:orders-api:orders.list" for kind in (
-                "backend.endpoint.objects", "backend.repository", "backend.application_service", "backend.endpoint_controller",
+                "backend.foundation", "backend.endpoint.objects", "backend.repository",
+                "backend.application_service", "backend.endpoint_controller",
             )
         ]
         self.write_inputs()
@@ -58,18 +59,33 @@ class CompletedDevelopmentAnalysisTests(unittest.IsolatedAsyncioTestCase):
         state.development_artifacts.endpoints["orders-api"] = {"orders.list": done.model_copy(deep=True)}
         write_application_lifecycle(self.root, state)
 
-    def write_inputs(self):
-        """落盘正式目录和确认任务，不使用待确认计划。"""
+    def write_inputs(self, *, orders_changed: bool = False):
+        """落盘正式目录、确认任务和与当前内容一致的开发变更快照。"""
         write_json(self.root, ".devagentstudio/plans/product-plan.json", {
             "confirmation_status": "confirmed", "pages": self.plan["pages"],
         })
         write_json(self.root, ".devagentstudio/specs/requirement-spec.json", {"confirmation_status": "confirmed"})
         write_json(self.root, ".devagentstudio/specs/ui-designs.json", {"confirmation_status": "skipped"})
         write_json(self.root, ".devagentstudio/plans/technical-plan.json", self.plan)
+        write_json(self.root, ".devagentstudio/development-change-snapshot.json", {
+            "changeId": "revision",
+            "pages": {
+                name: "modified" if name == "orders" and orders_changed else "unchanged"
+                for name in ("orders", "customers")
+            },
+            "entities": {name: "unchanged" for name in ("Order", "Customer")},
+            "endpoints": {
+                f"{name}-api": {
+                    f"{name}.list": "modified" if name == "orders" and orders_changed else "unchanged"
+                }
+                for name in ("orders", "customers")
+            },
+        })
         write_json(self.root, ".devagentstudio/plans/build-task-plan.json", self.baseline)
         write_confirmed_endpoint_designs(self.root, self.plan)
         write_json(self.root, ".devagentstudio/application.json", {"schemaVersion": 6, "configRevision": 1,
-                   "appName": "分析", "authorization": {"enabled": False}, "auth": {"enable": False}})
+                   "appName": "分析", "authorization": {"enabled": False, "initialAdministratorSubjects": []},
+                   "auth": {"enable": False}})
 
     def analyze(self):
         """仅隔离上游正式产物物化，后续目标解析、合同覆盖和状态写入全部真实执行。"""
@@ -83,7 +99,7 @@ class CompletedDevelopmentAnalysisTests(unittest.IsolatedAsyncioTestCase):
         self.plan["api_contracts"][0]["endpoints"][0]["parameters"] = [
             {"name": "size", "in": "query", "schema": {"type": "integer", "default": 13}},
         ]
-        self.write_inputs()
+        self.write_inputs(orders_changed=True)
         baseline_bytes = (self.root / ".devagentstudio/plans/build-task-plan.json").read_bytes()
         self.assertEqual(self.analyze(), {"checked": 2, "changed": 2, "unavailable": 0})
         state = load_application_lifecycle(self.root)
@@ -118,6 +134,18 @@ class CompletedDevelopmentAnalysisTests(unittest.IsolatedAsyncioTestCase):
         page = load_application_lifecycle(self.root).development_artifacts.pages["orders"]
         self.assertEqual(page.initial_development_status, "completed")
         self.assertEqual(page.change_status, "unavailable")
+
+    def test_snapshot_changed_targets_are_not_downgraded_when_detailed_analysis_fails(self):
+        """已知本轮变化的目标即使映射检查失败也保持 changed，汇总和条目状态一致。"""
+        self.write_inputs(orders_changed=True)
+        with patch(
+            "app.services.completed_development_analysis._target_analysis",
+            side_effect=ValueError("当前映射暂不可读"),
+        ):
+            self.assertEqual(self.analyze(), {"checked": 2, "changed": 2, "unavailable": 0})
+        artifacts = load_application_lifecycle(self.root).development_artifacts
+        self.assertEqual(artifacts.pages["orders"].change_status, "changed")
+        self.assertEqual(artifacts.endpoints["orders-api"]["orders.list"].change_status, "changed")
 
     def test_missing_responsibilities_and_unexecuted_tasks_are_changes(self):
         """任务已确认但未执行也不能作为当前实现覆盖，复用相同缺项计算。"""

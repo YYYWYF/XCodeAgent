@@ -248,20 +248,22 @@ def build_development_change_snapshot(
 
 def write_change_snapshot(
     workspace: str | Path, *, technical_plan: dict[str, Any], product_plan: dict[str, Any],
+    change_id: str | None = None,
 ) -> dict[str, Any]:
-    """独立比较最终规划与迭代基线，并原子冻结开发入口使用的变更事实。"""
+    """冻结本次正式确认的开发变更事实，并用 changeId 区分相同内容的新修订。"""
 
     root = Path(workspace).expanduser().resolve()
     changes = build_development_change_snapshot(root, technical_plan=technical_plan, product_plan=product_plan)
     payload = {
         "schemaVersion": _SCHEMA_VERSION,
         "sourceBranch": read_workspace_branch_name(root),
+        "changeId": change_id or None,
         "writtenAt": datetime.now(UTC).isoformat(),
         **changes,
     }
     path = change_snapshot_path(root)
     previous = read_change_snapshot(root)
-    if previous is None or any(
+    if previous is None or previous.get("changeId") != payload["changeId"] or any(
         previous.get(field) != payload.get(field)
         for field in ("pages", "entities", "endpoints")
     ):

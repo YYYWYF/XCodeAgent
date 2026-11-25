@@ -654,6 +654,7 @@ def technical_planning_confirm(state: ProjectState) -> dict[str, Any]:
     # 开发资格独立基于最终正式规划与迭代起始基线计算，不能复制计划审阅标记。
     write_change_snapshot(
         workspace, technical_plan=confirmed_plan, product_plan=state.get("product_plan") or {},
+        change_id=lifecycle.active_formal_revision.change_id if lifecycle.active_formal_revision else None,
     )
     revision_continuation: dict[str, Any] = {}
     active_revision = lifecycle.active_formal_revision

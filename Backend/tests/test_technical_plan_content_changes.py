@@ -206,7 +206,42 @@ class ChangeSetTests(unittest.TestCase):
         prompt = _changeset_prompt({}, self.document, "删除响应体 list 中的 phone 字段", [])
         self.assertIn("只写身份值本身，禁止写成 id=", prompt)
         self.assertIn("/api_contracts/personnel_detail_contract/schemas/PersonnelDetailListItem/properties/phone", prompt)
+        self.assertIn("/parameters/query.current/required", prompt)
         self.assertIn("只删除接口响应体字段时，不要删除实体字段", prompt)
+
+    def test_parameter_bare_name_error_identifies_composite_identity(self):
+        """查询参数存在时，裸名称应指向正确的 in.name 路径而不是误报目标缺失。"""
+        _endpoint(self.document)["parameters"] = [
+            {"name": "current", "in": "query", "required": False, "schema": {"type": "integer", "default": 1}},
+            {"name": "pageSize", "in": "query", "required": False, "schema": {"type": "integer", "default": 20}},
+        ]
+        endpoint_path = f"/api_contracts/greeting_contract/endpoints/{_ENDPOINT_ID}/parameters"
+        for name in ("current", "pageSize"):
+            with self.subTest(name=name):
+                operation = {
+                    "op": "replace", "path": f"{endpoint_path}/{name}/required",
+                    "expectedBefore": False, "value": True,
+                }
+                with self.assertRaisesRegex(ValueError, f"query\\.{name}"):
+                    apply_technical_plan_changeset(
+                        self.document, _changeset(self.document, "查询参数改为必填", [operation]),
+                        request="查询参数改为必填",
+                    )
+
+        operations = [
+            {
+                "op": "replace", "path": f"{endpoint_path}/query.{name}/required",
+                "expectedBefore": False, "value": True,
+            }
+            for name in ("current", "pageSize")
+        ]
+        after, _effects = apply_technical_plan_changeset(
+            self.document, _changeset(self.document, "查询参数改为必填", operations),
+            request="查询参数改为必填",
+        )
+        parameters = _endpoint(after)["parameters"]
+        self.assertEqual([item["required"] for item in parameters], [True, True])
+        self.assertEqual([item["schema"]["default"] for item in parameters], [1, 20])
 
     def test_response_schema_field_delete_preserves_entity(self):
         """按正确稳定路径删除响应字段时，实体字段保持原样。"""

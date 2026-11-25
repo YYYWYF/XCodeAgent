@@ -60,6 +60,17 @@ def _list_index(items: list[Any], segment: str, path: str) -> int | None:
     matches = [i for i, item in enumerate(items) if item_identity(item) == segment]
     if len(matches) > 1:
         raise ValueError(f"修改路径匹配到多个同身份节点：{path}。")
+    if not matches:
+        parameter_identities = [
+            item_identity(item)
+            for item in items
+            if isinstance(item, dict) and item.get("in") and item.get("name") == segment
+        ]
+        if parameter_identities:
+            raise ValueError(
+                f"参数路径必须使用 in.name 复合身份，不能只写参数名 {segment}；"
+                f"请改用 {'、'.join(parameter_identities)}：{path}。"
+            )
     return matches[0] if matches else None
 
 
