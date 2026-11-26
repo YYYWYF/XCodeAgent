@@ -12,6 +12,7 @@ from typing import Any
 from langchain_core.tools import tool
 
 from app.agents.frontend.read_ledger import FrontendReadLedger
+from app.agents.frontend.retry_guard import FrontendRetryGuard
 from app.agents.frontend.step_checks import FrontendStepChecks
 from app.agents.frontend.task_packet import API, PAGE, SERVICE, virtual_file
 from app.services.agent_memory_runtime import AGENT_MEMORY_VIRTUAL_PATH
@@ -50,6 +51,8 @@ class FrontendTaskExecutionScope:
         self.run_id = current_run_id() or None
         self.reads = FrontendReadLedger()
         self.core_docs_read: set[tuple[str, str]] = set()
+        self.core_docs_body: dict[tuple[str, str], tuple[str, str]] = {}
+        self.retry = FrontendRetryGuard(self)
         self.revisions: dict[tuple[int, str], deque] = {}
         self.revert_warned: set[tuple[int, str]] = set()
         self.mutation_notice: dict | None = None
@@ -77,6 +80,7 @@ class FrontendTaskExecutionScope:
             self.checks.clear()
             self.reads.clear()
             self.core_docs_read.clear()
+            self.core_docs_body.clear()
             self.graph_queries.clear()
             self.revisions.clear()
             self.revert_warned.clear()
@@ -85,10 +89,13 @@ class FrontendTaskExecutionScope:
     def record(self, event: str, **fields: Any) -> None:
         """追踪步骤身份与权限决策，避免记录源码和模型提交的证据正文。"""
         if self.trace:
-            active = self.current or {}
-            self.trace(event, run_id=self.run_id, task_id=active.get("id"), unit_id=active.get("unit_id"),
-                       task_kind=active.get("kind"), step_id=f"step_{self.step}" if self.step else None,
-                       **fields)
+            active = self.current or (self.packets[self.index] if self.index < len(self.packets) else {})
+            try:
+                self.trace(event, run_id=self.run_id, task_id=active.get("id"), unit_id=active.get("unit_id"),
+                           task_kind=active.get("kind"), step_id=f"step_{self.step}" if self.step else None,
+                           **fields)
+            except Exception:
+                pass  # 观测失败不能改变执行结果。
 
     def note_mutation(self, path: str, before: str | None, after: str) -> None:
         """记录当前步骤有界版本序列，只对真实回退发送一次提示。"""
@@ -116,6 +123,7 @@ class FrontendTaskExecutionScope:
     def transition(self, name: str, arguments: dict) -> dict:
         """仅接受顺序启动、相邻推进及最后一步完成。"""
         with self.lock:
+            self.retry.check()
             task_id = arguments.get("task_id")
             if self.index >= len(self.packets) or task_id != self.packets[self.index]["id"]:
                 raise ValueError("任务 ID 与当前派发顺序不匹配")
@@ -231,6 +239,7 @@ class FrontendTaskExecutionScope:
 
     def authorize(self, name: str, raw_path: Any) -> tuple[str, Path | None]:
         """在工具执行前校验精确路径和操作；默认拒绝未登记的工具。"""
+        self.retry.check()
         if self.current is None:
             raise ValueError("没有活动的前端任务上下文")
         if name not in _OPERATIONS:

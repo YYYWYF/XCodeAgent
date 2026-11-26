@@ -8,6 +8,7 @@ from app.agents.frontend.execution_scope import (
     FRONTEND_ENGINEERING_DOC, FRONTEND_TEMPLATE_AGENTS_DOC, FrontendTaskExecutionScope,
 )
 from app.agents.frontend.project_plan_context import FrontendTaskProjectionError
+from app.agents.frontend.retry_guard import FrontendTaskRetryExhausted
 from app.agents.frontend.task_packet import PAGE, STATIC, frontend_task_packet, task_kind
 from app.agents.frontend.static_prompt import _frontend_generation_prompt
 from app.agents.frontend.trace import frontend_agent_trace
@@ -137,6 +138,7 @@ def _invoke_live_frontend_agent(
         "messages": [
             {
                 "role": "user",
+                **({"id": "frontend-build-initial-tasks"} if scope else {}),
                 "content": (_scoped_generation_prompt(scope.packets) if scope else _frontend_generation_prompt(
                     project_plan=project_plan,
                     build_task_plan=build_task_plan,
@@ -211,13 +213,18 @@ def generate_frontend_with_deep_agent(
     for group, group_scope in groups:
         if not group:
             continue
-        with group_scope.task_context() if group_scope else nullcontext():
-            agent_note = _invoke_live_frontend_agent(
-                project_plan=project_plan, build_task_plan=build_task_plan, tasks=group,
-                workspace=workspace, selected_skill_names=selected_skill_names,
-                page_template=page_template, ui_designs=ui_designs,
-                on_tool_activity=on_tool_activity, scope=group_scope,
-            )
+        try:
+            with group_scope.task_context() if group_scope else nullcontext():
+                agent_note = _invoke_live_frontend_agent(
+                    project_plan=project_plan, build_task_plan=build_task_plan, tasks=group,
+                    workspace=workspace, selected_skill_names=selected_skill_names,
+                    page_template=page_template, ui_designs=ui_designs,
+                    on_tool_activity=on_tool_activity, scope=group_scope,
+                )
+        except FrontendTaskRetryExhausted:
+            if group_scope is None or not group_scope.retry.termination:
+                raise
+            agent_note = _terminated_task_reports(group, group_scope)
         reports = create_agent_task_results(
             group, agent_note,
             executed_by={
@@ -235,3 +242,23 @@ def generate_frontend_with_deep_agent(
                                        "runner_protocol_error")
             results[task["id"]] = report
     return [results[task["id"]] for task in tasks]
+
+
+def _terminated_task_reports(tasks: list[dict], scope: FrontendTaskExecutionScope) -> str:
+    """从正式完成回执与证据构造报告；外层继续执行原平台验收。"""
+    termination = scope.retry.termination
+    reports = []
+    for task in tasks:
+        identity = task["id"]
+        status = scope.outcomes.get(identity)
+        if status in {"completed", "already_satisfied"} and scope.evidence.get(identity):
+            reports.append({"task_id": identity, "status": status,
+                            "summary": "任务已通过正式完成工具确认；后续任务执行终止。"})
+            continue
+        current = identity == termination["task_id"]
+        category = "tool_error" if current else "runner_crash"
+        reason = termination["reason"] if current else "前端调用已终止，本任务未取得成功完成回执，等待显式重试。"
+        failure = _task_failure(task, reason, category)
+        reports.append({"task_id": identity, "status": "failed", "summary": reason,
+                        "failure_category": failure["failure_category"], "failure_reason": reason})
+    return json.dumps({"task_results": reports}, ensure_ascii=False)

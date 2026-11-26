@@ -27,7 +27,7 @@ class FrontendSkillLoadingPromptTests(unittest.TestCase):
                         "frontend_standards": ["FE-API-BOUNDARY"],
                     }}]
                     scope = FrontendTaskExecutionScope(workspace, packets)
-                    with patch("app.agents.frontend.agent.create_deep_agent") as create:
+                    with patch("app.agents.frontend.agent.create_guarded_frontend_agent") as create:
                         create_frontend_agent(
                             object(), workspace, user_skills_backend=StateBackend(),
                             agent_memory_backend=StateBackend(), build_scope=scope,

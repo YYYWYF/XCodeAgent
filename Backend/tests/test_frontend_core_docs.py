@@ -178,13 +178,12 @@ class FrontendCoreDocsTests(unittest.TestCase):
     def test_partial_and_truncated_results_do_not_count(self):
         """同步异步的分页、满页、输出长度截断及空正文均拒绝登记。"""
         for asynchronous in (False, True):
-            scope = FrontendTaskExecutionScope(str(self.root), [_packet(API)])
-            with scope.task_context():
-                for source, args, reason in (("one\ntwo\n", {"offset": 1}, "从首行"),
+            for source, args, reason in (("one\ntwo\n", {"offset": 1}, "从首行"),
                                      ("one\n" * 2000, {}, "无法确认已到末尾"),
                                      ("one\n" * 2100, {}, "无法确认已到末尾"),
                                      ("x" * 150000, {}, "截断"), ("", {}, "正文为空")):
-                    with self.subTest(asynchronous=asynchronous, args=args, length=len(source)):
+                scope = FrontendTaskExecutionScope(str(self.root), [_packet(API)])
+                with scope.task_context(), self.subTest(asynchronous=asynchronous, args=args, length=len(source)):
                         self.document.write_text(source)
                         tools = self._run(scope, [[_read(AGENTS, "incomplete", **args)]], asynchronous)
                         self.assertEqual(tools["incomplete"].status, "error")

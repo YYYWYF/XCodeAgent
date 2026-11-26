@@ -4,6 +4,7 @@ from deepagents.backends.protocol import BackendProtocol
 from app.agents.code_graph_guidance import CODE_GRAPH_TASK_EXECUTION_GUIDANCE
 from app.agents.frontend.execution_scope import FrontendTaskExecutionScope
 from app.agents.frontend.execution_middleware import FrontendExecutionMiddleware
+from app.agents.frontend.context_guard import create_guarded_frontend_agent
 from app.agents.frontend.file_backend import FrontendScopedFilesystemBackend
 from app.agents.workspace_scope import (
     create_workspace_backend,
@@ -118,7 +119,8 @@ def create_frontend_agent(
         execute_tool,
         *(build_scope.control_tools() if build_scope else []),
     ]
-    return create_deep_agent(
+    factory = (lambda **kwargs: create_guarded_frontend_agent(build_scope, **kwargs)) if build_scope else create_deep_agent
+    return factory(
         name="frontend-generation-agent",
         model=model,
         system_prompt="\n\n".join(

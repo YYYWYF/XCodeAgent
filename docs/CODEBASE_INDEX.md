@@ -1,5 +1,7 @@
 # DevAgent Studio Codebase Index
 
+受控前端 Build 的 `retry_guard.py` 以唯一 `FRONTEND_MAX_RETRIES=3` 管理任务、错误类别及操作目标的独立失败链，首次失败计为 0，第四次失败确定性终止。`execution_middleware.py` 在串行工具结果边界统一统计，`execution_scope.py` 缓存成功完整读取的两份核心规范正文，`generator.py` 在调用边界归并终止与正式完成回执。`context_guard.py` 仅为受控页面/API 在 DeepAgents 0.6.12 官方工厂的局部命名空间组装一个保护摘要器，保留原位置和事件提交机制，不修改全局；空摘要、占位和摘要服务错误在提交前独立重试。末尾模型门禁在 Memory 注入后恢复当前契约、步骤、权限、规范正文及未解决失败，核对完整请求预算和工具配对。Static 与其他 Agent 不受影响，不新增文件 Hash、文件版本比较、配置项或业务持久化。外层失败任务仍等待显式重试。回归：`tests.test_frontend_build_harness`、`tests.test_frontend_context_guard_edges`；实施说明见 [前端 Build Harness 验收](testing/frontend-build-harness.md)。
+
 转发推理的 `metadata.projectId` 由 `agents/transmit_chat_model.py` 优先读取 Runnable 项目身份，再按当前 worker 或独立 AG-UI 动作的工作区只读生命周期 `application.id`。覆盖普通／临时工作区问答、独立模型辅助动作和后台 UI 生成，技术规划问答使用已校验的应用 ID。工作区缺少正式身份仍可调用模型。回归见 `tests.test_model_transport_retry`。
 
 模型 TTFT 由 `observability/model_stream_timing.py` 识别文本、推理及工具名称/参数增量，统一 Telemetry 与 `agent_execution_trace.py` 分别按原毫秒取整方式采集；两个分量共享起止边界并满足总耗时加和，缺失证据保留 null。Transmit 完整结果补全 Chunk 带最小观测标记，避免官方流式入口将其误采。`build_model_timing_report.py` 为 Baseline 提供有效配对、nearest-rank P95 和覆盖率统计，不参与原质量门禁。回归见 `tests.test_model_stream_timing`、`tests.test_build_observability`、`tests.test_frontend_agent_trace`。

@@ -83,16 +83,18 @@ class FrontendExecutionMiddleware(AgentMiddleware):
             permission_decision="denied",
             permission_denial_reason=reason,
         )
-        return ToolMessage(
+        return self.scope.retry.process(request, ToolMessage(
             content=reason,
             status="error",
             name=name,
             tool_call_id=request.tool_call["id"],
-        )
+        ), denied=True)
 
     def wrap_tool_call(self, request, handler):
         """串行校验同步工具及其完整执行。"""
         with self.scope.lock:
+            self.scope.retry.check()
+            identity, step = self.scope.retry.identity(), self.scope.step
             path = ""
             try:
                 path, physical, version = self._prepare(request)
@@ -101,13 +103,16 @@ class FrontendExecutionMiddleware(AgentMiddleware):
                     result = handler(request)
                 finally:
                     FILE_ACCESS.reset(token)
-                return self._finish(request, path, physical, version, result)
+                return self.scope.retry.process(request, self._finish(request, path, physical, version, result),
+                                                identity=identity, step=step)
             except (ValueError, PermissionError) as exc:
                 return self._denied(request, str(exc), path)
 
     async def awrap_tool_call(self, request, handler):
         """异步工具沿用步骤授权，并等待当前命令结束后再执行下一项。"""
         async with self.scope.async_lock:
+            self.scope.retry.check()
+            identity, step = self.scope.retry.identity(), self.scope.step
             path = ""
             try:
                 path, physical, version = self._prepare(request)
@@ -116,7 +121,8 @@ class FrontendExecutionMiddleware(AgentMiddleware):
                     result = await handler(request)
                 finally:
                     FILE_ACCESS.reset(token)
-                return self._finish(request, path, physical, version, result)
+                return self.scope.retry.process(request, self._finish(request, path, physical, version, result),
+                                                identity=identity, step=step)
             except (ValueError, PermissionError) as exc:
                 return self._denied(request, str(exc), path)
 
@@ -143,12 +149,10 @@ class FrontendExecutionMiddleware(AgentMiddleware):
             if path in FRONTEND_CORE_DOCS:
                 error = _core_document_read_error(result.content, request.tool_call["args"])
                 if error:
-                    return self._denied(
-                        request,
-                        f"{error}；请以 tool_error 报告任务失败；不得重试扩大读取范围或搜索替代文档",
-                        path,
-                    )
+                    return result.model_copy(update={"status": "error", "content":
+                        f"{error}；请以 tool_error 报告任务失败；不得重试扩大读取范围或搜索替代文档"})
                 self.scope.mark_core_doc_read(path)
+                self.scope.core_docs_body[(self.scope.current["id"], path)] = (result.content, result.tool_call_id)
             if isinstance(result.content, str):
                 fields.update(
                     self.scope.reads.observe(
