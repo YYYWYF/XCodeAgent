@@ -2,7 +2,7 @@
 
 import os
 
-from app.agents.frontend.file_backend import file_revision
+from app.agents.frontend.file_backend import file_revision, file_views_match
 from app.services.frontend_step_acceptance import evaluate_frontend_page
 
 
@@ -25,13 +25,18 @@ class FrontendStepChecks:
 
     def _read(self, path: str) -> bytes:
         """读取用于验收的有界文件，并拒绝检查期间出现的版本漂移。"""
-        self.versions[path] = self._version(path)
         _, physical = self.scope.authorize("read_file", path)
+        path_info = physical.stat()
+        self.versions[path] = file_revision(path_info)
         fd = os.open(physical, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(fd, "rb") as stream:
-            if file_revision(os.fstat(stream.fileno())) != self.versions[path]:
-                raise ValueError("打开文件时版本已变化")
+            fd_info = os.fstat(stream.fileno())
+            if not file_views_match(path_info, fd_info):
+                raise ValueError("打开文件时身份或内容元数据不一致")
             data = stream.read(512_001)
+            # 同类查询分别校验，保留句柄 ctime 对读取期间真实修改的检测。
+            if file_revision(os.fstat(stream.fileno())) != file_revision(fd_info):
+                raise ValueError("读取期间文件版本已变化")
         if self._version(path) != self.versions[path]:
             raise ValueError("检查期间文件版本已变化")
         return data

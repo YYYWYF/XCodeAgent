@@ -22,9 +22,20 @@ _NEWLINE = re.compile(r"\r\n|\r|\n")
 
 
 def file_revision(stat_result) -> tuple:
-    """读取能关联文件身份与外部修改的版本信息。"""
+    """读取版本信息；完整版本仅用于同类 stat 或 fstat 的前后比较。"""
     info = stat_result
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def file_views_match(path_info, fd_info) -> bool:
+    """核对路径和句柄的文件身份及共有内容元数据，拒绝未知身份。"""
+    # Windows 的路径 ctime 可能是创建时间，句柄 ctime 则是元数据变更时间。
+    # 跨调用只比较身份、大小和修改时间，各自的 ctime 留给前后稳定性检查。
+    return bool(path_info.st_ino and fd_info.st_ino) and (
+        os.path.samestat(path_info, fd_info)
+        and path_info.st_size == fd_info.st_size
+        and path_info.st_mtime_ns == fd_info.st_mtime_ns
+    )
 
 
 def _replacement(source: str, old: str, new: str, replace_all: bool):
@@ -107,9 +118,14 @@ class FrontendScopedFilesystemBackend(AutoDedupFilesystemBackend):
     def _update(self, file_path, path, *, content=None, edit=None) -> EditResult:
         """在同一个文件描述符上读、校验版本、比较和写回，避免先截断再比较。"""
         try:
+            path_info = path.stat()
+            path_version = file_revision(path_info)
             fd = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
             with os.fdopen(fd, "r+b") as stream:
-                version = file_revision(os.fstat(stream.fileno()))
+                fd_info = os.fstat(stream.fileno())
+                if not file_views_match(path_info, fd_info):
+                    return EditResult(error="文件身份或内容元数据不一致，请读取当前版本后重试。")
+                version = file_revision(fd_info)
                 original = stream.read()
                 occurrences = 0
                 if edit is not None:
@@ -119,11 +135,12 @@ class FrontendScopedFilesystemBackend(AutoDedupFilesystemBackend):
                     content, occurrences = replacement
                 candidate = content.encode("utf-8")
                 if (file_revision(os.fstat(stream.fileno())) != version
-                    or file_revision(self._resolve_path(file_path).stat()) != version):
+                    or file_revision(self._resolve_path(file_path).stat()) != path_version):
                     return EditResult(error="文件已变化，请读取当前版本后重试。")
                 if candidate != original:
                     before = capture_inclusion_before(path)
-                    if file_revision(path.stat()) != version:
+                    if (file_revision(os.fstat(stream.fileno())) != version
+                        or file_revision(self._resolve_path(file_path).stat()) != path_version):
                         return EditResult(error="文件已变化，请读取当前版本后重试。")
                     stream.seek(0)
                     stream.write(candidate)

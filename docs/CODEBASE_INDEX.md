@@ -44,7 +44,7 @@ Build 执行入口 `graph/subgraphs/build.py` 按正式 DAG 和 Run 摘要绑定
 
 [Frontend Engineering Standards](../Backend/app/builtin_skills/frontend-engineering-standards/SKILL.md) 是生成应用的工程规范入口。普通 Build 在工程验收中对 TypeScript AST 发现的页面直连 HTTP、UI `request` 调用业务 API 和可辨识查询绕过 ahooks `useRequest` 记录非阻断告警。查询必须能经已有依赖的导出及正式 Endpoint 绑定识别。非 AST 工程失败沿原 Repair 机制处理。追踪新增 `frontend_step_transition` 与 `frontend_tool_permission`，同条件复测可按 BuildRun、任务 ID 比较模型用量、工具结果大小、重复读取、Code Graph 查询、耗时、验收与 Repair。回归见 `tests.test_frontend_build_execution` 和 `tests.test_frontend_project_plan_context`。
 
-前端步骤收敛在 `agents/frontend/task_packet.py` 与 `generator.py` 先确定方案再集中实现。`file_backend.py` 在原步骤授权与串行边界内验证替换、比较完整候选字节，相等时保留原工具成功响应并附加 `no_change`。实际改动保留换行与原编辑上报。同文件同一步骤的 A→B→A 最多提示一次。`read_ledger.py` 仅存版本、已交付的范围和重复统计，工具按原协议返回正文。回归见 `tests.test_frontend_step_convergence` 和 `tests.test_frontend_build_execution`。
+前端步骤收敛在 `agents/frontend/task_packet.py` 与 `generator.py` 先确定方案再集中实现。`file_backend.py` 在原步骤授权与串行边界内验证替换、比较完整候选字节，相等时保留原工具成功响应并附加 `no_change`。实际改动保留换行与原编辑上报。同文件同一步骤的 A→B→A 最多提示一次。`file_backend.py` 写入与 `step_checks.py` 验收读取分别比较路径 `stat`、句柄 `fstat` 各自的前后完整版本；跨调用仅核对可用文件身份、大小与修改时间，避免 Windows 两类 `ctime` 语义不同造成误报，同时保留真实变化检测。`read_ledger.py` 仅存路径版本、已交付的范围和重复统计，工具按原协议返回正文。回归见 `tests.test_frontend_file_versions`、`tests.test_frontend_step_convergence` 和 `tests.test_frontend_build_execution`。
 
 `agents/frontend/step_checks.py` 在 Step 2→3 核对入口结构，在 Step 3→4 通过 `services/frontend_step_acceptance.py` 执行现有 TypeScript AST 工程规则。页面入口缺失仍阻断；AST 失败与不可判定结果仅告警，可继续推进。Step 4 在有文件版本变化时复验。`engineering_acceptance_verifier.py` 复用同一规则并保留逐规则 `passed`、`failed` 或 `not_evaluable` 证据。受控 Build 只发现工程规范内置 Skill，并在任务激活后读取模板 AGENTS；工程规范的示例仍按需读取。
 
