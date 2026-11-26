@@ -54,6 +54,10 @@ class TechnicalPlanCatalogPartsTests(TestCase):
         stages = [prompt.splitlines()[0] for prompt in self.model.calls]
         for stage, count in (("catalog_registry", 1), ("catalog_entity", 2), ("catalog_endpoints", 2), ("catalog_bindings", 3)):
             self.assertEqual(sum(stage in item for item in stages), count)
+        for prompt in self.model.calls:
+            if "catalog_endpoints" in prompt.splitlines()[0]:
+                self.assertIn("默认只返回操作是否成功，并在 summary 中写明", prompt)
+                self.assertIn("只有已确认需求明确要求由该接口返回记录标识或其他数据时", prompt)
         contexts = [json.loads(prompt.splitlines()[-1]) for prompt in self.model.calls[:8]]
         self.assertNotIn("fields", catalog_response(self.model.calls[0], self.catalog)["entities"][0])
         self.assertEqual({page["pageId"] for page in contexts[2]["pages"]}, {"orders", "order_detail"})

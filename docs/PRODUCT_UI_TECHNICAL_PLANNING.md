@@ -212,7 +212,9 @@ API 契约中，`required` 约束请求参数和请求体。响应 Schema 在 `p
 
 列表查询默认分页，用户明确要求不分页时按该要求生成。分页接口的查询参数使用 `current` 和 `pageSize`。响应采用通用泛型 `PageResult<T>`，Schema 名称及 `response_schema_ref` 均使用 `PageResult`。响应包含 `total`、`current`、`pageSize`、`list` 四个同级字段。前三个字段为整数，`list` 为数组，`list.items` 定义列表项类型 `T`。
 
-新增、更新和删除默认共用当前 Contract 的 `OperationResult` 响应 Schema，只包含布尔属性 `success`，例如 `{"success":true}`。业务明确要求返回记录标识或其他数据时，响应按要求定义。删除接口明确要求无响应体时，`response_schema_ref` 取 `null`。
+生成接口目录时，新增、更新和删除的 `summary` 默认写明只返回操作是否成功。已确认需求明确要求由该写接口返回记录标识或其他数据时，`summary` 才描述相应的返回数据。
+
+契约阶段为默认写操作生成当前 Contract 共享的 `OperationResult` 响应 Schema，只包含布尔属性 `success`（例如 `{"success":true}`）。明确要求返回业务数据时，响应按要求定义。删除接口明确要求无响应体时，`response_schema_ref` 取 `null`。
 
 实体描述用一句话说明对象及业务用途，避免罗列字段。每个实体在必填的唯一标识字段的 `label` 末尾加「（唯一标识）」。优先沿用已有的单字段业务标识。需求未指定时，技术规划可以选定一个稳定、每条记录都有值且适合在实体内保持唯一的业务字段。没有合适的字段时，显式声明整数 `id`，实体语义类型使用 `number`。接口响应、请求和路径参数保持同一身份类型，文本标识使用 `string`，整数标识使用 `integer`。技术规划的兜底契约也从显式字段生成。API JSON Schema 中，正整数业务输入使用 `integer` 和 `minimum=1`，非负数值包含 `minimum=0`。实体字段阶段将数值约束写入说明。
 

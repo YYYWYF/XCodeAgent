@@ -155,15 +155,18 @@ def entity_prompt(requirement: dict, registry: dict, identity: dict, *, owned_en
     }
     rules = (
         "【1. 生成业务字段】\n"
+        f"本轮唯一生成目标：{identity['name']}（entity.id={identity['id']}）。\n"
         "只定义当前实体的完整业务语义字段，不重新声明其他实体，不凭空增加产品没有的枚举值。\n"
-        "目录的 owned_entity_ids 表示业务从属。根据业务操作确定哪个实体记录关联，以及是否需要对应字段。\n"
-        "owned_entities 提供已生成的直接从属实体及其字段，供本轮只读参考。"
-        "当前实体确实需要保存从属实体的记录标识时，使用该实体已声明的唯一标识及其字段类型。\n\n"
         "【2. 确定唯一标识】\n"
         f"{RECORD_IDENTITY_RULE}\n"
         "【3. 命名和输出】\n"
         "字段名使用 snake_case。实体自身的属性直接按属性含义命名，不重复当前实体的名称或 ID。"
-        "例如，商品分类自身的编码用 code，不用 category_code；引用其他实体的字段可保留用于区分关联对象的前缀。\n"
+        "例如，商品分类自身的编码用 code。\n"
+        "【4. 从属实体字段引用】\n"
+        "目录的 owned_entity_ids 表示业务从属。owned_entities 提供已生成的直接从属实体及其字段，供本轮只读参考。\n"
+        "当前实体需要与从属实体进行关联时，建议使用从属实体的唯一标识及其字段类型。"
+        "引用从属实体字段时，字段名建议使用「xx_目标字段名」,表意清晰。\n"
+        "【5. 字段类型和输出】\n"
         "type 为 text/long_text/number/decimal/date/datetime/enum/boolean。\n"
         "这里是实体语义字段，不是 API JSON Schema。数量、库存等整数使用 type=number，正整数、非负等约束写入 description。"
         "不得输出 API JSON Schema 的 integer、minimum、maximum 或 properties。\n"
@@ -171,7 +174,6 @@ def entity_prompt(requirement: dict, registry: dict, identity: dict, *, owned_en
     )
     context = {
         "entity": identity,
-        "registry": registry["entities"],
         "owned_entities": owned_entities or [],
         "pages": [
             _page_facts(page)
@@ -196,6 +198,9 @@ def endpoints_prompt(requirement: dict, identity: dict, entities: list, complete
         "现有接口确实缺少业务操作或所需数据时才补齐能力，不为解决映射格式错误重复创建接口。\n\n"
         f"{LIST_QUERY_RULE}"
         "在 summary 中写明列表是否分页。分页参数和响应 Schema 由契约阶段生成。\n\n"
+        "【新增、更新与删除响应】\n"
+        "已确认需求未明确要求写接口返回业务数据时，默认只返回操作是否成功，并在 summary 中写明。"
+        "只有已确认需求明确要求由该接口返回记录标识或其他数据时，才在 summary 中说明所需数据。\n\n"
         "【3. 确定请求方法、路径和记录标识】\n"
         "GET 只能读取，创建不能代替更新已有记录。\n"
         "path 输出以 /api/ 开头的完整接口路径，沿用 base_path 中已有的 /api 前缀，避免生成 /api/api/。"
