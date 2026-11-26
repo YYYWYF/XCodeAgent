@@ -1,6 +1,5 @@
 import { CloudUploadOutlined, LoadingOutlined, SettingOutlined } from '@ant-design/icons'
 import { Alert, Input, Modal, Progress, Steps } from 'antd'
-import { useState } from 'react'
 import { cx } from '../utils'
 import { dispatchOpenSettings } from '../utils/openSettingsEvent'
 import DatabaseDeliveryPreview from './DatabaseDeliveryPreview'
@@ -43,7 +42,6 @@ export default function PublishBranchModal({
   onCancel,
   onGenerate
 }: PublishModalProps): JSX.Element {
-  const [databaseDeliveryReady, setDatabaseDeliveryReady] = useState(false)
   // 未配置仓库地址时不允许提交：后端 VersionPublishRequest.repoUrl 是 min_length=1 的必填字段，
   // 直接放行只会让 Pydantic 抛 string_too_short，对用户没有指导意义。这里在弹窗内直接阻断，
   // 并提供「去设置」入口跳转到左侧菜单的设置面板。
@@ -59,8 +57,7 @@ export default function PublishBranchModal({
     !descriptionGenerating &&
     !repoUrlMissing &&
     !!prefix.trim() &&
-    !!description.trim() &&
-    (!isBuiltinDatabase || databaseDeliveryReady)
+    !!description.trim()
   // 弹窗关闭闸门：「提交推送」和「AI 生成变更说明」任一在进行都不允许关闭。
   // 否则生成中的流式 token 会写到已卸载组件的 state，且用户看不见自己刚才在写什么。
   const blockClose = !!generating || descriptionGenerating
@@ -172,7 +169,6 @@ export default function PublishBranchModal({
                 <DatabaseDeliveryPreview
                   workspaceRoot={workspaceRoot}
                   branchName={branchName}
-                  onReadyChange={setDatabaseDeliveryReady}
                 />
               )}
               <div className={cx('workbench-generate-field')}>

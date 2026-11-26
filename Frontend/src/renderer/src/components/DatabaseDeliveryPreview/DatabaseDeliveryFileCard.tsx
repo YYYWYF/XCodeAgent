@@ -9,7 +9,7 @@ import {
 import { Button, Spin } from 'antd'
 import hljs from 'highlight.js/lib/core'
 import sql from 'highlight.js/lib/languages/sql'
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { cx } from '../../utils'
 import { readDeliveryFile } from './databaseDeliveryPreview'
 import type { DeliveryFileName, DeliveryFileState } from './databaseDeliveryPreview'
@@ -20,7 +20,6 @@ type Props = {
   path: string
   pathError: string
   name: DeliveryFileName
-  onReadyChange: (ready: boolean) => void
 }
 
 /** 每张卡片独立读取、复制和折叠脚本；错误始终可见，不以空文件推断失败。 */
@@ -28,15 +27,12 @@ export default function DatabaseDeliveryFileCard({
   workspaceRoot,
   path,
   pathError,
-  name,
-  onReadyChange
+  name
 }: Props): JSX.Element {
   const [attempt, setAttempt] = useState(0)
   const [result, setResult] = useState<{ key: string; file: DeliveryFileState }>()
   const [expandedKey, setExpandedKey] = useState<string>()
   const [copyStatus, setCopyStatus] = useState('')
-  const callback = useRef(onReadyChange)
-  callback.current = onReadyChange
   const key = JSON.stringify([workspaceRoot, path, pathError, attempt])
   const file = result?.key === key ? result.file : undefined
   const loading = !file
@@ -52,7 +48,6 @@ export default function DatabaseDeliveryFileCard({
 
   useEffect(() => {
     let active = true
-    callback.current(false)
     setCopyStatus('')
     const request = pathError
       ? Promise.resolve({ content: '', error: pathError })
@@ -60,18 +55,16 @@ export default function DatabaseDeliveryFileCard({
     void request.then((next) => {
       if (!active) return
       setResult({ key, file: next })
-      callback.current(!next.error)
     })
     return () => {
       active = false
     }
-    // key 包含所有读取身份；回调仅使用最新父组件闭包，不触发重复读取。
+    // key 包含所有读取身份；身份变化后丢弃旧请求结果。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
 
-  /** 仅刷新当前卡片，并同步撤销提交资格及当前文件的展开状态。 */
+  /** 仅刷新当前卡片，并重置当前文件的展开状态。 */
   function retry(): void {
-    callback.current(false)
     setAttempt((value) => value + 1)
   }
 
@@ -130,7 +123,7 @@ export default function DatabaseDeliveryFileCard({
           <p>
             {path || name} 无法完整读取：{file.error}
           </p>
-          <p>请先完成项目验收及数据库脚本交付，再重新获取。</p>
+          <p>当前脚本暂不可用，不影响版本提交。完成项目验收及数据库脚本交付后，可重新获取。</p>
         </div>
       )}
       <div className={cx('database-delivery-card-actions')}>

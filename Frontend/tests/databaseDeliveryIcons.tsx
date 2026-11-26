@@ -4,6 +4,7 @@ function Icon(): JSX.Element {
 }
 export const CloudUploadOutlined = Icon
 export const LoadingOutlined = Icon
+export const SettingOutlined = Icon
 export const CheckCircleFilled = Icon
 export const DeleteOutlined = Icon
 export const PlusOutlined = Icon

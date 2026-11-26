@@ -153,7 +153,6 @@ test('独立文件卡片默认收起，分别展开、复制与重新获取，�
     .map((name) => `CREATE TABLE \`12ab_${name}\` (id bigint);`)
     .join('\n')
   const mock = mockFiles(async (path) => page(path.endsWith('create.sql') ? sql : ''))
-  const ready: boolean[] = []
   let root!: ReactTestRenderer
   try {
     await act(async () => {
@@ -161,7 +160,6 @@ test('独立文件卡片默认收起，分别展开、复制与重新获取，�
         <DatabaseDeliveryPreview
           workspaceRoot="/app"
           branchName="release/v1_1"
-          onReadyChange={(value) => ready.push(value)}
         />
       )
     })
@@ -201,8 +199,6 @@ test('独立文件卡片默认收起，分别展开、复制与重新获取，�
     assert.equal(mock.calls.length, 3)
     assert.equal(mock.calls[2].path, 'backend/db/release/v1_1/create.sql')
     assert.equal(button(root, '展开 create.sql').props['aria-expanded'], false)
-    assert.equal(ready.at(-1), true)
-    assert.equal(ready.at(-2), false)
   } finally {
     act(() => root.unmount())
     mock.restore()
@@ -212,7 +208,6 @@ test('独立文件卡片默认收起，分别展开、复制与重新获取，�
 test('更换工作区或版本后旧响应不覆盖新预览', async () => {
   const pending: ((result: ReadWorkspaceFileResult) => void)[] = []
   const mock = mockFiles(() => new Promise((resolve) => pending.push(resolve)))
-  const ready: boolean[] = []
   let root!: ReactTestRenderer
   try {
     await act(async () => {
@@ -220,7 +215,6 @@ test('更换工作区或版本后旧响应不覆盖新预览', async () => {
         <DatabaseDeliveryPreview
           workspaceRoot="/a"
           branchName="v1"
-          onReadyChange={(value) => ready.push(value)}
         />
       )
     })
@@ -229,7 +223,6 @@ test('更换工作区或版本后旧响应不覆盖新预览', async () => {
         <DatabaseDeliveryPreview
           workspaceRoot="/b"
           branchName="v2"
-          onReadyChange={(value) => ready.push(value)}
         />
       )
     })
@@ -244,15 +237,13 @@ test('更换工作区或版本后旧响应不覆盖新预览', async () => {
     assert.equal(root.root.findAllByType('pre').length, 0)
     act(() => button(root, '展开 create.sql').props.onClick())
     assert.equal(sqlText(root), 'new SQL')
-    assert.equal(ready.at(-1), true)
-    assert.equal(ready.filter(Boolean).length, 1)
   } finally {
     act(() => root.unmount())
     mock.restore()
   }
 })
 
-test('Builtin 完整读取后即可提交，无确认勾选；重开与换版本默认收起，其他数据源沿用原行为', async () => {
+test('Builtin 读取期间即可提交，无确认勾选；重开与换版本默认收起，其他数据源沿用原行为', async () => {
   const mock = mockFiles(async (path) =>
     page(path.endsWith('create.sql') ? 'CREATE TABLE business (id bigint);' : '')
   )
@@ -261,6 +252,8 @@ test('Builtin 完整读取后即可提交，无确认勾选；重开与换版本
   // 不触发迭代流程，其余参数由组件默认的关闭状态处理。
   const props = {
     publishBranchName: 'v1',
+    publishPrefix: 'TEST-1 #comment feat:',
+    publishRepoUrl: 'https://example.com/test.git',
     publishDescription: '业务变更',
     onGenerate: () => {
       generated++
@@ -274,9 +267,9 @@ test('Builtin 完整读取后即可提交，无确认勾选；重开与换版本
     act(() => {
       root = create(<WorkbenchVersionModals {...props} />)
     })
-    assert.equal(button(root, '确认提交').props.disabled, true)
+    assert.equal(button(root, '确认提交').props.disabled, false)
     await act(async () => {})
-    assert.equal(root.root.findAllByType('input').length, 0)
+    assert.equal(root.root.findAllByProps({ type: 'checkbox' }).length, 0)
     assert.doesNotMatch(visibleText(root.root), /已确认数据库交付脚本/)
     assert.equal(button(root, '确认提交').props.disabled, false)
     act(() => button(root, '确认提交').props.onClick())
@@ -325,7 +318,7 @@ test('Builtin 完整读取后即可提交，无确认勾选；重开与换版本
   }
 })
 
-test('缺失文件与未解决截断保留具体错误并禁用发布', async () => {
+test('缺失文件与未解决截断保留具体错误但不阻止提交', async () => {
   for (const failure of ['missing', 'truncated']) {
     const mock = mockFiles(async (path) => {
       if (path.endsWith('create.sql')) return page('business DDL')
@@ -335,6 +328,8 @@ test('缺失文件与未解决截断保留具体错误并禁用发布', async ()
     let root!: ReactTestRenderer
     const props = {
       publishBranchName: 'v1',
+      publishPrefix: 'TEST-1 #comment feat:',
+      publishRepoUrl: 'https://example.com/test.git',
       publishDescription: '变更',
       application: {
         workspaceRoot: '/app',
@@ -345,9 +340,12 @@ test('缺失文件与未解决截断保留具体错误并禁用发布', async ()
       await act(async () => {
         root = create(<WorkbenchVersionModals {...props} />)
       })
-      assert.equal(button(root, '确认提交').props.disabled, true)
-      assert.equal(root.root.findAllByType('input').length, 0)
+      assert.equal(button(root, '确认提交').props.disabled, false)
+      assert.equal(root.root.findAllByProps({ type: 'checkbox' }).length, 0)
       assert.match(visibleText(root.root), /alter.sql.*无法完整读取/)
+      assert.match(visibleText(root.root), /不影响版本提交/)
+      const card = root.root.findAllByType('article')[1]
+      assert.equal(card.findAllByType('button')[0].props.disabled, true)
     } finally {
       act(() => root.unmount())
       mock.restore()
@@ -355,7 +353,7 @@ test('缺失文件与未解决截断保留具体错误并禁用发布', async ()
   }
 })
 
-test('单独重新获取增量时保留完整建表预览，读取期间禁用提交，失败后可重试', async () => {
+test('单独重读增量保留完整建表预览，读取中及失败均可提交，失败后可重试', async () => {
   let resolveReload!: (result: ReadWorkspaceFileResult) => void
   let alterReads = 0
   const mock = mockFiles(async (path) => {
@@ -369,6 +367,8 @@ test('单独重新获取增量时保留完整建表预览，读取期间禁用�
   })
   const props = {
     publishBranchName: 'v1',
+    publishPrefix: 'TEST-1 #comment feat:',
+    publishRepoUrl: 'https://example.com/test.git',
     publishDescription: '变更',
     application: {
       workspaceRoot: '/app',
@@ -394,14 +394,14 @@ test('单独重新获取增量时保留完整建表预览，读取期间禁用�
     await act(async () => {
       reloadAlter()
     })
-    assert.equal(button(root, '确认提交').props.disabled, true)
+    assert.equal(button(root, '确认提交').props.disabled, false)
     assert.match(sqlText(root), /CREATE TABLE business/)
     assert.equal(mock.calls.length, 3)
     assert.equal(mock.calls[2].path, 'backend/db/v1/alter.sql')
     await act(async () => {
       resolveReload(page('', { start_line: 99 }))
     })
-    assert.equal(button(root, '确认提交').props.disabled, true)
+    assert.equal(button(root, '确认提交').props.disabled, false)
     assert.match(visibleText(root.root), /读取失败/)
     await act(async () => {
       reloadAlter()
