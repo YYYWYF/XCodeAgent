@@ -35,7 +35,7 @@ try {
         external: reactModules,
         output: {
           entryFileNames: path.basename(outputFile),
-          paths: (id) => reactModules.includes(id) ? require.resolve(id) : id
+          paths: (id) => reactModules.includes(id) ? pathToFileURL(require.resolve(id)).href : id
         }
       }
     }

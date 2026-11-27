@@ -138,7 +138,7 @@ import QuickTaskGuide from './components/QuickTaskGuide'
 import type { QuickTaskItem } from './components/QuickTaskGuide/quickTasks'
 import { buildQuickTasks, quickTaskBlocked } from './components/QuickTaskGuide/quickTasks'
 import NextDevelopmentGuide from './components/NextDevelopmentGuide'
-import { developmentNextStep, latestDevelopmentTarget } from './developmentNextStep'
+import { developmentDebugTarget, developmentNextStep, latestDevelopmentTarget } from './developmentNextStep'
 import WorkspaceDebugDock from './components/WorkspaceDebugDock'
 import BuiltinPatchCard, { useBuiltinPatchCard } from './components/WorkspaceDebugDock/BuiltinPatchCard'
 import { BUILTIN_AUTHORIZATION_PATCH_NODE } from '../../service/workflowDebugNodes'
@@ -1285,6 +1285,10 @@ export default function AiChatPanel({
   }, [internalDebugAllowed, rightPanel?.type, setRightPanel])
   const pageDebugVisible = pageDebugAllowed && rightPanel?.type === 'page-debug' && rightPanelLayout !== 'hidden'
   const pageDebugScope = JSON.stringify([application.workspaceRoot, iterationScopeId, iterationToken])
+  const debugSelectionRequest =
+    (rightPanel?.type === 'internal-api-debug' || rightPanel?.type === 'page-debug') &&
+    rightPanel.selectionRequest?.scope === pageDebugScope
+      ? rightPanel.selectionRequest : undefined
   const [visitedPageDebugScope, setVisitedPageDebugScope] = useState<string>()
   // 从页面调试切去启动后端时保留 iframe，回到调试页继续使用原来的页面状态。
   const keepPageDebug = pageDebugAllowed && (pageDebugVisible ||
@@ -4735,8 +4739,30 @@ export default function AiChatPanel({
     ? developmentNextStep(displayedMessages, applicationLifecycle) : undefined
   const nextDevelopmentStep = activeWorkbenchPhase === 'development'
     ? candidateNextDevelopmentStep : undefined
+  const nextDevelopmentDebug = internalDebugAllowed
+    ? developmentDebugTarget(
+        nextDevelopmentStep,
+        displayedPlanningPages,
+        developmentPlanningApiContracts,
+        applicationLifecycle?.developmentArtifacts
+      )
+    : undefined
   const nextDevelopmentTasks = buildQuickTasks(displayedPlanningPages,
     developmentPlanningApiContracts, [], applicationLifecycle?.developmentArtifacts)
+
+  /** 打开完成产物的调试面板，保留当前开发会话和服务状态。 */
+  const handleOpenDevelopmentDebug = (): void => {
+    if (!nextDevelopmentDebug) return
+    ensureRightPanelVisible()
+    setRightPanel({
+      type: nextDevelopmentDebug.type,
+      selectionRequest: {
+        scope: pageDebugScope,
+        optionKey: nextDevelopmentDebug.optionKey,
+        requestKey: crypto.randomUUID()
+      }
+    })
+  }
 
   /** 从对话管理恢复原有会话，保留工作流与目标的既有归属。 */
   const handleOpenChatSession = async (sessionId: string): Promise<void> => {
@@ -5521,6 +5547,7 @@ export default function AiChatPanel({
                     loading={!developmentPlanningReady || !applicationLifecycle?.developmentArtifacts}
                     catalogError={applicationLifecycle?.developmentArtifacts?.catalogError}
                     onStart={handleNextDevelopmentStart}
+                    onDebug={nextDevelopmentDebug ? handleOpenDevelopmentDebug : undefined}
                   />
                 ) : undefined}
                 applicationLifecycle={applicationLifecycle}
@@ -6040,6 +6067,7 @@ export default function AiChatPanel({
           <div className={cx('workspace-content')}>
             <InternalApiDebugPanel key={internalDebugScope}
               workspaceRoot={application.workspaceRoot} iterationId={iterationToken}
+              selectionRequest={debugSelectionRequest}
               contracts={developmentPlanningApiContracts} artifacts={applicationLifecycle?.developmentArtifacts}
               catalogLoading={planningCatalogStatus?.loading}
               catalogError={planningCatalogStatus?.error}
@@ -6068,6 +6096,7 @@ export default function AiChatPanel({
               pages={displayedPlanningPages}
               artifacts={applicationLifecycle?.developmentArtifacts}
               preferredPageId={activePageId}
+              selectionRequest={rightPanel?.type === 'page-debug' ? debugSelectionRequest : undefined}
               catalogLoading={planningCatalogStatus?.loading}
               catalogError={planningCatalogStatus?.error}
               onCatalogRetry={onPlanningCatalogRetry}

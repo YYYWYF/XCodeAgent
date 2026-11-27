@@ -6,7 +6,9 @@ import { previewServiceAttemptId } from '../../../../service/previewRuntime'
 import type { DevelopmentArtifacts, DevelopmentPlanningPageOption } from '../../../../typings'
 import type { ElementInspectorSelectionMessage } from '../../../BrowserPreviewPanel/elementInspectorProtocol'
 import { useElementInspector } from '../../../BrowserPreviewPanel/useElementInspector'
+import { useDebugSelection } from '../../hooks/useDebugSelection'
 import type { DebugServiceControl } from '../../hooks/usePreviewRuntime'
+import type { DebugSelectionRequest } from '../../types'
 import DebugServiceLogs from '../DebugRuntime/DebugServiceLogs'
 import DebugServiceStatusButton, { debugServiceStatusMessage } from '../DebugRuntime/DebugServiceControls'
 import PageDebugSource from './PageDebugSource'
@@ -18,6 +20,7 @@ type Props = {
   pages: DevelopmentPlanningPageOption[]
   artifacts?: DevelopmentArtifacts
   preferredPageId?: string
+  selectionRequest?: DebugSelectionRequest
   catalogLoading?: boolean
   catalogError?: string
   onCatalogRetry: () => void
@@ -134,6 +137,7 @@ export default function PageDebugPanel({
   pages,
   artifacts,
   preferredPageId,
+  selectionRequest,
   catalogLoading,
   catalogError,
   onCatalogRetry,
@@ -143,7 +147,7 @@ export default function PageDebugPanel({
   onLogsOpenChange
 }: Props): ReactElement {
   const logsId = useId()
-  const [pageId, setPageId] = useState<string>()
+  const [pageId, setPageId, selectionRequestKey] = useDebugSelection(selectionRequest)
   const [reloadKey, setReloadKey] = useState(0)
   const [expanded, setExpanded] = useState(false)
   const options = useMemo(() => debugPageOptions(pages, artifacts), [pages, artifacts])
@@ -155,6 +159,11 @@ export default function PageDebugPanel({
   const starting = launching || runtime?.frontend.status === 'starting'
   const canStart = !control.busy && !runtime?.maintenance && !starting
   const showExpanded = logsOpen && expanded
+
+  /** 从完成提示跳转时露出页面，保留普通高度的日志面板。 */
+  useEffect(() => {
+    if (selectionRequest) setExpanded(false)
+  }, [selectionRequest])
 
   /** 关闭面板时复位展开状态，保留正在调试的页面。 */
   function toggleLogs(open: boolean): void {
@@ -268,6 +277,8 @@ export default function PageDebugPanel({
             previewServiceAttemptId(runtime, 'frontend'),
             picked?.pageId,
             url,
+            // 从完成提示主动打开同一个页面时，也要回到目标路由。
+            selectionRequestKey,
             reloadKey
           ])}
           workspaceRoot={workspaceRoot}

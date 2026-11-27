@@ -2,13 +2,16 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { act, create } from 'react-test-renderer'
 import type { ApplicationLifecycle, WorkflowRunPayload } from '../src/renderer/src/typings'
-import type { AgentChatMessage } from '../src/renderer/src/components/AiChatPanel/types'
+import type { AgentChatMessage, DebugSelectionRequest } from '../src/renderer/src/components/AiChatPanel/types'
 import {
+  developmentDebugTarget,
   developmentNextStep,
   latestDevelopmentTarget,
   nextDevelopmentTask
 } from '../src/renderer/src/components/AiChatPanel/developmentNextStep'
+import { useDebugSelection } from '../src/renderer/src/components/AiChatPanel/hooks/useDebugSelection'
 import {
   allDevelopmentTargetsCompleted,
   filterDevelopmentTargets
@@ -49,29 +52,95 @@ const lifecycle = {
     endpoints: { api: { get: { initialDevelopmentStatus: 'pending' } } }
   }
 } as ApplicationLifecycle
-const tasks = buildQuickTasks(
-  [
-    { pageId: 'one', key: 'one', label: '介绍页', path: '/one', purpose: '', designed: true },
-    { pageId: 'two', key: 'two', label: '我的回检', path: '/two', purpose: '', designed: true },
-    {
-      pageId: 'busy',
-      key: 'busy',
-      label: '开发中的页面',
-      path: '/busy',
-      purpose: '',
-      designed: true
+const planningPages = [
+  { pageId: 'one', key: 'one', label: '介绍页', path: '/one', purpose: '', designed: true },
+  { pageId: 'two', key: 'two', label: '我的回检', path: '/two', purpose: '', designed: true },
+  {
+    pageId: 'busy',
+    key: 'busy',
+    label: '开发中的页面',
+    path: '/busy',
+    purpose: '',
+    designed: true
+  }
+]
+const planningContracts = [
+  {
+    id: 'api',
+    label: '回检',
+    endpoints: [{ id: 'get', name: '查询回检', method: 'GET', path: '/api', summary: '' }]
+  }
+]
+const tasks = buildQuickTasks(planningPages, planningContracts, [], lifecycle.developmentArtifacts)
+
+test('完成提示只引导到当前可调试的产物，接口按契约与接口 ID 定位', () => {
+  const completed = developmentNextStep([message(completion())], lifecycle)!
+  const developmentArtifacts = lifecycle.developmentArtifacts!
+  assert.deepEqual(
+    developmentDebugTarget(completed, planningPages, planningContracts, developmentArtifacts),
+    { type: 'page-debug', optionKey: 'one' }
+  )
+  for (const step of [
+    { ...completed, reason: 'selection' as const },
+    { ...completed, reason: 'ended' as const },
+    { ...completed, target: { type: 'page' as const, pageId: 'two', label: '我的回检' } }
+  ]) {
+    assert.equal(developmentDebugTarget(step, planningPages, planningContracts, developmentArtifacts), undefined)
+  }
+  const deletedPages = planningPages.map((page) => page.pageId === 'one'
+    ? { ...page, changeStatus: 'deleted' as const } : page)
+  assert.equal(developmentDebugTarget(completed, deletedPages, planningContracts, developmentArtifacts), undefined)
+
+  const apiStep = {
+    ...completed,
+    target: { type: 'endpoint' as const, apiContractId: 'other', endpointId: 'get', label: '另一契约查询' }
+  }
+  const contracts = [...planningContracts, { ...planningContracts[0], id: 'other' }]
+  const artifacts = {
+    ...developmentArtifacts,
+    endpoints: {
+      api: { get: { initialDevelopmentStatus: 'completed' as const } },
+      other: { get: { initialDevelopmentStatus: 'completed' as const } }
     }
-  ],
-  [
-    {
-      id: 'api',
-      label: '回检',
-      endpoints: [{ id: 'get', name: '查询回检', method: 'GET', path: '/api', summary: '' }]
-    }
-  ],
-  [],
-  lifecycle.developmentArtifacts
-)
+  }
+  assert.deepEqual(developmentDebugTarget(apiStep, planningPages, contracts, artifacts), {
+    type: 'internal-api-debug', optionKey: JSON.stringify(['other', 'get'])
+  })
+  assert.equal(developmentDebugTarget(apiStep, planningPages, planningContracts, artifacts), undefined)
+
+  const markup = renderToStaticMarkup(<>
+    {[completed, apiStep, { ...completed, reason: 'selection' as const }, { ...completed, reason: 'ended' as const }].map(
+      (step) => <NextDevelopmentGuide key={`${step.reason}:${step.target?.label}`} step={step} tasks={tasks} disabled={false} loading={false}
+        onStart={async () => assert.fail('渲染时不能发起开发')}
+        onDebug={() => assert.fail('渲染时不能打开调试')} />
+    )}
+  </>)
+  assert.match(markup, /aria-label="调试页面「介绍页」"/)
+  assert.match(markup, /aria-label="调试接口「另一契约查询」"/)
+  assert.equal((markup.match(/aria-label="调试(?:页面|接口)/g) || []).length, 2)
+})
+
+test('调试面板响应重复跳转，保留之后的手动选择和隐藏时的页面', () => {
+  /** 模拟一个可以从快捷入口进入并手动选项的调试面板。 */
+  function DebugSelectionProbe({ request }: { request?: DebugSelectionRequest }) {
+    const [optionKey, setOptionKey, requestKey] = useDebugSelection(request)
+    return <button data-request-key={requestKey} onClick={() => setOptionKey('manual')}>{optionKey}</button>
+  }
+
+  const request = { scope: 'iteration', optionKey: 'completed', requestKey: 'first' }
+  const mounted = create(<DebugSelectionProbe request={request} />)
+  assert.equal(mounted.root.findByType('button').props.children, 'completed')
+  act(() => mounted.root.findByType('button').props.onClick())
+  act(() => mounted.update(<DebugSelectionProbe request={{ ...request }} />))
+  assert.equal(mounted.root.findByType('button').props.children, 'manual')
+  act(() => mounted.update(<DebugSelectionProbe request={{ ...request, requestKey: 'second' }} />))
+  assert.equal(mounted.root.findByType('button').props.children, 'completed')
+  assert.equal(mounted.root.findByType('button').props['data-request-key'], 'second')
+  act(() => mounted.update(<DebugSelectionProbe />))
+  assert.equal(mounted.root.findByType('button').props.children, 'completed')
+  assert.equal(mounted.root.findByType('button').props['data-request-key'], 'second')
+  act(() => mounted.unmount())
+})
 
 test('只有本次正式运行的初次完成事实触发引导，普通节点 completed 不触发', () => {
   assert.equal(developmentNextStep([message(completion())], lifecycle)?.reason, 'completed')

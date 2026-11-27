@@ -379,6 +379,8 @@ API 映射门禁的“确认并检测”使用原 Run 引用。工作台准入�
 
 开发阶段的「页面调试」在「接口调试」与「预览」之间。`PageDebug` 按当前正式目录和生命周期选择已完成页面，只需前端服务即可渲染，重新加载不重启服务。元素审查复用现有 iframe 协议，从当前应用 `frontend/src` 按需读取有限源码行。切到接口调试启动后端时保留当前 iframe。
 
+`NextDevelopmentGuide` 在当前接口或页面的开发完成提示里提供「调试接口」或「调试页面」。`developmentNextStep.ts` 复用两个调试面板的候选列表核对完成产物，`AiChatPanel` 按本轮应用与迭代打开面板并选中对应目标。服务启动、请求发送和进入测试阶段仍由现有按钮执行。回归入口为 `pnpm test:development-artifacts`。
+
 `debug_service_launcher.py` 通过 `/preview-runtime/run` 的 `restart_frontend/restart_backend` 启停对应受管进程，保留另一端启动身份和日志。分端诊断按目标服务绑定证据、确认和修复后的重启。「预览」继续使用联动 `restart`。页面调试在前端启动回执中直接获取 `page_debug_gateway.py` 为当前轮次分配的回环入口，后续订阅按取样顺序更新。静态资源、页面路由和热更新走当前前端，`/api` 走同工作区当前 Java 实际端口。未就绪的后端返回 `503`。后端尚未启动时，`PageDebugRequestNotice` 根据网关记录的实际受阻请求显示三秒提示；后端启动失败详情在接口调试查看。回归入口为 `tests.test_page_debug_gateway`、`tests.test_preview_runtime`、`tests.test_internal_api_debug`、`pnpm test:preview-runtime` 和 `pnpm test:service-logs`。
 
 ## Update Policy

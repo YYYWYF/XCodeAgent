@@ -5,7 +5,9 @@ import type { DevelopmentArtifacts, DevelopmentPlanningApiContract } from '../..
 import { describeInternalApi, type InternalDebugDefinition, type InternalDebugTarget } from '../../../../service/internalApiDebug'
 import { cx } from '../../../../utils'
 import { previewServiceInMaintenance } from '../../../../service/previewRuntime'
+import { useDebugSelection } from '../../hooks/useDebugSelection'
 import type { DebugServiceControl } from '../../hooks/usePreviewRuntime'
+import type { DebugSelectionRequest } from '../../types'
 import DebugServiceLogs from '../DebugRuntime/DebugServiceLogs'
 import DebugServiceStatusButton from '../DebugRuntime/DebugServiceControls'
 import InternalApiRequest, { InternalApiRequestBar } from './InternalApiRequest'
@@ -17,6 +19,7 @@ type Props = {
   iterationId: string
   contracts: DevelopmentPlanningApiContract[]
   artifacts?: DevelopmentArtifacts
+  selectionRequest?: DebugSelectionRequest
   catalogLoading?: boolean
   catalogError?: string
   onCatalogRetry?: () => void
@@ -33,12 +36,12 @@ function workspacePopup(trigger: HTMLElement): HTMLElement {
 
 /** 展示当前迭代的正式接口、共享后端维护与底部日志。 */
 export default function InternalApiDebugPanel({
-  workspaceRoot, iterationId, contracts, artifacts, catalogLoading, catalogError, onCatalogRetry,
+  workspaceRoot, iterationId, contracts, artifacts, selectionRequest, catalogLoading, catalogError, onCatalogRetry,
   control, logsOpen, onLogsOpenChange
 }: Props) {
   const logsId = useId()
   const [expanded, setExpanded] = useState(false)
-  const [selection, setSelection] = useState<string>()
+  const [selection, setSelection] = useDebugSelection(selectionRequest)
   const [definitionState, setDefinitionState] = useState<DefinitionState>()
   const [retry, setRetry] = useState(0)
   const endpoints = useMemo(() => completedInternalEndpoints(contracts, artifacts), [contracts, artifacts])
@@ -80,6 +83,11 @@ export default function InternalApiDebugPanel({
     !previewServiceInMaintenance(runtime, 'backend'))
   const showExpanded = logsOpen && expanded
   const endpointsError = catalogError || artifacts?.catalogError
+
+  /** 从完成提示跳转时露出接口请求区，保留普通高度的日志面板。 */
+  useEffect(() => {
+    if (selectionRequest) setExpanded(false)
+  }, [selectionRequest])
 
   /** 折回日志时保留请求组件，下次展开恢复常规高度。 */
   function toggleLogs(open: boolean): void {

@@ -1,9 +1,17 @@
-import type { ApplicationLifecycle, WorkflowRunPayload } from '../../typings'
+import type {
+  ApplicationLifecycle,
+  DevelopmentArtifacts,
+  DevelopmentPlanningApiContract,
+  DevelopmentPlanningPageOption,
+  WorkflowRunPayload
+} from '../../typings'
 import type { ChatSessionDevelopmentTarget } from '../../service/chatSessions'
 import type { AgentChatMessage } from './types'
 import { isConversationWorkflow } from './conversationMode'
 import { workflowEndedPlanControl } from './planExecutionMode'
 import { workflowClarification } from './components/WorkflowRunCard/workflowClarification'
+import { completedInternalEndpoints } from './components/InternalApiDebug/internalApiDebugModel'
+import { debugPageOptions } from './components/PageDebug/pageDebugModel'
 import type { QuickTaskItem } from './components/QuickTaskGuide/quickTasks'
 import { developmentDisplayStatus } from '../../developmentArtifacts'
 
@@ -69,6 +77,25 @@ export function developmentTargetTaskId(target?: ChatSessionDevelopmentTarget): 
   return target.type === 'page'
     ? `page:${target.pageId}`
     : `endpoint:${target.apiContractId}:${target.endpointId}`
+}
+
+/** 完成提示只引导到仍在调试列表中的同一个产物。 */
+export function developmentDebugTarget(
+  step: DevelopmentNextStep | undefined,
+  pages: DevelopmentPlanningPageOption[],
+  contracts: DevelopmentPlanningApiContract[],
+  artifacts?: DevelopmentArtifacts
+): { type: 'page-debug' | 'internal-api-debug'; optionKey: string } | undefined {
+  const target = step?.reason === 'completed' ? step.target : undefined
+  if (!target) return undefined
+  if (target.type === 'page') {
+    const page = debugPageOptions(pages, artifacts).find((option) => option.pageId === target.pageId)
+    return page && { type: 'page-debug', optionKey: page.pageId }
+  }
+  const endpoint = completedInternalEndpoints(contracts, artifacts).find(
+    (option) => option.apiContractId === target.apiContractId && option.endpointId === target.endpointId
+  )
+  return endpoint && { type: 'internal-api-debug', optionKey: endpoint.key }
 }
 
 /** 只由最新正式运行的开发完成事实或成功 End 回执生成下一步，不把暂停和失败当成结束。 */

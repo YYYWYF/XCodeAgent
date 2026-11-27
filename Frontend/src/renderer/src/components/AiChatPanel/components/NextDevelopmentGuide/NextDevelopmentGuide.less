@@ -1,6 +1,8 @@
 @import './NextDevelopmentPicker.less';
 
 .@{class-prefix}-next-development-guide {
+  --next-development-action: #4e65d9;
+  --next-development-action-hover: #445bc7;
   display: flex;
   min-width: 0;
   width: 100%;
@@ -12,6 +14,11 @@
   background: linear-gradient(135deg, var(--wb-accent-soft), transparent 70%), var(--wb-canvas);
   border: 1px solid var(--wb-accent-border);
   border-radius: 18px;
+
+  .@{class-prefix}-workbench-shell[data-theme='dark'] & {
+    --next-development-action: #526ad6;
+    --next-development-action-hover: #4a61ca;
+  }
 
   .ant-typography {
     color: var(--wb-text);
@@ -42,15 +49,20 @@
     }
   }
   .ant-btn-primary {
-    background: var(--wb-accent);
-    border-color: var(--wb-accent);
+    background: var(--next-development-action);
+    border-color: var(--next-development-action);
     color: #fff;
-  }
-  .ant-btn-primary:hover,
-  .ant-btn-primary:focus-visible {
-    background: var(--wb-accent-hover);
-    border-color: var(--wb-accent-hover);
-    color: #fff;
+    &:hover,
+    &:focus-visible,
+    &:active {
+      background: var(--next-development-action-hover);
+      border-color: var(--next-development-action-hover);
+      color: #fff;
+    }
+    &:focus-visible {
+      outline: 2px solid var(--next-development-action);
+      outline-offset: 2px;
+    }
   }
   .ant-btn[disabled] {
     color: var(--wb-text-secondary);
@@ -59,8 +71,8 @@
   }
   .ant-btn-primary[disabled] {
     color: var(--wb-text-secondary);
-    background: color-mix(in srgb, var(--wb-accent) 12%, var(--wb-canvas));
-    border-color: color-mix(in srgb, var(--wb-accent) 18%, var(--wb-canvas));
+    background: color-mix(in srgb, var(--next-development-action) 12%, var(--wb-canvas));
+    border-color: color-mix(in srgb, var(--next-development-action) 18%, var(--wb-canvas));
   }
   .ant-btn-text[disabled] {
     background: transparent;
@@ -179,16 +191,19 @@
     }
   }
 }
-.@{class-prefix}-next-development-guide-recommendation {
-  display: flex;
+.@{class-prefix}-next-development-guide-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px;
   align-items: center;
   gap: 12px;
-  padding: 20px 0;
+  padding: 12px 0;
+  & + & {
+    border-top: 1px solid var(--wb-border-soft);
+  }
 }
 .@{class-prefix}-next-development-guide .@{class-prefix}-next-development-guide-target {
   display: flex;
   min-width: 0;
-  flex: 1;
   flex-direction: column;
   gap: 3px;
   > .ant-typography-secondary {
@@ -197,7 +212,7 @@
     font-weight: 500;
   }
   > .ant-typography:last-child {
-    font-size: 22px;
+    font-size: 17px;
     font-weight: 600;
   }
 }
@@ -210,12 +225,14 @@
     font-size: 12px;
   }
 }
-.@{class-prefix}-next-development-guide .@{class-prefix}-next-development-guide-start {
-  flex: 0 0 auto;
-  padding: 7px 14px;
+.@{class-prefix}-next-development-guide-row > .ant-btn-primary {
+  padding: 7px 12px;
   min-height: 36px;
-  border-radius: 8px;
-  font-size: 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 .@{class-prefix}-next-development-guide-footer {
   display: flex;
@@ -275,14 +292,9 @@
     flex-direction: column;
     align-items: flex-start;
   }
-  .@{class-prefix}-next-development-guide-recommendation {
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .@{class-prefix}-next-development-guide .@{class-prefix}-next-development-guide-target {
-    flex-basis: 100%;
-  }
-  .@{class-prefix}-next-development-guide .@{class-prefix}-next-development-guide-start {
-    margin-left: 0;
+}
+@container ai-chat-main (max-width: 450px) {
+  .@{class-prefix}-next-development-guide-row {
+    grid-template-columns: minmax(0, 1fr) 104px;
   }
 }

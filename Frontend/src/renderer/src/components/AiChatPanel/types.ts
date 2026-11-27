@@ -38,10 +38,16 @@ export type WorkspaceDocKey =
   | 'build-task-plan'
   | 'ui-design'
 
+export type DebugSelectionRequest = {
+  scope: string
+  optionKey: string
+  requestKey: string
+}
+
 export type RightPanelState =
   | { type: 'field-mapping' }
-  | { type: 'internal-api-debug' }
-  | { type: 'page-debug' }
+  | { type: 'internal-api-debug'; selectionRequest?: DebugSelectionRequest }
+  | { type: 'page-debug'; selectionRequest?: DebugSelectionRequest }
   | { type: 'preview'; requestKey?: string; url?: string; acceptanceLoadKey?: string }
   | {
       type: 'diff'

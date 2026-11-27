@@ -31,6 +31,7 @@ type Props = {
   loading: boolean
   catalogError?: string | null
   onStart: (task: QuickTaskItem) => Promise<void>
+  onDebug?: () => void
 }
 
 /** 在当前对话末尾提供开发完成/主动结束后的下一步，并让用户显式选择后才启动新任务。 */
@@ -41,13 +42,15 @@ export default function NextDevelopmentGuide({
   disabledHint,
   loading,
   catalogError,
-  onStart
+  onStart,
+  onDebug
 }: Props): ReactElement | null {
   const [expanded, setExpanded] = useState(false)
   const [startingId, setStartingId] = useState('')
   const startingRef = useRef(false)
   const currentId = developmentTargetTaskId(step.target)
   const currentTask = tasks.find((task) => task.id === currentId)
+  const currentTitle = currentTask?.title || step.target?.label || '当前产物'
   const nextTask = nextDevelopmentTask(tasks, step.target)
   const targets = tasks.filter((task) => task.kind !== 'entity')
   const remaining = targets.filter(
@@ -59,8 +62,10 @@ export default function NextDevelopmentGuide({
     step.reason === 'selection'
       ? '等待选择开发目标'
       : step.reason === 'completed'
-      ? `${currentTask?.title || step.target?.label || '当前产物'}初次开发已完成`
+      ? `${currentTitle}初次开发已完成`
       : '本次开发已结束'
+  const debugTarget = step.reason === 'completed' ? step.target : undefined
+  const debugLabel = debugTarget?.type === 'endpoint' ? '调试接口' : '调试页面'
   const blocked = disabled || loading || Boolean(catalogError) || Boolean(startingId)
   /** 即时锁住双击；启动失败时保留原引导卡，成功后由新 Workflow 取代旧完成事实。 */
   const handleStart = async (task: QuickTaskItem): Promise<void> => {
@@ -120,6 +125,17 @@ export default function NextDevelopmentGuide({
           </div>
         </div>
       ) : null}
+      {debugTarget && onDebug ? (
+        <div className={cx('next-development-guide-row')}>
+          <div className={cx('next-development-guide-target')}>
+            <Text type="secondary">当前已完成 · {debugTarget.type === 'page' ? '页面' : 'API'}</Text>
+            <Text strong>{currentTitle}</Text>
+          </div>
+          <Button type="primary" aria-label={`${debugLabel}「${currentTitle}」`} onClick={onDebug}>
+            {debugLabel} <ArrowRightOutlined aria-hidden="true" />
+          </Button>
+        </div>
+      ) : null}
       {loading || catalogError ? (
         <div className={cx('next-development-guide-notice')}>
           <Text type={catalogError ? 'danger' : 'secondary'}>
@@ -127,20 +143,20 @@ export default function NextDevelopmentGuide({
           </Text>
         </div>
       ) : nextTask ? (
-        <div className={cx('next-development-guide-recommendation')}>
+        <div className={cx('next-development-guide-row')}>
           <div className={cx('next-development-guide-target')}>
             <Text type="secondary">推荐下一项 · {nextTask.kind === 'page' ? '页面' : 'API'}</Text>
             <Text strong>{nextTask.title}</Text>
           </div>
           <Button
-            className={cx('next-development-guide-start')}
             type="primary"
             aria-label={`开发「${nextTask.title}」`}
             disabled={blocked}
             loading={startingId === nextTask.id}
             onClick={() => void handleStart(nextTask)}
           >
-            开始开发 <ArrowRightOutlined />
+            开始开发
+            {startingId !== nextTask.id ? <ArrowRightOutlined aria-hidden="true" /> : null}
           </Button>
         </div>
       ) : (
