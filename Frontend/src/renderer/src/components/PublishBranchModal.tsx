@@ -1,7 +1,9 @@
-import { CloudUploadOutlined, LoadingOutlined, SettingOutlined } from '@ant-design/icons'
-import { Alert, Input, Modal, Progress, Steps } from 'antd'
+import { CloudUploadOutlined, DeleteOutlined, LoadingOutlined, SettingOutlined } from '@ant-design/icons'
+import { Alert, Button, Input, Modal, Progress, Steps, message } from 'antd'
+import { useState } from 'react'
 import { cx } from '../utils'
 import { dispatchOpenSettings } from '../utils/openSettingsEvent'
+import { deleteRepositoryBranch } from '../service/repositoryBranch'
 import DatabaseDeliveryPreview from './DatabaseDeliveryPreview'
 import './WorkbenchVersionModals.less'
 
@@ -22,6 +24,10 @@ type PublishModalProps = {
   onPrefixChange: (value: string) => void
   /** 仓库地址：提交与推送的远程落点，弹框内回显。 */
   repoUrl?: string
+  /** 普通推送已因远端历史分叉被拒绝，可由用户显式删除远端当前分支。 */
+  branchConflict?: boolean
+  /** 远端分支删除成功后解除冲突阻断，等待用户重新确认提交。 */
+  onBranchConflictResolved: () => void
   generating: VersionGenerateState
   onCancel: () => void
   onGenerate: () => void
@@ -38,10 +44,41 @@ export default function PublishBranchModal({
   prefix,
   onPrefixChange,
   repoUrl,
+  branchConflict = false,
+  onBranchConflictResolved,
   generating,
   onCancel,
   onGenerate
 }: PublishModalProps): JSX.Element {
+  const [deletingRemoteBranch, setDeletingRemoteBranch] = useState(false)
+
+  /** 删除远端当前分支并保留本地提交；成功后只解除阻断，不自动重新推送。 */
+  const handleDeleteRemoteBranch = async (): Promise<void> => {
+    if (!repoUrl || deletingRemoteBranch) return
+    setDeletingRemoteBranch(true)
+    try {
+      await deleteRepositoryBranch({ repoUrl, branchName })
+      onBranchConflictResolved()
+      message.success({ content: '远端分支已删除，本地分支和提交仍保留，请重新点击确认提交。', duration: 4 })
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '删除远端分支失败，请重试。')
+    } finally {
+      setDeletingRemoteBranch(false)
+    }
+  }
+
+  /** 对不可恢复的远端删除进行二次确认，明确影响范围。 */
+  const confirmDeleteRemoteBranch = (): void => {
+    Modal.confirm({
+      title: `确认删除远端分支 ${branchName}？`,
+      content: '远端该分支及其独有提交将被删除，其他协作者推送的改动也可能丢失。本地分支和本地提交不会删除；删除成功后需重新点击确认提交。',
+      okText: '确认删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: handleDeleteRemoteBranch
+    })
+  }
+
   // 未配置仓库地址时不允许提交：后端 VersionPublishRequest.repoUrl 是 min_length=1 的必填字段，
   // 直接放行只会让 Pydantic 抛 string_too_short，对用户没有指导意义。这里在弹窗内直接阻断，
   // 并提供「去设置」入口跳转到左侧菜单的设置面板。
@@ -54,13 +91,15 @@ export default function PublishBranchModal({
   // 造成的"提交说明"与用户最后看到的字段不一致。让用户等到生成结束再确认更可控。
   const canSubmit =
     !generating &&
+    !deletingRemoteBranch &&
     !descriptionGenerating &&
     !repoUrlMissing &&
+    !branchConflict &&
     !!prefix.trim() &&
     !!description.trim()
   // 弹窗关闭闸门：「提交推送」和「AI 生成变更说明」任一在进行都不允许关闭。
   // 否则生成中的流式 token 会写到已卸载组件的 state，且用户看不见自己刚才在写什么。
-  const blockClose = !!generating || descriptionGenerating
+  const blockClose = !!generating || descriptionGenerating || deletingRemoteBranch
   return (
     <Modal
       centered
@@ -120,6 +159,26 @@ export default function PublishBranchModal({
               }
             />
           )}
+          {branchConflict && !generating ? (
+            <Alert
+              className={cx('workbench-generate-repo-missing', 'workbench-publish-branch-conflict')}
+              type="warning"
+              showIcon
+              message={`远端分支 ${branchName} 与本地提交历史已分叉`}
+              description="本地提交已保留。你可以删除远端当前分支后重新提交；删除会丢失远端该分支上的提交，请确认已备份或不再需要。"
+              action={
+                <Button
+                  danger
+                  size="small"
+                  icon={<DeleteOutlined aria-hidden="true" />}
+                  loading={deletingRemoteBranch}
+                  onClick={confirmDeleteRemoteBranch}
+                >
+                  删除远端分支
+                </Button>
+              }
+            />
+          ) : null}
           {generating ? (
             <div className={cx('workbench-generate-progress')}>
               <Progress

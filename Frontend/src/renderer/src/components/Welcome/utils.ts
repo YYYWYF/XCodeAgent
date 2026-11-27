@@ -138,11 +138,7 @@ function _hasConnectionFields(value: Record<string, unknown>, keys: string[]): b
 }
 
 // 把新建应用表单转换为可写入 application.json 的初始配置。
-// branchOverwriteConfirmed 由调用方在提交前决定：仅当用户确认过覆盖远端同名分支时为真。
-export function buildApplicationSchema(
-  values: ApplicationDraft,
-  options?: { branchOverwriteConfirmed?: boolean }
-): ApplicationSchemaConfig {
+export function buildApplicationSchema(values: ApplicationDraft): ApplicationSchemaConfig {
   const authorizationEnabled = values.authorization.enabled === true
   // 新建应用只接收模拟数据库开关，连接信息由应用内的数据源页面管理。
   const datasource: ApplicationDatasourceConfig = values.datasource.db?.useBuiltin === true
@@ -169,7 +165,6 @@ export function buildApplicationSchema(
     senario: values.senario.trim(),
     repoUrl: values.repoUrl.trim(),
     branchName: values.branchName.trim(),
-    ...(options?.branchOverwriteConfirmed ? { branchOverwriteConfirmed: true } : {}),
     terminal: values.terminal,
     layout: values.layout,
     theme: values.theme,

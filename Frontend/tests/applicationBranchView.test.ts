@@ -1,12 +1,183 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { HttpAgent } from '@ag-ui/client'
+import { createElement } from 'react'
+import { act, create } from 'react-test-renderer'
+import { useBranchNameValidation } from '../src/renderer/src/hooks/useBranchNameValidation'
+import type { BranchNameValidationInput } from '../src/renderer/src/hooks/useBranchNameValidation'
+import BranchNameFeedback from '../src/renderer/src/components/BranchNameFeedback'
+import { createRepositoryBranch, deleteRepositoryBranch } from '../src/renderer/src/service/repositoryBranch'
+import { publishVersion, VersionPublishActionError } from '../src/renderer/src/service/versionPublish'
 import {
   branchIterationScope,
   isViewingHistoricalBranch,
   mergeBranches,
   resolveBranchChain,
-  resolveCurrentBranchName
+  resolveCurrentBranchName,
+  branchConflictReason,
+  mergeBranchNames,
+  suggestNextBranchName
 } from '../src/renderer/src/service/applicationBranches'
+
+test('分支名称合并去重、推荐跨应用与远端避重、冲突来源不重复', () => {
+  const names = mergeBranchNames(['v1_0', 'v1_1'], ['v1_1', 'v1_2'])
+  assert.deepEqual(names, ['v1_0', 'v1_1', 'v1_2'])
+  assert.equal(suggestNextBranchName('v1_0', names), 'v1_3')
+  assert.equal(suggestNextBranchName('feature', ['feature_1']), 'feature_2')
+  assert.equal(suggestNextBranchName('v9007199254740992', []), 'v9007199254740993')
+  const many = Array.from({ length: 1001 }, (_, index) => `v1_${index + 1}`)
+  assert.equal(suggestNextBranchName('v1_0', many), 'v1_1002')
+  assert.match(branchConflictReason('v1_1', names, ['v1_1'])!, /当前应用和码云仓库/)
+  assert.match(branchConflictReason('v1_1', [], names)!, /码云仓库/)
+  assert.match(branchConflictReason('v1_1', names, [])!, /当前应用/)
+  assert.equal(branchConflictReason('v1_3', names, []), undefined)
+})
+
+/** 沿用真实官方 AG-UI 客户端的运行入口，只替换服务结果而不手写传输。 */
+test('三入口共用校验覆盖冲突、失败重试、仓库切换竞态和提交时复检', async () => {
+  const originalWindow = globalThis.window
+  const originalRun = HttpAgent.prototype.runAgent
+  let timer: (() => void) | undefined
+  globalThis.window = { setTimeout: (callback: () => void) => { timer = callback; return 1 }, clearTimeout: () => { timer = undefined } } as unknown as Window & typeof globalThis
+  const requests: Array<{ repo: string; action: string; resolve: (payload: Record<string, unknown>) => void }> = []
+  HttpAgent.prototype.runAgent = async function (params) {
+    const input = params?.forwardedProps?.repositoryBranch as { repoUrl: string; action: string }
+    return new Promise((resolve) => requests.push({ repo: input.repoUrl, action: input.action, resolve: (data) => resolve({ result: { repositoryBranch: { schemaVersion: 1, runId: 'r', threadId: 't', status: 'completed', ...data } } } as never) }))
+  }
+  let input: BranchNameValidationInput = { enabled: true, repoUrl: '', branchName: 'v1_0', localNames: [] as string[], suggestionBase: 'v1_0', includeBase: true }
+  let validation!: ReturnType<typeof useBranchNameValidation>
+  /** 在真实 React 生命周期中读取校验状态。 */
+  function Probe(): null { validation = useBranchNameValidation(input); return null }
+  const root = create(createElement(Probe))
+  /** 刷新输入并触发仓库查询的防抖回调。 */
+  async function change(patch: Partial<typeof input>): Promise<void> {
+    input = { ...input, ...patch }
+    await act(async () => { root.update(createElement(Probe)) })
+    await act(async () => { timer?.(); timer = undefined })
+  }
+  /** 返回指定请求的结构化业务结果。 */
+  async function respond(index: number, data: Record<string, unknown>): Promise<void> {
+    await act(async () => { requests[index].resolve(data) })
+  }
+  try {
+    await act(async () => {})
+    assert.equal(await validation.validate(), true)
+    assert.equal(requests.length, 0, '未填仓库时不查询远端')
+    assert.equal(validation.suggestion, 'v1_0')
+    await change({ repoUrl: 'https://example.invalid/a' })
+    assert.equal(validation.checking, true)
+    await respond(0, { action: 'list', branches: ['v1_0', 'v1_1', 'v1_2'] })
+    assert.match(validation.error!, /码云仓库/)
+    assert.equal(validation.suggestion, 'v1_3')
+    await change({ branchName: 'custom', localNames: ['v1_1'] })
+    assert.equal(requests.length, 1, '改分支名复用完整分支列表')
+    assert.equal(input.branchName, 'custom', '手动输入不被覆盖')
+    let checked!: Promise<boolean>
+    await act(async () => { checked = validation.validate() })
+    await respond(1, { action: 'check', exists: true, branches: ['custom', 'v1_0'] })
+    assert.equal(await checked, false, '提交时新增的远端同名必须阻断')
+    await change({ branchName: 'next' })
+    await act(async () => { checked = validation.validate() })
+    await respond(2, { action: 'check', status: 'failed', error: { message: '鉴权失败' } })
+    assert.equal(await checked, false)
+    assert.match(validation.error!, /鉴权失败/)
+    await act(async () => { validation.retry() })
+    await act(async () => { timer?.(); timer = undefined })
+    await respond(3, { action: 'list', branches: [] })
+    assert.equal(validation.error, undefined)
+    await act(async () => { checked = validation.validate() })
+    await respond(4, { action: 'check', exists: false, branches: [] })
+    assert.equal(await checked, true)
+    await change({ repoUrl: 'https://example.invalid/b' })
+    await change({ repoUrl: 'https://example.invalid/c' })
+    await respond(6, { action: 'list', branches: ['current'] })
+    await respond(5, { action: 'list', branches: ['obsolete'] })
+    assert.deepEqual(validation.existingNames, ['current', 'v1_1'])
+    await change({ repoUrl: '' })
+    assert.deepEqual(validation.existingNames, ['v1_1'], '清除仓库后不保留远端分支')
+    await change({ branchName: 'v1_1' })
+    assert.equal(await validation.validate(), false, '无远端仍校验应用内同名')
+    await change({ branchName: 'next', repoUrl: 'bad-url' })
+    assert.equal(await validation.validate(), false)
+    const before = requests.length
+    await change({ repoUrl: 'https://example.invalid/d' })
+    await respond(before, { action: 'list', branches: [] })
+    await act(async () => { checked = validation.validate() })
+    await change({ branchName: 'changed-during-check' })
+    await respond(before + 1, { action: 'check', exists: false, branches: [] })
+    assert.equal(await checked, false, '复检期间输入变化时不能提交旧名称')
+    let creation!: Promise<unknown>
+    await act(async () => { creation = createRepositoryBranch({ workspaceRoot: '/test', branchName: 'x' }).catch((error) => error) })
+    await respond(before + 2, { action: 'create', status: 'failed', error: { message: '分支已存在' } })
+    assert.match((await creation as Error).message, /分支已存在/, '服务失败信封不能被视为已创建')
+    let deleting!: Promise<unknown>
+    await act(async () => { deleting = deleteRepositoryBranch({ repoUrl: 'https://example.invalid/a', branchName: 'v1_27' }).catch((error) => error) })
+    await respond(before + 3, {
+      action: 'delete', branchStatus: 'deleted', branchName: 'v1_27', message: ''
+    })
+    assert.deepEqual(await deleting, { branchName: 'v1_27', status: 'deleted', message: '' })
+    let failedDeletion!: Promise<unknown>
+    await act(async () => { failedDeletion = deleteRepositoryBranch({ repoUrl: 'https://example.invalid/a', branchName: 'v1_27' }).catch((error) => error) })
+    await respond(before + 4, {
+      action: 'delete', branchStatus: 'failed', branchName: 'v1_27', message: '没有删除权限'
+    })
+    assert.match((await failedDeletion as Error).message, /没有删除权限/)
+  } finally {
+    await act(async () => { root.unmount() })
+    HttpAgent.prototype.runAgent = originalRun
+    globalThis.window = originalWindow
+  }
+})
+
+/** 发布服务只给真正的历史分叉开放显式删除引导，其它错误保持普通失败。 */
+test('发布失败保留结构化分支冲突标记', async () => {
+  const originalWindow = globalThis.window
+  const originalRun = HttpAgent.prototype.runAgent
+  globalThis.window = {} as Window & typeof globalThis
+  try {
+    for (const failureReason of ['branch_conflict', undefined] as const) {
+      HttpAgent.prototype.runAgent = async function () {
+        return { result: { versionPublish: {
+          schemaVersion: 1, runId: 'r', threadId: 't', status: 'failed',
+          ...(failureReason ? { failureReason } : {}),
+          error: { message: '普通推送被拒绝' }
+        } } } as never
+      }
+      await assert.rejects(
+        publishVersion({ workspaceRoot: '/test', repoUrl: 'repo', branchName: 'v1_0', description: '测试' }),
+        (error: unknown) => {
+          assert.ok(error instanceof VersionPublishActionError)
+          assert.equal(error.branchConflict, failureReason === 'branch_conflict')
+          assert.match(error.message, /普通推送被拒绝/)
+          return true
+        }
+      )
+    }
+  } finally {
+    HttpAgent.prototype.runAgent = originalRun
+    globalThis.window = originalWindow
+  }
+})
+
+/** 展开列表与一键推荐使用真实组件，不触发分支写入。 */
+test('已有分支默认显示五项，可展开全部并一键使用推荐', async () => {
+  const names = Array.from({ length: 8 }, (_, index) => `v1_${index}`)
+  let selected = ''
+  const root = create(createElement(BranchNameFeedback, {
+    branchName: 'v1_0',
+    validation: { checking: false, error: '已存在', existingNames: names, suggestion: 'v1_8', retry: () => {}, validate: async () => false },
+    onUseSuggestion: (name) => { selected = name }
+  }))
+  try {
+    assert.equal(selected, '')
+    const findButton = (label: string): ReturnType<typeof root.root.findByType> => root.root.findAllByType('button').find((button) => button.children.join('') === label)!
+    assert.equal(JSON.stringify(root.toJSON()).includes('v1_7'), false)
+    await act(async () => { findButton('查看全部（8）').props.onClick() })
+    assert.equal(JSON.stringify(root.toJSON()).includes('v1_7'), true)
+    await act(async () => { findButton('使用此分支名').props.onClick() })
+    assert.equal(selected, 'v1_8')
+  } finally { root.unmount() }
+})
 
 /**
  * 工作台内容区的只读口径：只有回看**非当前分支**才是历史分支。

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ApplicationConfig, ApplicationDraft } from '../src/renderer/src/typings'
+import type { ApplicationConfig, ApplicationDraft, ApplicationLifecycle } from '../src/renderer/src/typings'
 import { initialApplicationDraft } from '../src/renderer/src/components/Welcome/constants'
 import { buildApplicationSchema } from '../src/renderer/src/components/Welcome/utils'
 import { LOGIN_AUTHORIZATION_DEFAULTS } from '../src/renderer/src/components/Welcome/constants'
@@ -9,9 +9,12 @@ import {
   applySettingsConfigChanges,
   configOperationEffectMessages,
   configOperationFailureMessage,
+  settingsApplicationForPersistence,
   settingsConfigChanges,
   settingsSaveNoticeMessages
 } from '../src/renderer/src/components/SettingsPage/settingsConfigChanges'
+import { currentBranch, resolveBranchChain } from '../src/renderer/src/service/applicationBranches'
+import { deriveWorkbenchPhase } from '../src/renderer/src/workbenchPhase'
 
 /** 构造设置页提交所需的当前应用配置。 */
 function application(): ApplicationConfig {
@@ -57,6 +60,53 @@ test('设置页修改或清空码云地址均通过配置事务提交', async ()
     })
     assert.deepEqual(calls, [[current.workspaceRoot, current.configRevision, { repoUrl }]])
   }
+})
+
+test('设置页分支名保持只读，不混入通用配置增量', () => {
+  const current = application()
+  current.branchName = 'v1_0'
+  current.branches = [{ name: 'v1_0', createdAt: 1 }]
+  const next = { ...current, branchName: 'v1_1' }
+  assert.deepEqual(settingsConfigChanges(current, next), {})
+})
+
+test('设计阶段保存设置保留内存首条分支和设计生命周期', () => {
+  const current = application()
+  current.branchName = 'v1_27'
+  const lifecycle: ApplicationLifecycle = {
+    application: { id: current.id, name: current.name },
+    revision: 1,
+    updatedAt: '',
+    initialization: {
+      stage: 'awaiting_ui_design_confirmation', status: 'awaiting_user', threadId: 'design-thread'
+    },
+    activeExecutions: {}
+  }
+  current.branches = [{ name: 'v1_27', createdAt: 1, lifecycle }]
+
+  const updated = { ...current, appName: '设置已修改' }
+  const disk = { ...current, appName: '设置已修改', branches: [] }
+  const persistence = settingsApplicationForPersistence(current, updated, disk)
+  const chain = resolveBranchChain({
+    diskBranches: disk.branches,
+    diskBranchName: disk.branchName,
+    memoryBranches: persistence.branches,
+    memoryBranchName: persistence.branchName
+  })
+  const saved: ApplicationConfig = { ...persistence, ...chain }
+  assert.equal(saved.branchName, 'v1_27')
+  assert.equal(saved.branches?.length, 1, '空磁盘分支表不能抹掉当前内存分支')
+  assert.equal(saved.branches?.[0].name, 'v1_27', '设置保存不能修改当前分支记录')
+  assert.equal(currentBranch(saved)?.lifecycle, lifecycle)
+  assert.equal(deriveWorkbenchPhase(currentBranch(saved)?.lifecycle), 'product')
+
+  const diskBranches = [{ name: 'v1_27', createdAt: 2, lifecycle }]
+  const persisted = settingsApplicationForPersistence(
+    current,
+    updated,
+    { ...current, branches: diskBranches }
+  )
+  assert.equal(persisted.branches, diskBranches, '已有磁盘分支表仍以磁盘为准')
 })
 
 test('旧应用设置补齐缺失地址，保留用户主动留空和自定义值', () => {

@@ -13,7 +13,7 @@ from app.services.application_lifecycle import (
     complete_workspace_bootstrap,
 )
 from app.services.application_config import read_application_config
-from app.services.repository_branch import push_workspace_branch
+from app.services.repository_branch import assert_remote_branch_available, push_workspace_branch
 from app.services.workspace_bootstrap.coordinator import template_mutation_coordinator
 from app.services.workspace_bootstrap.materializer import WorkspaceMaterializer
 from app.services.workspace_bootstrap.models import ArchiveLimits, TemplatePackageDownload, WorkspaceBootstrapError
@@ -192,6 +192,15 @@ class WorkspaceBootstrapService:
                     "lifecycle": lifecycle.model_dump(mode="json", by_alias=True),
                     "repositoryBranch": repository_branch,
                 }
+            # 首次物化前再查远端，避免规划期间新占用的名称直到基线推送才暴露。
+            repo_url = str(application_config.get("repoUrl") or "").strip()
+            if repo_url:
+                with run_log.stage("repository_branch_validation", "确认新应用分支名未被远端占用"):
+                    await asyncio.to_thread(
+                        assert_remote_branch_available,
+                        repo_url,
+                        str(application_config.get("branchName") or ""),
+                    )
             client = TemplateEngineClient(
                 base_url=self._settings.template_engine_base_url,
                 connect_timeout=self._settings.template_engine_connect_timeout_seconds,

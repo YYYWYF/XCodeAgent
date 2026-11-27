@@ -1,4 +1,4 @@
-"""应用版本发布服务：在工作区执行真实 Git 提交、打 Tag 并推送到远程仓库。"""
+"""应用版本发布服务：在工作区执行真实 Git 提交并普通推送到应用分支。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.git_branch import validate_branch_name
+from app.services.git_branch import is_non_fast_forward_rejection, validate_branch_name
 from app.services.git_commit_message import ensure_board_number
 from app.services.git_credentials import (
     git_env,
@@ -23,6 +23,10 @@ from app.services.workspace_process_registry import workspace_process_registry
 
 class VersionPublishError(ValueError):
     """表示当前工作区不能完成版本发布动作。"""
+
+
+class VersionPublishConflictError(VersionPublishError):
+    """表示远端同名分支已分叉，需要用户改名或处理远端历史。"""
 
 
 class VersionPublishRequest(BaseModel):
@@ -60,11 +64,13 @@ def publish_version(
 ) -> VersionPublishResult:
     """在工作区执行 git add -A + commit + push，并报告三步进度。
 
-    推送到 `request.branch_name` 指定的应用分支；不再打 Tag。
+    推送到 `request.branch_name` 指定的应用分支，不强制覆盖；推送失败保留本地提交。
     report_progress 为可选的同步回调，接收 (stage, message, percent)。
     """
 
     def report(stage: str, message: str, percent: int) -> None:
+        """把实际发布阶段进度交给当前 AG-UI 动作。"""
+
         if report_progress is not None:
             report_progress(stage, message, percent)
 
@@ -94,13 +100,15 @@ def publish_version(
     # 不能加进 .gitignore，否则 checkout -b 到历史分支时它不会被切回对应版本，
     # 新分支的 LLM 会读到其他分支的迭代摘要。
     try:
-        from app.services.iteration_service import generate_agents_context
+        # 推送失败后的干净工作区仅重推已有 HEAD；不能再次追加摘要造成重复提交。
+        if _run_git_checked(repository_root, ["status", "--porcelain"], "无法检查发布变更").strip():
+            from app.services.iteration_service import generate_agents_context
 
-        generate_agents_context(
-            workspace_root,
-            branch_name=branch,
-            description=request.description,
-        )
+            generate_agents_context(
+                workspace_root,
+                branch_name=branch,
+                description=request.description,
+            )
     except Exception:
         # AGENTS.md 生成失败不影响发布结果。
         pass
@@ -155,11 +163,18 @@ def publish_version(
             # 必须用全限定 refspec：仓库里可能同时存在同名的分支与**标签**
             # （旧版本号体系给每个版本打过 tag，如 v1.0），`HEAD:v1.0` 会被 git
             # 判成"匹配到多个"直接拒绝（dst refspec v1.0 matches more than one）。
-            ["push", remote_name, f"HEAD:refs/heads/{branch}", "--force"],
-            "推送提交到远程仓库失败",
+            ["push", remote_name, f"HEAD:refs/heads/{branch}"],
+            "普通推送到远程仓库失败，本地提交已保留；若远端已更新，请先处理分叉后重试",
             timeout=120,
         )
         pushed = True
+    except VersionPublishError as exc:
+        if is_non_fast_forward_rejection(str(exc)):
+            raise VersionPublishConflictError(
+                f"远端分支 {branch} 与本地提交历史已分叉，本地提交已保留；"
+                f"如确认不再需要远端该分支，可在发布弹窗中显式删除后重试。{exc}"
+            ) from exc
+        raise
     finally:
         if not pushed:
             # 推送失败时仅清理临时 remote，本地提交保留便于用户手动重推。

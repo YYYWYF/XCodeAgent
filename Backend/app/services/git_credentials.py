@@ -65,14 +65,13 @@ _BRANCH_NAME_POLICY_MARKERS = (
 
 # 远端分支已存在且与本地历史分叉（非快进）。
 #
-# 模板基线是 `git init` 出来的**全新历史**，与远端既有分支没有共同祖先，所以只要远端
-# 已存在同名分支，普通推送必然被拒；即使确认过覆盖、带了 --force，服务端也可能仍以
-# "denying non-fast-forward ... you should pull first" 拒绝（仓库保护策略）。
-# 这不是凭证或提交信息问题，重试也不会成功，必须先把远端那条分支处理掉。
+# 远端与本地历史分叉时，普通推送必须拒绝；可能来自独立基线或其他提交更新。
+# 这不是凭证或提交信息问题，不自动覆盖或删除，交由用户处理分叉后重试。
 _NON_FAST_FORWARD_MARKERS = (
     "non-fast-forward",
     "you should pull first",
     "denying non-fast-forward",
+    "fetch first",
 )
 
 # 推送被服务端钩子拒绝。**不能断言原因** —— pre-receive hook 既可能校验提交信息规范
@@ -165,9 +164,9 @@ def credential_failure_hint(detail: str) -> str:
     # 但真因是远端已有同名分支，跟提交信息、权限都无关，重试也不会成功。
     if any(marker in lowered for marker in _NON_FAST_FORWARD_MARKERS):
         return (
-            "远端已存在同名分支，且与本地历史没有共同祖先（平台推送的是全新初始化的"
-            "模板基线，无法快进合并），服务端不允许覆盖。请先删除远端的该分支，"
-            "或改用其他版本号后重试。服务端返回如下"
+            "远端分支已有与本地分叉的提交，普通推送无法快进，平台不会覆盖远端历史。"
+            "本地提交已保留，请先检查并处理远端变更后重试；新建应用或迭代请改用未占用的分支名。"
+            "服务端返回如下"
         )
     if any(marker in lowered for marker in _SERVER_REJECTED_MARKERS):
         return (

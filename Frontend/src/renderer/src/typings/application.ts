@@ -160,13 +160,6 @@ export interface ApplicationSchemaConfig {
     message: string
     updatedAt: number
   }
-  /**
-   * 用户在新建应用时是否确认过"覆盖远端已存在的同名分支"。
-   *
-   * 只有确认过才允许 force 推送；否则用普通推送 —— 远端分支历史分叉时会被 Git 拒绝，
-   * 从而避免悄悄覆盖别处刚建出来的分支。
-   */
-  branchOverwriteConfirmed?: boolean
   terminal: ApplicationTerminal
   layout: {
     type: ApplicationLayoutType

@@ -11,6 +11,7 @@ from app.protocols.ag_ui_action_stream import (
     build_ag_ui_action_stream,
 )
 from app.services.version_publish import (
+    VersionPublishConflictError,
     VersionPublishRequest,
     publish_version,
 )
@@ -93,7 +94,10 @@ def build_version_publish_ag_ui_stream(
         run_id_prefix="version-publish",
         progress_operation=operation,
         error_message_prefix="版本发布失败",
-        error_data=lambda _exc: {"action": "publish"},
+        error_data=lambda exc: {
+            "action": "publish",
+            **({"failureReason": "branch_conflict"} if isinstance(exc, VersionPublishConflictError) else {}),
+        },
         accept=accept,
         workspace_root=str(version_publish_input.get("workspaceRoot") or "") or None,
     )

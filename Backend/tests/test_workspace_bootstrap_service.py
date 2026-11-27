@@ -119,6 +119,29 @@ def _write_package(path: Path, *, include_application: bool) -> None:
 class WorkspaceBootstrapServiceTests(unittest.TestCase):
     """验证服务把 Readiness 失败限定在物化事务并投影为不可恢复失败。"""
 
+    def test_first_bootstrap_rechecks_remote_before_download(self) -> None:
+        """首次初始化远端已占名或查询失败时，不下载或物化模板代码。"""
+
+        from app.services.git_branch import GitBranchError
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            _prepare_generating_workspace(workspace)
+            config_path = workspace / ".devagentstudio/application.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config.update(repoUrl="https://repository.invalid/project.git", branchName="v1_0")
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            with (
+                patch("app.services.workspace_bootstrap.service.assert_remote_branch_available", side_effect=GitBranchError("分支已被占用")),
+                patch("app.services.workspace_bootstrap.service.TemplateEngineClient.generate", new=AsyncMock()) as download,
+            ):
+                with self.assertRaisesRegex(WorkspaceBootstrapError, "分支已被占用"):
+                    asyncio.run(WorkspaceBootstrapService(_settings())._run(workspace))
+            download.assert_not_awaited()
+            self.assertFalse((workspace / "frontend").exists())
+            self.assertFalse((workspace / "backend").exists())
+
     def test_locked_download_does_not_change_ready_or_skip_coordinator_release(self) -> None:
         """模拟下载包被占用，READY 仍成功且协调器确实释放。"""
 

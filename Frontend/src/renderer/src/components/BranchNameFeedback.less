@@ -1,0 +1,30 @@
+.@{class-prefix}-branch-name-feedback {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--modal-text-secondary, var(--wb-text-secondary));
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+
+  strong { color: var(--modal-text, var(--wb-text)); }
+  .@{class-prefix}-is-error { color: var(--modal-danger, var(--wb-danger)); }
+  .@{class-prefix}-branch-name-feedback-list {
+    display: inline-block;
+    max-width: 100%;
+    max-height: 120px;
+    vertical-align: top;
+    overflow-y: auto;
+  }
+  button {
+    padding: 0;
+    margin-left: 10px;
+    border: 0;
+    background: transparent;
+    color: var(--modal-accent, var(--wb-accent));
+    font: inherit;
+    cursor: pointer;
+    &:hover { color: var(--modal-accent-hover, var(--wb-accent-hover)); }
+    &:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+  }
+}

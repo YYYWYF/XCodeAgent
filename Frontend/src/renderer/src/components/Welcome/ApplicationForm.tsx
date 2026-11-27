@@ -10,6 +10,8 @@ import type { FormInstance } from 'antd'
 import type { ReactElement, ReactNode } from 'react'
 import type { ApplicationDraft } from '../../typings'
 import RequirementDescriptionEditor from '../RequirementDescriptionEditor'
+import type { BranchNameValidation } from '../../hooks/useBranchNameValidation'
+import BranchNameFeedback from '../BranchNameFeedback'
 import { validateBranchName, validateRepoUrl } from '../../service/repositoryBranch'
 import { cx } from '../../utils'
 import {
@@ -25,6 +27,9 @@ const { Text } = Typography
 
 type Props = {
   form: FormInstance<ApplicationDraft>
+  branchValidation?: BranchNameValidation
+  onBranchNameEdited?: () => void
+  disabled?: boolean
   /** 设置页复用新建表单时，项目目录等创建期字段仅展示。 */
   mode?: 'create' | 'settings'
   /** 设置页传入已持久化配置转换出的初始草稿。 */
@@ -57,6 +62,9 @@ function SectionTitle({
 /** 渲染应用创建配置与项目目录提示。 */
 export default function ApplicationForm({
   form,
+  branchValidation,
+  onBranchNameEdited,
+  disabled,
   onSelectProjectParent,
   selectingParent = false,
   mode = 'create',
@@ -78,6 +86,7 @@ export default function ApplicationForm({
     <Form
       className={cx('application-form')}
       form={form}
+      disabled={disabled}
       initialValues={initialValues ?? initialApplicationDraft}
       layout="vertical"
     >
@@ -191,27 +200,35 @@ export default function ApplicationForm({
           <Input aria-label="码云地址" prefix={<GithubOutlined />} placeholder={defaultRepoUrl} />
         </Form.Item>
         <Form.Item
-          extra="应用代码会推送到远端的这个分支。如果远端已经有同名分支，它上面的代码会被覆盖。"
+          extra={isSettingsMode ? '当前版本固定对应此分支，此处不允许修改。' : undefined}
           label="版本号（对应码云仓库中的分支名）"
         >
           {isSettingsMode ? (
             <Text className={cx('application-form-readonly-value')}>{branchName || '—'}</Text>
           ) : (
-            <Form.Item
-              name="branchName"
-              noStyle
-              rules={[
-                { required: true, whitespace: true, message: '请输入版本号' },
-                {
-                  validator: (_rule, value: string) => {
-                    const invalidReason = validateBranchName(value)
-                    return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
+            <>
+              <Form.Item
+                name="branchName"
+                noStyle
+                rules={[
+                  { required: true, whitespace: true, message: '请输入版本号' },
+                  {
+                    validator: (_rule, value: string) => {
+                      const invalidReason = validateBranchName(value)
+                      return invalidReason ? Promise.reject(new Error(invalidReason)) : Promise.resolve()
+                    }
                   }
-                }
-              ]}
-            >
-              <Input placeholder="v1_0" />
-            </Form.Item>
+                ]}
+              >
+                <Input placeholder="v1_0" aria-label="分支名" status={branchValidation?.error ? 'error' : undefined} onChange={onBranchNameEdited} />
+              </Form.Item>
+              {branchValidation ? (
+                <BranchNameFeedback validation={branchValidation} branchName={branchName} onUseSuggestion={(name) => {
+                  onBranchNameEdited?.()
+                  form.setFieldsValue({ branchName: name })
+                }} />
+              ) : null}
+            </>
           )}
         </Form.Item>
       </section>

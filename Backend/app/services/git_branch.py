@@ -50,3 +50,18 @@ def validate_branch_name(value: str) -> str:
     if branch_name == "HEAD":
         raise GitBranchError("分支名不能叫 HEAD。")
     return branch_name
+
+
+def is_non_fast_forward_rejection(detail: str) -> bool:
+    """识别客户端或服务端因远端历史分叉产生的非快进拒绝。"""
+
+    lowered = detail.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "denying non-fast-forward",
+            "you should pull first",
+            "non-fast-forward",
+            "fetch first",
+        )
+    )

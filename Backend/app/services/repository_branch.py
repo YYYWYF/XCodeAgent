@@ -12,12 +12,14 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Literal
-
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
 
 from app.branding import WORKSPACE_ARTIFACT_DIR
-from app.services.git_branch import GitBranchError, validate_branch_name
+from app.services.git_branch import (
+    GitBranchError,
+    is_non_fast_forward_rejection,
+    validate_branch_name,
+)
 from app.services.git_credentials import git_env, git_failure_detail
 from app.services.preview_runtime_state import redact
 from app.services.version_publish import build_authenticated_remote_url
@@ -28,13 +30,15 @@ APPLICATION_CONFIG_RELATIVE_PATH = WORKSPACE_ARTIFACT_DIR / "application.json"
 # 分支推送发生在 Bootstrap 请求路径上，前端在等结果，超时要比版本发布（120s）短。
 _BRANCH_PUSH_TIMEOUT_SECONDS = 30
 _BRANCH_CHECK_TIMEOUT_SECONDS = 20
+# 单次查询已等待完整超时时间；网络抖动时立即再做一次有界尝试，不放宽失败阻断。
+_BRANCH_CHECK_TIMEOUT_RETRIES = 1
 # 网络类失败的重试次数与间隔（见 push_baseline_to_branch 的说明）。
 _PUSH_NETWORK_RETRIES = 2
 _PUSH_RETRY_DELAY_SECONDS = 1.5
 
 
-def read_workspace_repository_target(workspace_root: str | Path) -> tuple[str, str, bool]:
-    """读取工作区配置中的代码提交目标：仓库地址、分支名、用户是否已确认覆盖。
+def read_workspace_repository_target(workspace_root: str | Path) -> tuple[str, str]:
+    """读取工作区配置中的代码提交目标：仓库地址和分支名。
 
     **分支名为空表示该应用未配置分支**（例如由「添加本地文件夹」接入的工作区），
     调用方应跳过远端分支动作，而不是当成错误。
@@ -44,16 +48,15 @@ def read_workspace_repository_target(workspace_root: str | Path) -> tuple[str, s
     try:
         application = json.loads(application_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return "", "", False
+        return "", ""
     if not isinstance(application, dict):
-        return "", "", False
+        return "", ""
 
     raw_repo_url = application.get("repoUrl")
     repo_url = raw_repo_url.strip() if isinstance(raw_repo_url, str) else ""
     raw_branch = application.get("branchName")
     branch_name = raw_branch.strip() if isinstance(raw_branch, str) else ""
-    confirmed = application.get("branchOverwriteConfirmed") is True
-    return repo_url, branch_name, confirmed
+    return repo_url, branch_name
 
 
 def read_workspace_branch_name(workspace_root: str | Path) -> str:
@@ -64,46 +67,67 @@ def read_workspace_branch_name(workspace_root: str | Path) -> str:
     不要伪造一个值。
     """
 
-    _, branch_name, _ = read_workspace_repository_target(workspace_root)
+    _, branch_name = read_workspace_repository_target(workspace_root)
     return branch_name
 
 
-def check_remote_branch(repo_url: str, branch_name: str) -> bool:
-    """检查远端仓库是否已存在该分支。"""
+def list_remote_branches(repo_url: str) -> list[str]:
+    """读取远端全部分支名并去重；读取失败必须阻止名称校验继续。"""
 
-    branch = validate_branch_name(branch_name)
     try:
         remote_url = build_authenticated_remote_url(repo_url)
-    except Exception as exc:  # noqa: BLE001 - 凭证缺失等统一收敛为本模块错误
-        raise GitBranchError(str(exc)) from exc
-    # `git ls-remote` 不要求当前目录是仓库，但需要一个真实存在的 cwd。
-    with tempfile.TemporaryDirectory(prefix="devagentstudio-branch-check-") as scratch:
-        completed = _run_git(
-            Path(scratch),
-            ["ls-remote", "--heads", remote_url, f"refs/heads/{branch}"],
-            timeout=_BRANCH_CHECK_TIMEOUT_SECONDS,
-        )
+        # 查询无需当前目录是仓库，使用独立临时目录避免依赖用户工作区。
+        with tempfile.TemporaryDirectory(prefix="devagentstudio-branch-check-") as scratch:
+            for attempt in range(_BRANCH_CHECK_TIMEOUT_RETRIES + 1):
+                try:
+                    completed = _run_git(
+                        Path(scratch),
+                        ["ls-remote", "--heads", remote_url],
+                        timeout=_BRANCH_CHECK_TIMEOUT_SECONDS,
+                    )
+                    break
+                except subprocess.TimeoutExpired:
+                    if attempt >= _BRANCH_CHECK_TIMEOUT_RETRIES:
+                        raise
+                    # 超时已经等待过完整周期，可直接重试；明确的认证/权限拒绝不进入此分支。
+    except Exception as exc:  # noqa: BLE001 - 凭证、网络及超时统一映射为可展示的错误
+        raise GitBranchError(f"无法读取远端版本列表：{redact(str(exc))}") from exc
     if completed.returncode != 0:
-        detail = _failure_detail(completed)
-        raise GitBranchError(f"无法读取远端版本列表：{detail}")
-    return bool(completed.stdout.strip())
+        raise GitBranchError(f"无法读取远端版本列表：{redact(_failure_detail(completed))}")
+    prefix = "refs/heads/"
+    return sorted({
+        ref[len(prefix):]
+        for line in completed.stdout.splitlines()
+        if len(parts := line.split()) == 2
+        and (ref := parts[1]).startswith(prefix)
+    })
+
+
+def check_remote_branch(repo_url: str, branch_name: str) -> bool:
+    """按完整远端分支列表检查规范分支名是否已经占用。"""
+
+    return validate_branch_name(branch_name) in list_remote_branches(repo_url)
+
+
+def assert_remote_branch_available(repo_url: str, branch_name: str) -> list[str]:
+    """创建新版本前确认远端没有同名分支，返回完整列表供冲突提示使用。"""
+
+    branch = validate_branch_name(branch_name)
+    branches = list_remote_branches(repo_url)
+    if branch in branches:
+        raise GitBranchError(f"分支 {branch} 已存在于码云仓库，请修改分支名。")
+    return branches
 
 
 def push_baseline_to_branch(
     workspace_root: str | Path,
     repo_url: str,
     branch_name: str,
-    *,
-    allow_overwrite: bool,
 ) -> dict[str, Any]:
-    """把工作区当前的 HEAD 推成远端分支，并把任何失败收敛为结果而不抛异常。
+    """普通推送当前 HEAD，保留非快进拒绝且不覆盖或删除远端分支。
 
-    这是 Bootstrap 链路里的**非致命**步骤：远端不可达、令牌失效或分支冲突都只报告，
-    不影响应用创建与规划流程继续。
-
-    `allow_overwrite` 为真（用户在新建应用时确认过覆盖）时才加 `--force`；否则用普通
-    推送 —— 分支不存在时同样能建出来，分支已存在时会被 Git 拒绝，从而避免悄悄覆盖
-    别处刚建出来的分支。
+    这是 Bootstrap 链路里的非致命步骤：实际推送失败仅报告，不回滚本地模板或提交；
+    已存在的本迭代分支允许正常快进，分叉历史交由 Git 拒绝。
     """
 
     root = Path(workspace_root).expanduser().resolve()
@@ -127,8 +151,6 @@ def push_baseline_to_branch(
 
     commit_sha = _read_head(root)
     arguments = ["push", remote_url, f"HEAD:refs/heads/{branch}"]
-    if allow_overwrite:
-        arguments.append("--force")
 
     # 网络类失败自动重试。用户环境里 github.com 走 VPN/代理的 fake-IP，TLS 握手
     # （实测约 0.6s）偶发被重置，报 SSL_ERROR_SYSCALL —— 同一秒重试往往就成功。
@@ -146,84 +168,21 @@ def push_baseline_to_branch(
         return _branch_result(branch, "pushed", commit_sha, "")
 
     detail = _failure_detail(completed)
-    if not allow_overwrite and _is_rejected_push(detail):
+    if is_non_fast_forward_rejection(detail):
         return _branch_result(
             branch,
-            "skipped",
+            "failed",
             commit_sha,
-            f"远端已存在版本 {branch}，未覆盖其中的代码。",
+            f"远端分支 {branch} 已有与本地分叉的提交，普通推送被拒绝；"
+            f"本地提交已保留，请先处理远端变更后重试。{detail}",
         )
-
-    # 用户确认过覆盖，但服务端以非快进拒绝：`--force` 在这里**没用** ——
-    # 服务端开了 receive.denyNonFastForwards 时会把 force 一起拒掉
-    # （"denying non-fast-forward ... you should pull first"），这是服务端策略，
-    # 客户端无法绕过。模板基线又是全新初始化的历史，与远端既有分支没有共同祖先，
-    # 所以只要远端已有同名分支，普通推送和 force 都推不上去。
-    # 要真正"全覆盖"，只能先删掉远端那条分支再推 —— 与新建时确认覆盖的语义一致。
-    if allow_overwrite and _is_non_fast_forward_rejection(detail):
-        return _replace_remote_branch(root, remote_url, branch, commit_sha)
-
     return _branch_result(branch, "failed", commit_sha, detail)
-
-
-def _replace_remote_branch(
-    root: Path,
-    remote_url: str,
-    branch: str,
-    commit_sha: str,
-) -> dict[str, Any]:
-    """先删掉远端同名分支再推送，实现"全覆盖"；失败收敛为结果而不抛异常。
-
-    只在用户确认过覆盖时调用。删除前先记录远端原 HEAD 并写进结果信息 —— 这一步是
-    破坏性的（那条分支上的提交会变成不可达对象），把 sha 留在提示里，用户需要时还能
-    从服务端的 reflog / 回收站找回。
-
-    远端分支不存在时（`ls-remote` 无输出）直接跳过删除，避免多一次无谓的失败调用。
-    """
-
-    previous_sha = ""
-    listed = _run_git(
-        root, ["ls-remote", remote_url, f"refs/heads/{branch}"], timeout=_BRANCH_CHECK_TIMEOUT_SECONDS
-    )
-    if listed.returncode == 0 and listed.stdout.strip():
-        previous_sha = listed.stdout.split()[0].strip()
-
-    if previous_sha:
-        deleted = _run_git(
-            root,
-            ["push", remote_url, "--delete", f"refs/heads/{branch}"],
-            timeout=_BRANCH_PUSH_TIMEOUT_SECONDS,
-        )
-        if deleted.returncode != 0:
-            return _branch_result(
-                branch,
-                "failed",
-                commit_sha,
-                f"远端已存在版本 {branch}，但删除失败，无法覆盖：{_failure_detail(deleted)}",
-            )
-
-    # 分支已不存在，普通推送即可建出来（不再需要 --force）。
-    pushed = _run_git(
-        root,
-        ["push", remote_url, f"HEAD:refs/heads/{branch}"],
-        timeout=_BRANCH_PUSH_TIMEOUT_SECONDS,
-    )
-    if pushed.returncode == 0:
-        suffix = f"远端原有提交 {previous_sha[:8]} 已被覆盖。" if previous_sha else ""
-        return _branch_result(branch, "pushed", commit_sha, suffix)
-    return _branch_result(
-        branch,
-        "failed",
-        commit_sha,
-        f"远端版本 {branch} 已被删除，但重新推送失败：{_failure_detail(pushed)}",
-    )
 
 
 def create_local_branch(
     workspace_root: str | Path,
     branch_name: str,
     *,
-    allow_overwrite: bool,
     start_point: str | None = None,
 ) -> dict[str, Any]:
     """在工作区建出分支并切过去，随即把该分支推到远端。
@@ -235,8 +194,8 @@ def create_local_branch(
     分支的 HEAD 建出（`git checkout -b <branch> <start_point>`），而不是从当前 HEAD。
     调用方必须先保证工作区干净（无未提交改动），否则 checkout 会失败或被拒绝。
 
-    与 `push_baseline_to_branch` 一样**永不抛异常**：分支建不出来时只报告结果，由调用方
-    决定是否继续（当前调用方会继续，并提示用户）。
+    分支创建失败返回 failed，调用方必须中止迭代；已经成功创建本地分支但实际推送失败时，
+    返回 created_local_only 并保留本地代码，供后续普通推送重试。
     """
 
     root = Path(workspace_root).expanduser().resolve()
@@ -294,6 +253,13 @@ def create_local_branch(
             commit_sha,
             f"版本 {branch} 已存在，不能重复创建。请换一个新版本号；如需在该版本上继续，请直接切换到该版本。",
         )
+    # 在切换本地分支前复查远端；读取失败不能被当成没有冲突。
+    repo_url, _ = read_workspace_repository_target(root)
+    if repo_url:
+        try:
+            assert_remote_branch_available(repo_url, branch)
+        except GitBranchError as exc:
+            return _branch_result(branch, "failed", commit_sha, str(exc))
     create_args = ["checkout", "-b", branch]
     if resolved_start_point:
         create_args.append(resolved_start_point)
@@ -301,15 +267,12 @@ def create_local_branch(
     if switch.returncode != 0:
         return _branch_result(branch, "failed", commit_sha, _failure_detail(switch))
 
-    repo_url, _, _ = read_workspace_repository_target(root)
     if not repo_url:
         return _branch_result(
             branch, "created", commit_sha, "版本已在本地创建，但当前应用未配置仓库地址。"
         )
 
-    pushed = push_baseline_to_branch(
-        root, repo_url, branch, allow_overwrite=allow_overwrite
-    )
+    pushed = push_baseline_to_branch(root, repo_url, branch)
     if pushed["status"] == "pushed":
         return _branch_result(branch, "created", commit_sha, "")
     # 本地分支已经切过去了，远端没推上去：把远端的原因如实带出来。
@@ -371,20 +334,14 @@ def delete_remote_branch(repo_url: str, branch_name: str) -> dict[str, Any]:
     return _branch_result(branch, "failed", "", _failure_detail(completed))
 
 
-def push_workspace_branch(
-    workspace_root: str | Path,
-    *,
-    allow_overwrite: bool | None = None,
-) -> dict[str, Any]:
+def push_workspace_branch(workspace_root: str | Path) -> dict[str, Any]:
     """把工作区当前 HEAD 推到应用配置里那条分支；**永不抛异常**。
 
     分支名与仓库地址都从工作区自己的 `application.json` 读（`read_workspace_repository_target`），
     所以调用方不需要重复解析配置。未配置分支名的工作区（如「添加本地文件夹」接入的目录）
     直接返回 skipped。
 
-    `allow_overwrite` 显式传入时以它为准，为 None 才用配置里新建时确认过的
-    `branchOverwriteConfirmed`。工作台的「重试提交」走前者 —— 它有自己的确认弹窗，
-    语义是"用户此刻明确要求覆盖"，不该被新建时的旧决定束缚。
+    已存在的远端分支仅允许快进推送，不接受覆盖授权或自动删除。
 
     两处调用方共用它：
     - Bootstrap 收尾（`workspace_bootstrap/service.py`）—— 基线提交后建出远端分支；
@@ -394,19 +351,12 @@ def push_workspace_branch(
 
     root = Path(workspace_root).expanduser().resolve()
     try:
-        repo_url, branch_name, overwrite_confirmed = read_workspace_repository_target(root)
+        repo_url, branch_name = read_workspace_repository_target(root)
         if not branch_name:
             return _branch_result("", "skipped", "", "当前应用未配置版本号，跳过远端分支推送。")
         if not repo_url:
             return _branch_result(branch_name, "skipped", "", "当前应用未配置仓库地址。")
-        return push_baseline_to_branch(
-            root,
-            repo_url,
-            branch_name,
-            allow_overwrite=(
-                overwrite_confirmed if allow_overwrite is None else allow_overwrite
-            ),
-        )
+        return push_baseline_to_branch(root, repo_url, branch_name)
     except Exception as exc:  # noqa: BLE001 - 调用方都要求非致命
         return _branch_result("", "failed", "", f"远端版本推送失败：{exc}")
 
@@ -454,49 +404,6 @@ def _is_transient_push_failure(detail: str) -> bool:
             "the remote end hung up",
         )
     )
-
-
-def _is_non_fast_forward_rejection(detail: str) -> bool:
-    """判断推送失败是否因为"远端同名分支与本地历史分叉、且服务端禁止非快进"。
-
-    两种形态都要认，它们出现在不同阶段：
-
-    - `! [rejected] ... (fetch first)` —— **客户端**在非 force 推送时的本地拒绝；
-    - `remote: error: denying non-fast-forward ... (you should pull first)` 与
-      `! [remote rejected] ... (non-fast-forward)` —— **服务端**开了
-      receive.denyNonFastForwards，连 `--force` 一起拒绝（公司内 Gitee 就是这种）。
-
-    这不是提交信息或权限问题，重试也不会成功；只有删掉远端分支再推才能覆盖。
-    """
-
-    lowered = detail.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "denying non-fast-forward",
-            "you should pull first",
-            "non-fast-forward",
-            "fetch first",
-        )
-    )
-
-
-def _is_rejected_push(detail: str) -> bool:
-    """判断推送失败是否只是"远端分支已存在且历史分叉"这类拒绝。
-
-    只认**非快进**语义的拒绝，绝不能按 "rejected" 泛匹配 —— git 的两种输出前缀不同：
-
-    - `! [rejected]        HEAD -> v1.0 (non-fast-forward)` —— 远端已有分叉历史，
-      不覆盖是对的，返回 skipped 让用户知道没推。
-    - `! [remote rejected] HEAD -> v1.0 (pre-receive hook declined)` —— 服务端钩子拒绝，
-      最常见的原因是当前账号**没有该仓库的推送权限**（公司内 Gitee 正是按员工身份校验）。
-      这不是"已存在"，必须按 failed 报出来，否则用户会以为代码已经在远端了。
-
-    两种前缀里只有前者含子串 `[rejected]`（后者是 `[remote rejected]`），据此区分。
-    """
-
-    lowered = detail.lower()
-    return "[rejected]" in lowered or "non-fast-forward" in lowered or "fetch first" in lowered
 
 
 def _read_head(repository_root: Path) -> str:

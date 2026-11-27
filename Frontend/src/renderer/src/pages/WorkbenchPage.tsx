@@ -32,15 +32,17 @@ import {
   isBranchPublishable,
   isViewingHistoricalBranch,
   mergeBranches,
-  resolveBranchChain
+  resolveBranchChain,
+  suggestNextBranchName
 } from '../service/applicationBranches'
-import { publishVersion } from '../service/versionPublish'
+import { publishVersion, VersionPublishActionError } from '../service/versionPublish'
 import {
   discardVersionControl,
   inspectAllVersionControl,
   summarizeVersionControl
 } from '../service/versionControl'
 import { startIteration } from '../service/iterationService'
+import { useBranchNameValidation } from '../hooks/useBranchNameValidation'
 import { asMessageClause, createRepositoryBranch } from '../service/repositoryBranch'
 import type {
   RequirementSpecDraftSaveResult,
@@ -137,28 +139,6 @@ type Props = {
 
 type Theme = 'light' | 'dark'
 
-/** 由当前版本号建议下一个迭代版本号：尾号 +1（v1_0 → v1_1），无尾号则追加 _1。 */
-function suggestNextBranchName(currentBranchName: string, existingBranchNames: string[]): string {
-  const base = (currentBranchName || 'v1').trim() || 'v1'
-  const match = base.match(/^(.*?)(\d+)$/)
-  const taken = new Set(existingBranchNames.map((name) => name.trim()))
-  // 从当前分支的尾号开始递增；若当前分支无尾号则在其后追加 _1 起跳。
-  let prefix = base
-  let counter = 0
-  if (match) {
-    prefix = match[1]
-    counter = Number.parseInt(match[2], 10)
-  } else {
-    prefix = `${base}_`
-  }
-  for (let attempt = 0; attempt < 1000; attempt += 1) {
-    counter += 1
-    const candidate = `${prefix}${counter}`
-    if (!taken.has(candidate)) return candidate
-  }
-  return `${prefix}${counter}_${Date.now()}`
-}
-
 // 组织工作台状态，并以正式 ProjectPlan 页面清单驱动首个页面规划选择。
 function WorkbenchPage({
   application,
@@ -218,6 +198,8 @@ function WorkbenchPage({
   const [descriptionGenerating, setDescriptionGenerating] = useState(false)
   // 提交推送弹框是否开启。
   const [publishModalOpen, setPublishModalOpen] = useState(false)
+  // 仅当后端确认 non-fast-forward 时分叉标记为真，正常同名分支仍可继续推送。
+  const [publishBranchConflict, setPublishBranchConflict] = useState(false)
   // 发起新迭代弹框是否开启。
   const [iterationModalOpen, setIterationModalOpen] = useState(false)
   // 发起新迭代：固定新建分支（便于回退），这里仅存用户输入的新版本号。
@@ -243,6 +225,39 @@ function WorkbenchPage({
   const [pendingHistoricalIterationSource, setPendingHistoricalIterationSource] = useState<string>('')
   // 分支切换全屏加载的目标名；为空时不显示。
   const [switchingTargetLabel, setSwitchingTargetLabel] = useState<string | undefined>(undefined)
+  const [iterationSubmitting, setIterationSubmitting] = useState(false)
+  const iterationSubmittingRef = useRef(false)
+  const iterationEdited = useRef(false)
+  const historicalIterationEdited = useRef(false)
+  const localBranchNames = [...new Set([
+    workspaceApplication.branchName || '',
+    ...(workspaceApplication.branches || []).map((branch) => branch.name)
+  ].filter(Boolean))]
+  const iterationValidation = useBranchNameValidation({
+    enabled: iterationModalOpen,
+    repoUrl: workspaceApplication.repoUrl || '',
+    branchName: iterationChoice.branchName,
+    localNames: localBranchNames,
+    suggestionBase: workspaceApplication.branchName || 'v1_0'
+  })
+  const historicalIterationValidation = useBranchNameValidation({
+    enabled: Boolean(historicalIterationSource),
+    repoUrl: workspaceApplication.repoUrl || '',
+    branchName: historicalIterationBranchName,
+    localNames: [...localBranchNames, historicalIterationSource].filter(Boolean),
+    suggestionBase: historicalIterationSource || 'v1_0'
+  })
+  useEffect(() => {
+    // 远端列表到达后只更新未编辑的默认值，手动修改的草稿不被替换。
+    if (!iterationEdited.current && !iterationSubmitting && iterationModalOpen && iterationValidation.suggestion) {
+      setIterationChoice({ mode: 'new', branchName: iterationValidation.suggestion })
+    }
+  }, [iterationModalOpen, iterationSubmitting, iterationValidation.suggestion])
+  useEffect(() => {
+    if (!historicalIterationEdited.current && !iterationSubmitting && historicalIterationSource && historicalIterationValidation.suggestion) {
+      setHistoricalIterationBranchName(historicalIterationValidation.suggestion)
+    }
+  }, [historicalIterationSource, iterationSubmitting, historicalIterationValidation.suggestion])
   // 模板是否就绪（lifecycle=ready_for_workbench），用于校准正式规划产物。
   const lifecycleReadyForWorkbench = isApplicationCreationComplete(applicationLifecycle)
 
@@ -444,6 +459,7 @@ function WorkbenchPage({
   const handleOpenPublish = useCallback((): void => {
     setPublishDescription('')
     setVersionGenerating(null)
+    setPublishBranchConflict(false)
     setPublishModalOpen(true)
     descriptionEditedRef.current = false
     requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
@@ -502,6 +518,7 @@ function WorkbenchPage({
     // 与 handleOpenPublish 同一入口：重置描述并触发模型预填。
     setPublishDescription('')
     setVersionGenerating(null)
+    setPublishBranchConflict(false)
     setPublishModalOpen(true)
     descriptionEditedRef.current = false
     requestDescriptionDraft(workspaceApplication.workspaceRoot || '')
@@ -542,6 +559,7 @@ function WorkbenchPage({
             return
           }
           // 工作区真的干净：进入历史迭代弹框。
+          historicalIterationEdited.current = false
           setHistoricalIterationSource(sourceBranchName)
           // 预填基于起点版本自增的建议版本号（跳过已有分支重名），用户可直接采用或修改。
           const existingNames = (workspaceApplication.branches || [])
@@ -575,6 +593,7 @@ function WorkbenchPage({
       .filter(Boolean)
       .join(' ')
     setVersionGenerating({ stepIndex: 0 })
+    setPublishBranchConflict(false)
     try {
       const result = await publishVersion(
         {
@@ -647,6 +666,9 @@ function WorkbenchPage({
       }
     } catch (error) {
       setVersionGenerating(null)
+      setPublishBranchConflict(
+        error instanceof VersionPublishActionError && error.branchConflict
+      )
       message.error(error instanceof Error ? error.message : '提交并推送失败')
     }
   }, [
@@ -663,11 +685,15 @@ function WorkbenchPage({
   // 确认发起新迭代：回到需求分析阶段。固定新建一条分支（便于回退）。
   // 调后端清空 .devagentstudio 规划产物（保留 AGENTS.md），重置 lifecycle 为 collecting_requirement。
   const handleConfirmIteration = useCallback(async (): Promise<void> => {
-    if (!viewedBranch || !applicationLifecycle) return
+    if (!viewedBranch || !applicationLifecycle || iterationSubmittingRef.current) return
     const targetBranchName = iterationChoice.branchName.trim()
-    setIterationModalOpen(false)
-    setSwitchingTargetLabel(targetBranchName)
+    iterationSubmittingRef.current = true
+    setIterationSubmitting(true)
     try {
+      // 复检未通过时保持弹窗与草稿，不切分支、不清理产物。
+      if (!(await iterationValidation.validate())) return
+      setIterationModalOpen(false)
+      setSwitchingTargetLabel(targetBranchName)
       // 1. 新建分支时必须**先**建分支再清空产物 —— 新分支要指向当前这次已提交的代码，
       //    晚于清空就会把新分支建在残缺的树上。后端会切到新分支并推送到远端。
       let branchCreationFailed = false
@@ -761,9 +787,13 @@ function WorkbenchPage({
     } catch (error) {
       setSwitchingTargetLabel(undefined)
       message.error(error instanceof Error ? error.message : '发起新迭代失败')
+    } finally {
+      iterationSubmittingRef.current = false
+      setIterationSubmitting(false)
     }
   }, [
     applicationLifecycle,
+    iterationValidation.validate,
     iterationChoice,
     persistApplicationConfig,
     viewedBranch,
@@ -791,7 +821,7 @@ function WorkbenchPage({
   // 与 handleConfirmIteration 的关键差异：起点不是当前 HEAD，而是历史分支的 HEAD。
   // 选 commit 的情况不进入这里 —— 弹框已经把那种选择路由到 handleGoToCommitHistoricalIteration。
   const handleConfirmHistoricalIteration = useCallback(async (): Promise<void> => {
-    if (!historicalIterationSource || !applicationLifecycle) return
+    if (!historicalIterationSource || !applicationLifecycle || iterationSubmittingRef.current) return
     const sourceBranchName = historicalIterationSource
     const targetBranchName = historicalIterationBranchName.trim()
     const workspaceRoot = workspaceApplication.workspaceRoot
@@ -801,10 +831,14 @@ function WorkbenchPage({
     const shouldDiscard =
       historicalIterationUncommittedCount > 0 &&
       historicalIterationDirtyChoice === 'discard'
-    handleCancelHistoricalIteration()
-    setSwitchingTargetLabel(targetBranchName)
+    iterationSubmittingRef.current = true
+    setIterationSubmitting(true)
     try {
-      // 1. 用户选 discard 时先调后端重置工作区（git reset --hard HEAD + git clean -fd）。
+      // 必须先复检，再丢弃改动；查询失败或重名不产生破坏性操作。
+      if (!(await historicalIterationValidation.validate())) return
+      handleCancelHistoricalIteration()
+      setSwitchingTargetLabel(targetBranchName)
+      // 1. 用户选 discard 时调后端重置工作区（git reset --hard HEAD + git clean -fd）。
       //    这是「丢掉」的语义：未提交改动被永久丢弃，不可恢复。
       if (shouldDiscard) {
         await discardVersionControl({ workspaceRoot })
@@ -894,9 +928,13 @@ function WorkbenchPage({
     } catch (error) {
       setSwitchingTargetLabel(undefined)
       message.error(error instanceof Error ? error.message : '基于此版本迭代失败')
+    } finally {
+      iterationSubmittingRef.current = false
+      setIterationSubmitting(false)
     }
   }, [
     applicationLifecycle,
+    historicalIterationValidation.validate,
     handleCancelHistoricalIteration,
     historicalIterationBranchName,
     historicalIterationDirtyChoice,
@@ -947,6 +985,7 @@ function WorkbenchPage({
                   const existingNames = (workspaceApplication.branches || [])
                     .map((branch) => branch?.name || '')
                     .filter(Boolean)
+                  iterationEdited.current = false
                   setIterationChoice({
                     mode: 'new',
                     branchName: suggestNextBranchName(viewedBranch?.name || activeBranchName, existingNames)
@@ -1018,6 +1057,8 @@ function WorkbenchPage({
                   ? String(workspaceApplication.repoUrl || '').trim() || undefined
                   : undefined
               }
+              publishBranchConflict={publishBranchConflict}
+              onPublishBranchConflictResolved={() => setPublishBranchConflict(false)}
               publishDescription={publishDescription}
               descriptionGenerating={descriptionGenerating}
               onDescriptionChange={handleDescriptionChange}
@@ -1027,6 +1068,7 @@ function WorkbenchPage({
               onCancelPublish={() => {
                 if (versionGenerating) return
                 setPublishModalOpen(false)
+                setPublishBranchConflict(false)
                 // 用户主动取消提交：清掉「基于此版本迭代」的暂存起点，
                 // 否则后续其他提交动作完成后会错误地自动打开历史迭代弹框。
                 setPendingHistoricalIterationSource('')
@@ -1034,16 +1076,19 @@ function WorkbenchPage({
               onGenerate={handleGenerateVersion}
               iterationModalOpen={iterationModalOpen}
               iterationChoice={iterationChoice}
-              onIterationChoiceChange={setIterationChoice}
-              onCancelIteration={() => setIterationModalOpen(false)}
+              iterationValidation={iterationValidation}
+              historicalIterationValidation={historicalIterationValidation}
+              iterationSubmitting={iterationSubmitting}
+              onIterationChoiceChange={(choice) => { iterationEdited.current = true; setIterationChoice(choice) }}
+              onCancelIteration={() => { if (!iterationSubmittingRef.current) setIterationModalOpen(false) }}
               onConfirmIteration={handleConfirmIteration}
               historicalIterationSourceBranch={historicalIterationSource || undefined}
               historicalIterationBranchName={historicalIterationBranchName}
-              onHistoricalIterationBranchNameChange={setHistoricalIterationBranchName}
+              onHistoricalIterationBranchNameChange={(name) => { historicalIterationEdited.current = true; setHistoricalIterationBranchName(name) }}
               historicalIterationUncommittedCount={historicalIterationUncommittedCount}
               historicalIterationDirtyChoice={historicalIterationDirtyChoice}
               onHistoricalIterationDirtyChoiceChange={setHistoricalIterationDirtyChoice}
-              onCancelHistoricalIteration={handleCancelHistoricalIteration}
+              onCancelHistoricalIteration={() => { if (!iterationSubmittingRef.current) handleCancelHistoricalIteration() }}
               onConfirmHistoricalIteration={handleConfirmHistoricalIteration}
               onGoToCommitHistoricalIteration={handleGoToCommitHistoricalIteration}
               switchingTargetLabel={switchingTargetLabel}

@@ -6,6 +6,36 @@ import type { ApplicationConfig, ApplicationBranch, ApplicationLifecycle } from 
  * 当前分支可编辑；其余分支只读回看（历史）。
  */
 
+/** 合并应用内与远端分支，去重后稳定排序，供校验、列表和推荐共用。 */
+export function mergeBranchNames(localNames: string[], remoteNames: string[]): string[] {
+  return [...new Set([...localNames, ...remoteNames].map((name) => name.trim()).filter(Boolean))].sort()
+}
+
+/** 由当前分支尾号递增推荐下一名称；穷举跳过已有名称，不依赖时间戳兜底。 */
+export function suggestNextBranchName(currentBranchName: string, existingBranchNames: string[]): string {
+  const base = currentBranchName.trim() || 'v1_0'
+  const match = base.match(/^(.*?)(\d+)$/)
+  const prefix = match ? match[1] : `${base}_`
+  let counter = match ? BigInt(match[2]) : BigInt(0)
+  const taken = new Set(existingBranchNames)
+  // 有限的占用集合最多阻挡 taken.size 个候选，下一轮必定找到空位。
+  for (;;) {
+    counter += BigInt(1)
+    const candidate = `${prefix}${counter}`
+    if (!taken.has(candidate)) return candidate
+  }
+}
+
+/** 指出同名分支的具体来源；应用内与远端同时存在时只生成一条提示。 */
+export function branchConflictReason(name: string, localNames: string[], remoteNames: string[]): string | undefined {
+  const branch = name.trim()
+  const local = localNames.includes(branch)
+  const remote = remoteNames.includes(branch)
+  if (!local && !remote) return undefined
+  const source = local && remote ? '当前应用和码云仓库' : local ? '当前应用' : '码云仓库'
+  return `分支 ${branch} 已存在于${source}，请修改分支名。`
+}
+
 /** 取当前分支记录（`branchName` 指向）。 */
 export function currentBranch(app: ApplicationConfig): ApplicationBranch | undefined {
   if (!app.branches || !app.branchName) return undefined

@@ -14,19 +14,30 @@ export type RemoteBranchCheckResult = {
   action: 'check'
   branchName: string
   exists: boolean
+  branches: string[]
 }
+
+/** 远端仓库当前所有分支，供名称避重与推荐共用。 */
+export type RemoteBranchListResult = { action: 'list'; branches: string[] }
 
 /**
  * 模板基线提交后把基线推成远端分支的结果（随 Bootstrap 结果一起返回）。
  *
- * - pushed：分支已建出或已按用户确认覆盖
- * - skipped：未推送。远端分支已存在但用户没确认过覆盖（或应用没配置分支）
- * - failed：推送失败，应用创建与规划不受影响
+ * - pushed：分支已通过普通推送发布
+ * - skipped：应用未配置远端仓库或分支
+ * - failed：推送失败，已创建的本地分支保留供重试
  */
 export type RepositoryBranchOutcome = {
   branchName: string
   status: 'pushed' | 'skipped' | 'failed'
   commitSha: string
+  message: string
+}
+
+/** 远端分支显式删除结果；本地分支和提交不由该动作修改。 */
+export type RepositoryBranchDeleteResult = {
+  branchName: string
+  status: 'deleted'
   message: string
 }
 
@@ -51,9 +62,10 @@ type RepositoryBranchAgUiPayload = {
   runId: string
   threadId: string
   status: 'completed' | 'failed'
-  action?: 'check' | 'create' | 'delete'
+  action?: 'list' | 'check' | 'create' | 'push' | 'delete'
   branchName?: string
   exists?: boolean
+  branches?: string[]
   /**
    * create/delete 动作的分支结果状态（created / created_local_only / deleted / …）。
    * 刻意不叫 `status` —— 那是信封的运行态，动作数据里同名字段会把它顶掉。
@@ -146,67 +158,78 @@ export function validateRepoUrl(value: string): string | undefined {
   return undefined
 }
 
-/** 通过标准 AG-UI 客户端在工作区建出分支并推送到远端。 */
-export async function createRepositoryBranch(input: {
-  workspaceRoot: string
-  branchName: string
-  /** 用户是否已确认覆盖远端同名分支。 */
-  allowOverwrite?: boolean
-  /**
-   * 可选起点：传入历史分支名时，新分支从那条历史分支的 HEAD 建出，
-   * 而不是从当前 HEAD。仅在「基于历史版本继续开发」流程使用。
-   */
+type RepositoryBranchActionInput = {
+  action: 'create' | 'push' | 'delete'
+  workspaceRoot?: string
+  repoUrl?: string
+  branchName?: string
   startPoint?: string
   threadId?: string
-}): Promise<RepositoryBranchOutcome> {
+}
+
+/** 共用分支动作的 AG-UI 生命周期、状态读取与失败信封处理。 */
+async function runRepositoryBranchAction(
+  input: RepositoryBranchActionInput
+): Promise<RepositoryBranchAgUiPayload> {
   const agent = createAgUiHttpAgent({
     url: getRepositoryBranchUrl(),
     threadId: input.threadId || randomUUID()
   })
-  agent.addMessage({
-    id: randomUUID(),
-    role: 'user',
-    content: `创建并推送分支 ${input.branchName}。`
-  })
+  const content = input.action === 'create'
+    ? `创建并推送分支 ${input.branchName}。`
+    : input.action === 'delete'
+      ? `删除远端分支 ${input.branchName}。`
+      : '重试把当前版本推送到远端仓库。'
+  agent.addMessage({ id: randomUUID(), role: 'user', content })
 
   let payload: RepositoryBranchAgUiPayload | undefined
   const subscriber: AgentSubscriber = {
     onCustomEvent: ({ event }) => {
-      if (event.name !== 'repository-branch') return
-      payload = readRepositoryBranchPayload(event.value) ?? payload
-    },
-    onStateSnapshotEvent: ({ event }) => {
-      payload =
-        readRepositoryBranchPayload(
-          (event.snapshot as { repositoryBranch?: unknown }).repositoryBranch
-        ) ?? payload
-    }
-  }
-
-  const result = await agent.runAgent(
-    {
-      forwardedProps: {
-        repositoryBranch: {
-          action: 'create',
-          workspaceRoot: input.workspaceRoot,
-          branchName: input.branchName,
-          allowOverwrite: input.allowOverwrite === true,
-          // startPoint 仅在调用方明确给出时透传；空串按未传处理（后端也校验非空）。
-          ...(input.startPoint ? { startPoint: input.startPoint } : {})
-        }
+      if (event.name === 'repository-branch') {
+        payload = readRepositoryBranchPayload(event.value) ?? payload
       }
     },
-    subscriber
-  )
-  payload =
-    readRepositoryBranchPayload(
-      (result.result as { repositoryBranch?: unknown } | undefined)?.repositoryBranch
-    ) ?? payload
-
-  if (!payload) throw new Error('远端版本接口没有返回有效状态。')
-  if (payload.status === 'failed') {
-    throw new Error(payload.error?.message || '创建版本失败。')
+    onStateSnapshotEvent: ({ event }) => {
+      payload = readRepositoryBranchPayload(
+        (event.snapshot as { repositoryBranch?: unknown }).repositoryBranch
+      ) ?? payload
+    }
   }
+  const result = await agent.runAgent({
+    forwardedProps: {
+      repositoryBranch: {
+        action: input.action,
+        ...(input.workspaceRoot ? { workspaceRoot: input.workspaceRoot } : {}),
+        ...(input.repoUrl ? { repoUrl: input.repoUrl } : {}),
+        ...(input.branchName ? { branchName: input.branchName } : {}),
+        ...(input.startPoint ? { startPoint: input.startPoint } : {})
+      }
+    }
+  }, subscriber)
+  payload = readRepositoryBranchPayload(
+    (result.result as { repositoryBranch?: unknown } | undefined)?.repositoryBranch
+  ) ?? payload
+  if (!payload || payload.action !== input.action) {
+    throw new Error('远端版本接口没有返回有效状态。')
+  }
+  if (payload.status === 'failed') {
+    const fallback = input.action === 'create'
+      ? '创建版本失败。'
+      : input.action === 'delete' ? '删除远端分支失败。' : '推送失败。'
+    throw new Error(payload.error?.message || fallback)
+  }
+  return payload
+}
+
+/** 通过标准 AG-UI 客户端在工作区建出分支并推送到远端。 */
+export async function createRepositoryBranch(input: {
+  workspaceRoot: string
+  branchName: string
+  /** 历史迭代可选起点；默认从当前 HEAD 建出。 */
+  startPoint?: string
+  threadId?: string
+}): Promise<RepositoryBranchOutcome> {
+  const payload = await runRepositoryBranchAction({ ...input, action: 'create' })
   return {
     branchName: payload.branchName || input.branchName,
     // created=已推到远端；created_local_only=只在本地建出，远端没推上去。
@@ -216,62 +239,12 @@ export async function createRepositoryBranch(input: {
   }
 }
 
-/**
- * 重试把工作区当前分支推送到远端（上次因网络等原因失败时用）。
- *
- * 分支名与仓库地址由后端从工作区 `application.json` 读取，所以这里只传工作区。
- */
+/** 重试推送当前分支；仓库地址与分支名仍由后端从工作区配置读取。 */
 export async function pushRepositoryBranch(input: {
   workspaceRoot: string
-  /** 用户已明确确认覆盖远端同名分支；远端已有该分支时据此删除后重推。 */
-  allowOverwrite?: boolean
   threadId?: string
 }): Promise<RepositoryBranchOutcome> {
-  const agent = createAgUiHttpAgent({
-    url: getRepositoryBranchUrl(),
-    threadId: input.threadId || randomUUID()
-  })
-  agent.addMessage({
-    id: randomUUID(),
-    role: 'user',
-    content: '重试把当前版本推送到远端仓库。'
-  })
-
-  let payload: RepositoryBranchAgUiPayload | undefined
-  const subscriber: AgentSubscriber = {
-    onCustomEvent: ({ event }) => {
-      if (event.name !== 'repository-branch') return
-      payload = readRepositoryBranchPayload(event.value) ?? payload
-    },
-    onStateSnapshotEvent: ({ event }) => {
-      payload =
-        readRepositoryBranchPayload(
-          (event.snapshot as { repositoryBranch?: unknown }).repositoryBranch
-        ) ?? payload
-    }
-  }
-
-  const result = await agent.runAgent(
-    {
-      forwardedProps: {
-        repositoryBranch: {
-          action: 'push',
-          workspaceRoot: input.workspaceRoot,
-          allowOverwrite: input.allowOverwrite === true
-        }
-      }
-    },
-    subscriber
-  )
-  payload =
-    readRepositoryBranchPayload(
-      (result.result as { repositoryBranch?: unknown } | undefined)?.repositoryBranch
-    ) ?? payload
-
-  if (!payload) throw new Error('远端版本接口没有返回有效状态。')
-  if (payload.status === 'failed') {
-    throw new Error(payload.error?.message || '推送失败。')
-  }
+  const payload = await runRepositoryBranchAction({ ...input, action: 'push' })
   const pushed = payload.branchStatus === 'pushed'
   return {
     branchName: payload.branchName || '',
@@ -281,12 +254,30 @@ export async function pushRepositoryBranch(input: {
   }
 }
 
-/** 通过标准 AG-UI 客户端检查远端仓库是否已存在该分支。 */
-export async function checkRemoteBranch(input: {
+/** 显式删除远端分支；只有服务端确认 deleted 才视为成功，不修改本地分支或提交。 */
+export async function deleteRepositoryBranch(input: {
   repoUrl: string
   branchName: string
   threadId?: string
-}): Promise<RemoteBranchCheckResult> {
+}): Promise<RepositoryBranchDeleteResult> {
+  const payload = await runRepositoryBranchAction({ ...input, action: 'delete' })
+  if (payload.branchStatus !== 'deleted') {
+    throw new Error(payload.message || '删除远端分支失败，请检查仓库权限后重试。')
+  }
+  return {
+    branchName: payload.branchName || input.branchName,
+    status: 'deleted',
+    message: payload.message || ''
+  }
+}
+
+/** 通过标准 AG-UI 客户端读取远端分支，保留完整生命周期与结构化错误。 */
+async function readRemoteBranches(input: {
+  action: 'list' | 'check'
+  repoUrl: string
+  branchName?: string
+  threadId?: string
+}): Promise<RepositoryBranchAgUiPayload> {
   const agent = createAgUiHttpAgent({
     url: getRepositoryBranchUrl(),
     threadId: input.threadId || randomUUID()
@@ -294,51 +285,62 @@ export async function checkRemoteBranch(input: {
   const message: Message = {
     id: randomUUID(),
     role: 'user',
-    content: `检查远端是否已存在分支 ${input.branchName}。`
+    content: input.action === 'list' ? '读取远端仓库的已有分支。' : `检查远端分支 ${input.branchName}。`
   }
   agent.addMessage(message)
-
   let payload: RepositoryBranchAgUiPayload | undefined
   const subscriber: AgentSubscriber = {
     onCustomEvent: ({ event }) => {
-      if (event.name !== 'repository-branch') return
-      payload = readRepositoryBranchPayload(event.value) ?? payload
+      if (event.name === 'repository-branch') payload = readRepositoryBranchPayload(event.value) ?? payload
     },
     onStateSnapshotEvent: ({ event }) => {
-      payload =
-        readRepositoryBranchPayload(
-          (event.snapshot as { repositoryBranch?: unknown }).repositoryBranch
-        ) ?? payload
+      payload = readRepositoryBranchPayload(
+        (event.snapshot as { repositoryBranch?: unknown }).repositoryBranch
+      ) ?? payload
     }
   }
-
-  const result = await agent.runAgent(
-    {
-      forwardedProps: {
-        repositoryBranch: {
-          action: 'check',
-          repoUrl: input.repoUrl,
-          branchName: input.branchName
-        }
+  const result = await agent.runAgent({
+    forwardedProps: {
+      repositoryBranch: {
+        action: input.action,
+        repoUrl: input.repoUrl,
+        ...(input.branchName ? { branchName: input.branchName } : {})
       }
-    },
-    subscriber
-  )
-  payload =
-    readRepositoryBranchPayload(
-      (result.result as { repositoryBranch?: unknown } | undefined)?.repositoryBranch
-    ) ?? payload
-
+    }
+  }, subscriber)
+  payload = readRepositoryBranchPayload(
+    (result.result as { repositoryBranch?: unknown } | undefined)?.repositoryBranch
+  ) ?? payload
   if (!payload) throw new Error('远端版本接口没有返回有效状态。')
-  if (payload.status === 'failed') {
-    throw new Error(payload.error?.message || '远端版本检查失败。')
+  if (payload.status === 'failed') throw new Error(payload.error?.message || '远端分支查询失败，请重试。')
+  if (payload.action !== input.action || !Array.isArray(payload.branches) ||
+    !payload.branches.every((branch) => typeof branch === 'string')) {
+    throw new Error('远端版本接口没有返回有效分支列表。')
   }
-  if (typeof payload.exists !== 'boolean') {
-    throw new Error('远端版本接口没有返回存在性结果。')
-  }
+  return payload
+}
+
+/** 读取远端完整分支列表；读取失败不能按空仓库处理。 */
+export async function listRemoteBranches(input: {
+  repoUrl: string
+  threadId?: string
+}): Promise<RemoteBranchListResult> {
+  const payload = await readRemoteBranches({ ...input, action: 'list' })
+  return { action: 'list', branches: payload.branches! }
+}
+
+/** 读取完整分支列表并检查目标名称，供提交前复检使用。 */
+export async function checkRemoteBranch(input: {
+  repoUrl: string
+  branchName: string
+  threadId?: string
+}): Promise<RemoteBranchCheckResult> {
+  const payload = await readRemoteBranches({ ...input, action: 'check' })
+  if (typeof payload.exists !== 'boolean') throw new Error('远端版本接口没有返回存在性结果。')
   return {
     action: 'check',
     branchName: payload.branchName || input.branchName,
-    exists: payload.exists
+    exists: payload.exists,
+    branches: payload.branches!
   }
 }

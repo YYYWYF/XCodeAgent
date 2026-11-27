@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from pydantic import ValidationError
 
 from app.domain.managed_database import ManagedDatabaseRegistration
+from app.services.git_branch import validate_branch_name
 
 CURRENT_APPLICATION_SCHEMA_VERSION = 6
 
@@ -150,6 +151,10 @@ def validate_application_configuration(application: Any) -> dict[str, Any]:
     """验证提交前完整配置及能力依赖，并返回已验证的对象。"""
 
     application = validate_application_snapshot(application)
+    if "branchOverwriteConfirmed" in application:
+        raise ApplicationConfigError("应用配置不接受分支覆盖授权，请修改为未占用的分支名。")
+    if application.get("branchName"):
+        validate_branch_name(application["branchName"])
     values = {
         "auth.enable": application["auth"]["enable"],
         "authorization.enabled": application["authorization"]["enabled"],

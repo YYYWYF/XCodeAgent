@@ -1,4 +1,4 @@
-import type { ApplicationConfig } from '../../typings'
+import type { ApplicationConfig, ApplicationSchemaConfig } from '../../typings'
 import {
   applyConfigChanges,
   type ConfigChanges,
@@ -122,6 +122,28 @@ export function settingsConfigChanges(current: ApplicationConfig, next: Applicat
     }
   }
   return changes
+}
+
+/** 合并设置保存后的磁盘受管字段与当前分支状态，保留设计阶段尚未落盘的首条分支生命周期。 */
+export function settingsApplicationForPersistence(
+  current: ApplicationConfig,
+  updated: ApplicationConfig,
+  disk: ApplicationSchemaConfig
+): ApplicationConfig {
+  const branchName = disk.branchName
+  return {
+    ...updated,
+    appName: disk.appName,
+    appIcon: disk.appIcon,
+    repoUrl: disk.repoUrl,
+    branchName,
+    // 磁盘分支表优先；新建应用的磁盘表仍为空时，不能用空数组抹掉内存中的当前分支。
+    branches: disk.branches?.length ? disk.branches : current.branches,
+    theme: disk.theme,
+    auth: disk.auth,
+    authorization: disk.authorization,
+    configRevision: disk.configRevision
+  }
 }
 
 /** 仅在受管配置确有变化时调用 AG-UI 配置事务，避免打开或保存无关设置产生重复操作。 */

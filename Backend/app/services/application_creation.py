@@ -19,6 +19,7 @@ from app.services.application_config.schema import validate_application_configur
 from app.services.application_config.initial_administrators import validate_new_admins
 from app.services.application_lifecycle import ensure_application_lifecycle, load_application_lifecycle
 from app.services.managed_database_registration import ensure_managed_database_registration
+from app.services.repository_branch import assert_remote_branch_available
 
 _CREATION_LOCK = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
@@ -61,6 +62,10 @@ def initialize_application(
         if existing is not None and existing.application.id == application_id:
             return existing, ApplicationConfigRepository(target).load()
         _assert_empty_target(target)
+        # 在注册数据库、创建暂存目录或占用目标前复检，客户端校验不能授权覆盖。
+        repo_url = str(configuration.get("repoUrl") or "").strip()
+        if repo_url:
+            assert_remote_branch_available(repo_url, str(configuration.get("branchName") or ""))
         database = configuration.get("datasource", {}).get("db") or {}
         uses_managed_database = (
                 configuration.get("datasource", {}).get("type") == "database"

@@ -8,7 +8,8 @@ import {
 import { Input, Modal, Radio } from 'antd'
 import PublishBranchModal from './PublishBranchModal'
 import RichLoading from './AiChatPanel/components/DesignProgress/RichLoading'
-import { validateBranchName } from '../service/repositoryBranch'
+import type { BranchNameValidation } from '../hooks/useBranchNameValidation'
+import BranchNameFeedback from './BranchNameFeedback'
 import type { ApplicationConfig } from '../typings'
 import { cx } from '../utils'
 
@@ -35,25 +36,19 @@ export type HistoricalIterationRequest = {
 type IterationModalProps = {
   /** 当前正在开发的分支名，作为「在当前分支继续」的落点。 */
   currentBranchName: string
-  /** 应用已有的分支名，用于即时提示"这个名字已经有了"。 */
-  existingBranchNames: string[]
+  validation: BranchNameValidation
+  submitting: boolean
   choice: IterationBranchChoice
   onChoiceChange: (choice: IterationBranchChoice) => void
   onCancel: () => void
   onConfirm: () => void
 }
 
-/**
- * 发起新迭代确认弹框：固定**新建一条分支**（便于后续回退），只做版本号的本地即时校验。
- *
- * 不再提供「在当前分支继续」的选项——在原版本上继续开发会覆盖该分支历史，
- * 用户无法回退到迭代前状态。新建分支时立刻推送到远端，因此这里只做本地即时
- * 校验（格式 + 是否与应用已有分支重名）；远端是否已有同名分支由推送结果反馈
- * （远端可能被同事建过，本地看不到）。
- */
+/** 发起新迭代弹窗：复用应用内与远端避重、完整分支列表和一键推荐。 */
 function StartIterationModal({
   currentBranchName,
-  existingBranchNames,
+  validation,
+  submitting,
   choice,
   onChoiceChange,
   onCancel,
@@ -61,15 +56,14 @@ function StartIterationModal({
 }: IterationModalProps): JSX.Element {
   // 固定新建分支：choice 语义保留，但此弹窗只产生 mode:'new'。
   const newBranchName = choice.mode === 'new' ? choice.branchName : ''
-  const invalidReason = validateBranchName(newBranchName)
-  const duplicated = existingBranchNames.includes(newBranchName.trim())
-  const canConfirm = Boolean(newBranchName.trim()) && !invalidReason && !duplicated
+  const canConfirm = !validation.error && !validation.checking && !submitting
 
   return (
     <Modal
       centered
       className={cx('workbench-publish-modal')}
-      closable
+      closable={!submitting}
+      maskClosable={!submitting}
       footer={null}
       onCancel={onCancel}
       open
@@ -96,17 +90,10 @@ function StartIterationModal({
               value={newBranchName}
               onChange={(e) => onChoiceChange({ mode: 'new', branchName: e.target.value })}
               placeholder="例如 v1_1"
-              status={invalidReason || duplicated ? 'error' : undefined}
+              disabled={submitting}
+              status={validation.error ? 'error' : undefined}
             />
-            <div
-              className={cx('workbench-iteration-branch-hint', (invalidReason || duplicated) && 'is-error')}
-            >
-              {invalidReason
-                ? invalidReason
-                : duplicated
-                  ? '这个版本号应用里已经用过了，换一个吧。'
-                  : '新版本会立刻创建并推送到远端仓库。'}
-            </div>
+            <BranchNameFeedback validation={validation} branchName={newBranchName} onUseSuggestion={(name) => onChoiceChange({ mode: 'new', branchName: name })} />
           </div>
           <div className={cx('workbench-publish-modal-meta')}>
             <CheckCircleFilled aria-hidden="true" /> 其他版本保持只读，可随时切换查看
@@ -135,8 +122,8 @@ type HistoricalIterationModalProps = {
   sourceBranchName: string
   /** 当前可编辑（活动）分支名：「审阅并提交」时切回这条分支用。 */
   activeBranchName: string
-  /** 应用已有的分支名，用于即时提示"这个名字已经有了"。 */
-  existingBranchNames: string[]
+  validation: BranchNameValidation
+  submitting: boolean
   /** 工作区当前是否有未提交改动（决定是否要求选 commit / discard）。 */
   hasUncommittedChanges: boolean
   /** 工作区未提交改动数（提示用）。 */
@@ -167,7 +154,8 @@ type HistoricalIterationModalProps = {
 function HistoricalIterationModal({
   sourceBranchName,
   activeBranchName,
-  existingBranchNames,
+  validation,
+  submitting,
   hasUncommittedChanges,
   uncommittedCount,
   newBranchName,
@@ -178,11 +166,7 @@ function HistoricalIterationModal({
   onConfirm,
   onGoToCommit
 }: HistoricalIterationModalProps): JSX.Element {
-  const invalidReason = validateBranchName(newBranchName)
-  const trimmedName = newBranchName.trim()
-  const duplicated = trimmedName.length > 0 && existingBranchNames.includes(trimmedName)
-  const sameAsSource = trimmedName.length > 0 && trimmedName === sourceBranchName
-  const nameReady = !invalidReason && !duplicated && !sameAsSource && trimmedName.length > 0
+  const nameReady = !validation.error && !validation.checking && !submitting
   // 选 commit 时确认按钮的语义变成「去提交」，不要求分支名（提交完回来再填）；
   // 选 discard 或没有未提交改动时才校验分支名。
   const goingToCommit = hasUncommittedChanges && dirtyChoice === 'commit'
@@ -192,7 +176,8 @@ function HistoricalIterationModal({
     <Modal
       centered
       className={cx('workbench-publish-modal')}
-      closable
+      closable={!submitting}
+      maskClosable={!submitting}
       footer={null}
       onCancel={onCancel}
       open
@@ -252,22 +237,10 @@ function HistoricalIterationModal({
                 value={newBranchName}
                 onChange={(e) => onNewBranchNameChange(e.target.value)}
                 placeholder="例如 v1_1"
-                status={invalidReason || duplicated || sameAsSource ? 'error' : undefined}
+                disabled={submitting}
+                status={validation.error ? 'error' : undefined}
               />
-              <div
-                className={cx(
-                  'workbench-iteration-branch-hint',
-                  (invalidReason || duplicated || sameAsSource) && 'is-error'
-                )}
-              >
-                {invalidReason
-                  ? invalidReason
-                  : duplicated
-                    ? '这个版本号应用里已经用过了，换一个吧。'
-                    : sameAsSource
-                      ? '新版本号不能与起点版本相同。'
-                      : '新版本会立刻创建并推送到远端仓库。'}
-              </div>
+              <BranchNameFeedback validation={validation} branchName={newBranchName} onUseSuggestion={onNewBranchNameChange} />
             </div>
           ) : null}
           <div className={cx('workbench-publish-modal-meta')}>
@@ -308,6 +281,10 @@ type WorkbenchVersionModalsProps = {
   publishBranchName?: string
   /** 提交推送弹框：仓库地址（提交与推送的远程落点）。 */
   publishRepoUrl?: string
+  /** 当前发布是否因远端分支历史分叉被拒绝。 */
+  publishBranchConflict: boolean
+  /** 用户显式删除远端当前分支成功后解除发布阻断。 */
+  onPublishBranchConflictResolved: () => void
   publishDescription: string
   /** 是否正在按本次改动生成变更说明。 */
   descriptionGenerating?: boolean
@@ -321,6 +298,9 @@ type WorkbenchVersionModalsProps = {
   /** 迭代弹框：是否开启（开启时用当前分支名与已有分支名渲染选择项）。 */
   iterationModalOpen: boolean
   iterationChoice: IterationBranchChoice
+  iterationValidation: BranchNameValidation
+  historicalIterationValidation: BranchNameValidation
+  iterationSubmitting: boolean
   onIterationChoiceChange: (choice: IterationBranchChoice) => void
   onCancelIteration: () => void
   onConfirmIteration: () => void
@@ -348,6 +328,8 @@ export default function WorkbenchVersionModals({
   application,
   publishBranchName,
   publishRepoUrl,
+  publishBranchConflict,
+  onPublishBranchConflictResolved,
   publishDescription,
   descriptionGenerating,
   onDescriptionChange,
@@ -358,6 +340,9 @@ export default function WorkbenchVersionModals({
   onGenerate,
   iterationModalOpen,
   iterationChoice,
+  iterationValidation,
+  historicalIterationValidation,
+  iterationSubmitting,
   onIterationChoiceChange,
   onCancelIteration,
   onConfirmIteration,
@@ -396,6 +381,8 @@ export default function WorkbenchVersionModals({
           prefix={publishPrefix}
           onPrefixChange={onPrefixChange}
           repoUrl={publishRepoUrl}
+          branchConflict={publishBranchConflict}
+          onBranchConflictResolved={onPublishBranchConflictResolved}
           generating={generating}
           onCancel={onCancelPublish}
           onGenerate={onGenerate}
@@ -406,7 +393,8 @@ export default function WorkbenchVersionModals({
         <StartIterationModal
           choice={iterationChoice}
           currentBranchName={currentBranchName}
-          existingBranchNames={allBranches.map((branch) => branch.name)}
+          validation={iterationValidation}
+          submitting={iterationSubmitting}
           onCancel={onCancelIteration}
           onChoiceChange={onIterationChoiceChange}
           onConfirm={onConfirmIteration}
@@ -417,7 +405,8 @@ export default function WorkbenchVersionModals({
         <HistoricalIterationModal
           sourceBranchName={historicalIterationSourceBranch}
           activeBranchName={currentBranchName}
-          existingBranchNames={allBranches.map((branch) => branch.name)}
+          validation={historicalIterationValidation}
+          submitting={iterationSubmitting}
           hasUncommittedChanges={historicalIterationUncommittedCount > 0}
           uncommittedCount={historicalIterationUncommittedCount}
           newBranchName={historicalIterationBranchName}

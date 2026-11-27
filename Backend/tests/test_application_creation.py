@@ -44,6 +44,48 @@ class ApplicationCreationTests(unittest.TestCase):
             configuration=self.configuration, thread_id="thread-test",
         )
 
+    def test_remote_conflict_keeps_target_and_registration_untouched(self) -> None:
+        """后端创建前复检同名，不能占用目录或调用数据库注册。"""
+
+        self.configuration.update(repoUrl="https://repository.invalid/project.git", branchName="v1_0")
+        self.configuration["datasource"] = {"type": "database", "db": {"useBuiltin": True}}
+        with (
+            patch("app.services.repository_branch.list_remote_branches", return_value=["v1_0", "v1_1"]),
+            patch("app.services.application_creation.ensure_managed_database_registration") as register,
+        ):
+            with self.assertRaisesRegex(ValueError, "已存在于码云仓库"):
+                self.create()
+        register.assert_not_called()
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_remote_query_failure_prevents_creation(self) -> None:
+        """无法读取远端分支必须明确失败，不能按空仓库创建。"""
+
+        from app.services.git_branch import GitBranchError
+
+        self.configuration.update(repoUrl="https://repository.invalid/project.git", branchName="v1_0")
+        with patch("app.services.repository_branch.list_remote_branches", side_effect=GitBranchError("远端鉴权失败")):
+            with self.assertRaisesRegex(ValueError, "远端鉴权失败"):
+                self.create()
+        self.assertFalse(self.target.exists())
+
+    def test_creation_does_not_accept_overwrite_authorization(self) -> None:
+        """直接请求不能提供已移除的分支覆盖配置。"""
+
+        self.configuration["branchOverwriteConfirmed"] = True
+        with self.assertRaisesRegex(ValueError, "不接受分支覆盖授权"):
+            self.create()
+        self.assertFalse(self.target.exists())
+
+    def test_no_repository_skips_remote_check(self) -> None:
+        """未填写码云地址时仍允许只在本地创建，保留默认分支名。"""
+
+        self.configuration.update(repoUrl="", branchName="v1_0")
+        with patch("app.services.repository_branch.list_remote_branches") as remote:
+            _, saved = self.create()
+        remote.assert_not_called()
+        self.assertEqual(saved["branchName"], "v1_0")
+
     def test_success_and_duplicate_receipt(self):
         """成功一次提交完整元数据，同身份重复请求复用成功结果。"""
         state, saved = self.create()

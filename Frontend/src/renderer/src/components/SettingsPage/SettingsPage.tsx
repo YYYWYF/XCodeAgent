@@ -17,6 +17,7 @@ import { loadWorkspaceApplicationConfig } from '../../service/applicationStorage
 import {
   applySettingsConfigChanges,
   configOperationFailureMessage,
+  settingsApplicationForPersistence,
   settingsConfigChanges,
   settingsSaveNoticeMessages
 } from './settingsConfigChanges'
@@ -37,26 +38,28 @@ type Props = {
 
 type SettingsFormValues = ApplicationDraft
 
-/** 组织并保存应用级基础能力与环境配置。 */
+/** 组织并保存应用级基础能力与环境配置；当前分支名只读。 */
 export default function SettingsPage({ application, onClose, onSaved }: Props): ReactElement {
   const [form] = Form.useForm<SettingsFormValues>()
   const [saving, setSaving] = useState(false)
   const { canResume, refreshPending, handleResume } = useSettingsConfigRecovery(application, form, setSaving, onSaved)
 
   const settingsDraft = useMemo(() => createSettingsDraft(application), [application])
+
   // 校验设置并通过统一应用保存入口加密数据库凭据。
   const handleSave = async (): Promise<void> => {
     let submittedChanges: ConfigChanges = {}
     try {
       const values = await form.validateFields()
       setSaving(true)
+      const nextRepoUrl = values.repoUrl.trim()
       // environment 不在表单里：环境变量板块已下线，但已有数据要原样保留——
       // 老工作区可能存了用户的环境变量，保存设置不该把它们清掉。
       const updatedApplication: ApplicationConfig = {
         ...application,
         appName: values.appName,
         appIcon: values.appIcon,
-        repoUrl: values.repoUrl.trim(),
+        repoUrl: nextRepoUrl,
         theme: values.theme,
         auth: values.auth,
         authorization: values.authorization,
@@ -68,16 +71,9 @@ export default function SettingsPage({ application, onClose, onSaved }: Props): 
       const applied: ConfigOperation | undefined = await applySettingsConfigChanges(application, updatedApplication)
       if (applied && applied.status !== 'APPLIED') throw new Error('应用配置尚未完成工程同步。')
       const disk = await loadWorkspaceApplicationConfig(application.workspaceRoot)
-      const persistedApplication = await saveApplication({
-        ...updatedApplication,
-        appName: disk.appName,
-        appIcon: disk.appIcon,
-        repoUrl: disk.repoUrl,
-        theme: disk.theme,
-        auth: disk.auth,
-        authorization: disk.authorization,
-        configRevision: disk.configRevision
-      })
+      const persistedApplication = await saveApplication(
+        settingsApplicationForPersistence(application, updatedApplication, disk)
+      )
       // 保存成功后以最新磁盘配置刷新表单，避免再次保存时复用提交前的开关或 revision。
       form.setFieldsValue(createSettingsDraft(persistedApplication))
       onSaved(persistedApplication)

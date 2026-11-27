@@ -11,8 +11,9 @@ from app.protocols.ag_ui_action_stream import (
     AgUiActionResult,
     build_ag_ui_action_stream,
 )
+from app.services.git_branch import GitBranchError, validate_branch_name
 from app.services.repository_branch import (
-    check_remote_branch,
+    list_remote_branches,
     create_local_branch,
     delete_remote_branch,
     push_workspace_branch,
@@ -23,18 +24,16 @@ REPOSITORY_BRANCH_EVENT_NAME = "repository-branch"
 
 
 class RepositoryBranchAction(BaseModel):
-    """校验远端分支动作：检查存在性、新建分支、删除分支。"""
+    """校验远端分支动作：检查存在性、新建、推送与显式删除分支。"""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    action: Literal["check", "create", "push", "delete"]
+    action: Literal["list", "check", "create", "push", "delete"]
     # push 的分支名从工作区配置读，所以不是所有动作都需要它；按动作校验。
     branch_name: str | None = Field(default=None, alias="branchName", max_length=255)
     # check/delete 只需要仓库地址；create/push 从工作区配置里读仓库地址，因此需要工作区。
     repo_url: str | None = Field(default=None, alias="repoUrl")
     workspace_root: str | None = Field(default=None, alias="workspaceRoot", max_length=4096)
-    # 用户在新建分支时是否已确认覆盖远端同名分支。
-    allow_overwrite: bool = Field(default=False, alias="allowOverwrite")
     # create 动作的可选起点（历史分支名 / 提交 sha）。「基于历史版本继续开发」用：
     # 新分支从这条历史 ref 建出，而不是从当前 HEAD。仅 create 接受该字段。
     start_point: str | None = Field(default=None, alias="startPoint", max_length=255)
@@ -47,7 +46,7 @@ class RepositoryBranchAction(BaseModel):
             self.branch_name or ""
         ).strip():
             raise ValueError(f"{self.action} 必须提供 branchName。")
-        if self.action in {"check", "delete"} and not str(self.repo_url or "").strip():
+        if self.action in {"list", "check", "delete"} and not str(self.repo_url or "").strip():
             raise ValueError(f"{self.action} 必须提供 repoUrl。")
         if self.action in {"create", "push"} and not str(self.workspace_root or "").strip():
             raise ValueError(f"{self.action} 必须提供 workspaceRoot。")
@@ -64,7 +63,7 @@ def repository_branch_capabilities() -> dict[str, Any]:
         "name": "repository-branch",
         "endpoint": "/repository-branch/run",
         "transport": "ag-ui-sse",
-        "actions": ["check", "create", "push", "delete"],
+        "actions": ["list", "check", "create", "push", "delete"],
         "customEventName": REPOSITORY_BRANCH_EVENT_NAME,
         "stateSnapshotKey": "repositoryBranch",
         "workflowIndependent": True,
@@ -84,14 +83,21 @@ def build_repository_branch_ag_ui_stream(
         request = RepositoryBranchAction.model_validate(branch_input)
         # 校验器已保证 check/create/delete 的 branchName 非空；这里收窄成 str 供下游使用。
         branch = request.branch_name or ""
-        if request.action == "check":
-            exists = await asyncio.to_thread(
-                check_remote_branch, request.repo_url or "", branch
-            )
+        if request.action in {"list", "check"}:
+            if request.action == "check":
+                branch = validate_branch_name(branch)
+            branches = await asyncio.to_thread(list_remote_branches, request.repo_url or "")
+            if request.action == "list":
+                return AgUiActionResult(
+                    data={"action": "list", "branches": branches},
+                    message=f"已读取远端 {len(branches)} 个分支。",
+                )
+            exists = branch in branches
             data = {
                 "action": "check",
                 "branchName": branch,
                 "exists": exists,
+                "branches": branches,
             }
             message = (
                 f"远端已存在版本 {branch}。"
@@ -105,9 +111,11 @@ def build_repository_branch_ag_ui_stream(
                 create_local_branch,
                 request.workspace_root or "",
                 branch,
-                allow_overwrite=request.allow_overwrite,
                 start_point=request.start_point,
             )
+            if result.get("status") == "failed":
+                # 未创建本地分支时是业务失败，不能伪装成已创建并继续清空规划产物。
+                raise GitBranchError(result.get("message") or "创建分支失败。")
             message = (
                 f"已创建并推送到版本 {branch}。"
                 if result.get("status") == "created"
@@ -129,12 +137,8 @@ def build_repository_branch_ag_ui_stream(
         if request.action == "push":
             # 重试把当前分支推到远端。分支名/仓库地址都从工作区配置读，
             # 所以不需要请求里带 branchName；返回值同样把 branchName 带出来。
-            # allowOverwrite 由请求显式给出：工作台的重试按钮有自己的确认弹窗，
-            # 用户确认后才会带 true —— 远端已有同名分支时据此覆盖。
             result = await asyncio.to_thread(
-                push_workspace_branch,
-                request.workspace_root or "",
-                allow_overwrite=request.allow_overwrite,
+                push_workspace_branch, request.workspace_root or ""
             )
             pushed = result.get("status") == "pushed"
             return AgUiActionResult(
@@ -180,7 +184,7 @@ def build_repository_branch_ag_ui_stream(
         error_message_prefix="远端版本操作失败",
         error_data=lambda _exc: {"action": action},
         accept=accept,
-        # 只有 create 会改动工作区（切分支），需要参与工作区互斥保护。
+        # 只有 create 会改动本地 Git 与工作区分支，需要参与工作区互斥和删除保护。
         workspace_root=str(branch_input.get("workspaceRoot") or "") or None
         if action == "create"
         else None,

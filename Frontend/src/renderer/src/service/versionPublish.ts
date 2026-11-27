@@ -10,6 +10,7 @@ export type VersionPublishPayload = {
   branch?: string
   workspaceRoot?: string
   repositoryRoot?: string
+  failureReason?: 'branch_conflict'
   error?: { type?: string; message?: string }
 }
 
@@ -19,6 +20,17 @@ export type VersionPublishInput = {
   /** 提交推送的目标分支：应用当前正在开发的那条。 */
   branchName: string
   description: string
+}
+
+/** 发布动作失败时保留结构化冲突标记，供弹窗提供用户确认后的远端删除入口。 */
+export class VersionPublishActionError extends Error {
+  readonly branchConflict: boolean
+
+  constructor(message: string, branchConflict = false) {
+    super(message)
+    this.name = 'VersionPublishActionError'
+    this.branchConflict = branchConflict
+  }
 }
 
 type VersionPublishAgUiPayload = {
@@ -32,6 +44,7 @@ type VersionPublishAgUiPayload = {
   repositoryRoot?: string
   branch?: string
   commitSha?: string
+  failureReason?: 'branch_conflict'
   error?: { type?: string; message?: string }
 }
 
@@ -66,6 +79,7 @@ function acceptPayload(
     branch: incoming.branch,
     workspaceRoot: incoming.workspaceRoot,
     repositoryRoot: incoming.repositoryRoot,
+    failureReason: incoming.failureReason,
     error: incoming.error
   }
   return merged
@@ -120,7 +134,10 @@ export async function publishVersion(
     )
     if (!latest) throw new Error('提交接口没有返回有效状态。')
     if (latest.status === 'failed') {
-      throw new Error(latest.error?.message || '提交并推送失败。')
+      throw new VersionPublishActionError(
+        latest.error?.message || '提交并推送失败。',
+        latest.failureReason === 'branch_conflict'
+      )
     }
     if (!latest.commitSha) {
       throw new Error('提交接口没有返回完整的提交结果。')
