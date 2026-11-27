@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { randomUUID } from '@ag-ui/client'
-import { PreviewRuntimeBusinessError, runPreviewRuntime } from '../../../service/previewRuntime'
+import { PreviewRuntimeBusinessError, previewServiceAttemptId, runPreviewRuntime } from '../../../service/previewRuntime'
 import type { PreviewAction, PreviewRuntimePayload, PreviewServiceLayer } from '../../../service/previewRuntime'
 import type { AgentChatMessage } from '../types'
 import type { SessionIdentity } from './sessionRuntime'
@@ -16,8 +16,9 @@ type Options = {
   workspace: string
   activeSession?: SessionIdentity
   watchForAcceptance?: boolean
-  watchForInternalDebug?: boolean
-  includeInternalDebugLogs?: boolean
+  watchForDevelopmentDebug?: boolean
+  watchForPageDebug?: boolean
+  includeDevelopmentDebugLogs?: boolean
   localBlocked: boolean
   createSession: () => Promise<SessionIdentity>
   discardSession: (identity: SessionIdentity) => Promise<void>
@@ -27,9 +28,16 @@ type Options = {
   onReady: (url: string) => void
 }
 
+export type DebugServiceControl = ServiceStatusControl & {
+  busyLaunchLayer?: PreviewServiceLayer
+  onRestartService: (layer: PreviewServiceLayer) => void
+  onDiagnoseService: (layer: PreviewServiceLayer) => void
+}
+
 /** 在工作台层持有服务操作，使关闭抽屉或切换历史对话不会中止修复。 */
 export function usePreviewRuntime(options: Options): {
-  control: ServiceStatusControl
+  control: DebugServiceControl
+  pageDebugError: string
   repairSession: boolean
   repairState?: PreviewRuntimePayload['repair']
   repairBusy: boolean
@@ -54,16 +62,18 @@ export function usePreviewRuntime(options: Options): {
   const [snapshot, setSnapshot] = useState<PreviewRuntimePayload>()
   const [busy, setBusy] = useState(false)
   const [busyLaunchLabel, setBusyLaunchLabel] = useState<ServiceStatusControl['busyLaunchLabel']>()
+  const [busyLaunchLayer, setBusyLaunchLayer] = useState<PreviewServiceLayer>()
   const [busyStopLayer, setBusyStopLayer] = useState<PreviewServiceLayer>()
-  const [error, setError] = useState('')
+  const [error, setError] = useState<{ message: string; layer?: PreviewServiceLayer }>()
   const [repairs, setRepairs] = useState<Record<string, PreviewRuntimePayload['repair']>>({})
   const busyRef = useRef(false)
   const activeRunControllerRef = useRef<AbortController | null>(null)
   const optimisticallyCancelledThreadsRef = useRef<Set<string>>(new Set())
   const optionsRef = useRef(options)
-  const failedActionRef = useRef<{ action: PreviewAction; identity?: SessionIdentity; workspace: string }>()
+  const failedActionRef = useRef<{ action: PreviewAction; identity?: SessionIdentity; workspace: string; layer?: PreviewServiceLayer }>()
   optionsRef.current = options
   const lastReadyUrlRef = useRef('')
+  const latestPageSampleRef = useRef(0)
   const repairSession = !!options.activeSession?.entryKey?.startsWith('preview-repair:')
   const activeThread = repairSession ? options.activeSession?.threadId : undefined
   const repairRunning =
@@ -75,25 +85,27 @@ export function usePreviewRuntime(options: Options): {
   const receive = useCallback((value: PreviewRuntimePayload, threadId?: string): void => {
     const { acquireSessionExecution, releaseSessionExecution, updateSessionExecutionStatus } =
       runtimeStoreRef.current
-    setSnapshot((previous) => ({
-      ...previous,
-      ...value,
-      runtime: value.runtime || previous?.runtime
-    }))
-    const readyUrl =
-      value.runtime?.status === 'running'
-        ? value.runtime.previewUrl || value.runtime.frontend.url || ''
-        : ''
-    // 服务状态订阅也可能首次发现预览已经恢复；只按 URL 变化同步一次，
-    // 清除旧启动错误并避免每轮 watch 重新加载用户正在查看的页面。
-    if (readyUrl && readyUrl !== lastReadyUrlRef.current) {
-      lastReadyUrlRef.current = readyUrl
-      void window.devAgentStudio?.projectPreview?.registerWorkspace({
-        workspaceRoot: workspaceRef.current
-      })
-      optionsRef.current.onReady(readyUrl)
-    } else if (value.runtime?.status === 'failed' || value.runtime?.frontend?.stoppedByUser) {
-      lastReadyUrlRef.current = ''
+    // 页面启动回执和订阅可交错到达。保留最新运行事实，修复消息仍按自己的会话接收。
+    if (value.pageDebugSample === undefined || value.pageDebugSample >= latestPageSampleRef.current) {
+      if (value.pageDebugSample !== undefined) latestPageSampleRef.current = value.pageDebugSample
+      setSnapshot((previous) => ({
+        ...previous,
+        ...value,
+        runtime: value.runtime || previous?.runtime
+      }))
+      const readyUrl =
+        value.runtime?.status === 'running'
+          ? value.runtime.previewUrl || value.runtime.frontend.url || ''
+          : ''
+      if (readyUrl && readyUrl !== lastReadyUrlRef.current) {
+        lastReadyUrlRef.current = readyUrl
+        void window.devAgentStudio?.projectPreview?.registerWorkspace({
+          workspaceRoot: workspaceRef.current
+        })
+        optionsRef.current.onReady(readyUrl)
+      } else if (value.runtime?.status === 'failed' || value.runtime?.frontend?.stoppedByUser) {
+        lastReadyUrlRef.current = ''
+      }
     }
     if (threadId && value.repair) {
       setRepairs((previous) => {
@@ -143,30 +155,32 @@ export function usePreviewRuntime(options: Options): {
           optionsRef.current.setMessages(identity.key, messages)
           void optionsRef.current
             .persistSession({ ...identity, messages })
-            .catch((reason) => setError(String(reason)))
+            .catch((reason) => setError({ message: String(reason), layer: value.repair?.layer }))
         }
       }
     }
   }, [])
   useEffect(() => {
     setSnapshot(undefined)
-    setError('')
+    setError(undefined)
     setRepairs({})
     failedActionRef.current = undefined
     lastReadyUrlRef.current = ''
+    latestPageSampleRef.current = 0
   }, [options.workspace])
   const previewConnection = usePreviewRuntimeConnection(
     options.workspace,
     activeThread,
-    open || options.includeInternalDebugLogs === true,
+    open || options.includeDevelopmentDebugLogs === true,
     receive,
     options.watchForAcceptance ||
-      options.watchForInternalDebug ||
+      options.watchForDevelopmentDebug ||
       open ||
       busy ||
       repairRunning ||
       snapshot?.runtime?.status === 'running' ||
-      snapshot?.runtime?.status === 'starting'
+      snapshot?.runtime?.status === 'starting',
+    options.watchForPageDebug
   )
 
   /** 立即停止渲染端等待，并在后台让服务端完成取消与占用收口。 */
@@ -183,8 +197,9 @@ export function usePreviewRuntime(options: Options): {
     busyRef.current = false
     setBusy(false)
     setBusyLaunchLabel(undefined)
+    setBusyLaunchLayer(undefined)
     setBusyStopLayer(undefined)
-    setError('')
+    setError(undefined)
 
     if (threadId) {
       optimisticallyCancelledThreadsRef.current.add(threadId)
@@ -226,7 +241,7 @@ export function usePreviewRuntime(options: Options): {
         }
         previewConnection.reportFailure(reason)
         failedActionRef.current = { action: 'cancel', identity, workspace }
-        setError(reason instanceof Error ? reason.message : '停止修复失败')
+        setError({ message: reason instanceof Error ? reason.message : '停止修复失败', layer: previousRepair?.layer })
       }
     })
   }
@@ -235,7 +250,8 @@ export function usePreviewRuntime(options: Options): {
   const execute = async (
     action: PreviewAction,
     identity?: SessionIdentity,
-    feedback = ''
+    feedback = '',
+    layer?: PreviewServiceLayer
   ): Promise<void> => {
     if (busyRef.current && action !== 'cancel') return
     if (action === 'cancel') {
@@ -244,15 +260,24 @@ export function usePreviewRuntime(options: Options): {
     }
     const captured = optionsRef.current
     const workspace = captured.workspace
+    const restartLayer = action === 'restart_frontend' ? 'frontend' : action === 'restart_backend' ? 'backend' : undefined
+    const stopLayer = action === 'stop_frontend' ? 'frontend' : action === 'stop_backend' ? 'backend' : undefined
+    const targetLayer = layer ?? restartLayer ?? stopLayer
+    const operationLayer = targetLayer ?? (identity ? repairs[identity.threadId]?.layer : undefined)
+    const launchDebugPage = captured.watchForPageDebug && operationLayer === 'frontend' &&
+      (action === 'restart_frontend' || action === 'confirm')
+    const runtime = snapshot?.runtime
     // 手动重启一开始就登记工作区，确保 Electron 在重启进行中退出时也会停止残留进程。
-    if (action === 'restart' && workspace) {
+    if ((action === 'restart' || restartLayer) && workspace) {
       void window.devAgentStudio?.projectPreview?.registerWorkspace({ workspaceRoot: workspace })
     }
     busyRef.current = true
-    setBusyLaunchLabel(action === 'restart' ? previewServiceLaunchLabel(snapshot?.runtime) : undefined)
-    setBusyStopLayer(action === 'stop_frontend' ? 'frontend' : action === 'stop_backend' ? 'backend' : undefined)
+    setBusyLaunchLabel(restartLayer ? (runtime?.[restartLayer].status === 'running' ? '重启服务' : '启动服务')
+      : action === 'restart' ? previewServiceLaunchLabel(runtime) : undefined)
+    setBusyLaunchLayer(restartLayer)
+    setBusyStopLayer(stopLayer)
     setBusy(true)
-    setError('')
+    setError(undefined)
     failedActionRef.current = undefined
     const previous = identity ? captured.getMessages(identity.key) : []
     const now = Date.now()
@@ -262,7 +287,7 @@ export function usePreviewRuntime(options: Options): {
       content:
         feedback ||
         {
-          diagnose: '诊断并修复预览服务启动失败。',
+          diagnose: `诊断并修复${layer === 'frontend' ? '前端' : layer === 'backend' ? '后端' : '预览'}服务启动失败。`,
           confirm: '确认修复计划并执行。',
           revise: '重新诊断并生成修复计划。',
           cancel: '停止诊断修复。'
@@ -302,7 +327,9 @@ export function usePreviewRuntime(options: Options): {
           workspace,
           action,
           feedback,
-          attemptId: snapshot?.runtime?.attemptId,
+          attemptId: targetLayer ? previewServiceAttemptId(runtime, targetLayer) : runtime?.attemptId,
+          layer: action === 'diagnose' ? layer : undefined,
+          ...(launchDebugPage && { pageDebug: true, includeLogs: open || captured.includeDevelopmentDebugLogs === true }),
           planId: identity ? repairs[identity.threadId]?.planId : undefined
         },
         {
@@ -328,16 +355,17 @@ export function usePreviewRuntime(options: Options): {
                 const messages = [...previous, user, assistant]
                 pendingSave = pendingSave
                   .then(() => captured.persistSession({ ...identity, messages }))
-                  .catch((reason) => setError(String(reason)))
+                  .catch((reason) => setError({ message: String(reason), layer: operationLayer }))
               }
             }
           }
         }
       )
-      if (operationController.signal.aborted) return
+      if (operationController.signal.aborted || workspaceRef.current !== workspace) return
       if (value.launchResult?.status === 'failed') {
-        failedActionRef.current = { action, identity, workspace }
-        setError(value.launchResult.message || '预览服务启动失败。')
+        failedActionRef.current = { action, identity, workspace, layer }
+        const failedLayer = operationLayer ?? (value.launchResult.frontend?.status === 'failed' ? 'frontend' : undefined)
+        setError({ message: value.launchResult.message || '预览服务启动失败。', layer: failedLayer })
       }
       const repair = value.repair
       awaitingConfirmation = repair?.status === 'awaiting_confirmation'
@@ -365,7 +393,7 @@ export function usePreviewRuntime(options: Options): {
       if (
         value.runtime?.status === 'running' &&
         value.runtime.previewUrl &&
-        ['restart', 'confirm'].includes(action) &&
+        (action === 'restart' || (action === 'confirm' && !repair?.layer)) &&
         workspaceRef.current === workspace
       )
         captured.onReady(value.runtime.previewUrl)
@@ -374,8 +402,8 @@ export function usePreviewRuntime(options: Options): {
       const message = reason instanceof Error ? reason.message : '预览服务操作失败'
       if (workspaceRef.current !== workspace) return
       previewConnection.reportFailure(reason)
-      failedActionRef.current = { action, identity, workspace }
-      setError(message)
+      failedActionRef.current = { action, identity, workspace, layer }
+      setError({ message, layer: operationLayer })
       assistant = { ...assistant, content: message, error: message }
       // 断线不能证明诊断未被接收，保留同一会话供权威读取恢复。
       if (identity && action === 'diagnose' && !accepted && reason instanceof PreviewRuntimeBusinessError) {
@@ -392,6 +420,7 @@ export function usePreviewRuntime(options: Options): {
         busyRef.current = false
         setBusy(false)
         setBusyLaunchLabel(undefined)
+        setBusyLaunchLayer(undefined)
         setBusyStopLayer(undefined)
         if (identity && !awaitingConfirmation) releaseSessionExecution(identity.key)
       }
@@ -406,16 +435,16 @@ export function usePreviewRuntime(options: Options): {
     }
   }
   /** 新建开发阶段修复历史会话，所有确认继续沿用该身份。 */
-  const diagnose = async (): Promise<void> => {
+  const diagnose = async (layer?: PreviewServiceLayer): Promise<void> => {
     if (busyRef.current) return
     busyRef.current = true
     try {
       const identity = await optionsRef.current.createSession()
       busyRef.current = false
-      await execute('diagnose', identity)
+      await execute('diagnose', identity, '', layer)
     } catch (reason) {
       busyRef.current = false
-      setError(reason instanceof Error ? reason.message : '创建修复会话失败')
+      setError({ message: reason instanceof Error ? reason.message : '创建修复会话失败', layer })
     }
   }
   const blockedReason = options.localBlocked
@@ -430,23 +459,24 @@ export function usePreviewRuntime(options: Options): {
     try {
       const value = await previewConnection.read(failed?.identity?.threadId || activeThread)
       if (workspaceRef.current !== workspace) return
-      setError('')
+      setError(undefined)
       failedActionRef.current = undefined
       const identity = failed?.identity || optionsRef.current.activeSession
-      const action = previewRecoveryAction(value, failed?.action, identity?.threadId)
-      if (action === 'restart') await execute('restart')
+      const action = previewRecoveryAction(value, failed?.action, identity?.threadId, failed?.layer)
+      if (action === 'restart' || action === 'restart_frontend' || action === 'restart_backend') await execute(action)
       else if (action === 'diagnose') {
-        if (!value.repair?.status && failed?.identity) await execute('diagnose', failed.identity)
-        else await diagnose()
+        if (!value.repair?.status && failed?.identity) await execute('diagnose', failed.identity, '', failed.layer)
+        else await diagnose(failed?.layer)
       } else if (action === 'revise' && identity) await execute('revise', identity)
       else if (action === 'cancel') await execute('cancel', identity)
     } catch (reason) {
       // 只读重连的通信错误由连接入口持有，避免重连成功后残留成业务失败。
-      if (workspaceRef.current === workspace) setError(reason instanceof PreviewRuntimeBusinessError ? reason.message : '')
+      if (workspaceRef.current === workspace) setError(reason instanceof PreviewRuntimeBusinessError ? { message: reason.message } : undefined)
     }
   }
   return {
     connection: previewConnection.connection,
+    pageDebugError: (error?.layer === 'frontend' && error.message) || previewConnection.readError,
     retry,
     /** 连接入口只重新读取预览状态，不重放启动、诊断或修复动作。 */
     reconnect: async () => {
@@ -459,8 +489,9 @@ export function usePreviewRuntime(options: Options): {
       snapshot,
       busy,
       busyLaunchLabel,
+      busyLaunchLayer,
       busyStopLayer,
-      error: error || previewConnection.businessError || previewConnection.connection.lastError || '',
+      error: error?.message || previewConnection.readError || previewConnection.connection.lastError || '',
       blockedReason,
       onRestart: () => {
         void execute('restart')
@@ -470,7 +501,9 @@ export function usePreviewRuntime(options: Options): {
       },
       onDiagnose: () => {
         void diagnose()
-      }
+      },
+      onRestartService: (layer) => { void execute(`restart_${layer}`) },
+      onDiagnoseService: (layer) => { void diagnose(layer) }
     },
     repairSession,
     repairState: activeThread ? repairs[activeThread] : undefined,

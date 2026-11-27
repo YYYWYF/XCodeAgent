@@ -9,6 +9,7 @@ import './RightPanelTabs.less'
 export type WorkspaceTabKey =
   | 'field-mapping'
   | 'internal-api-debug'
+  | 'page-debug'
   | 'preview'
   | 'source'
   | 'doc'

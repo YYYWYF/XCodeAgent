@@ -6,7 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
-from app.services.preview_runtime_state import redact, runtime_root, runtime_snapshot
+from app.services.preview_runtime_state import redact, repair_attempt_id, runtime_root, runtime_snapshot
 from app.services.preview_repair_evidence import evidence_markdown, repair_evidence
 
 
@@ -84,13 +84,21 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
     from app.config import Settings
     # 诊断使用实时校准后的失败事实，避免持久记录仍为 running 时把成功摘要交给模型。
     record = runtime_snapshot(workspace, logs=False)
+    layer = previous.get("layer")
+    if layer:
+        # 分端诊断绑定目标服务与该端证据，另一端失败不会改变本轮计划。
+        part = record[layer]
+        record = {layer: part, "attemptId": repair_attempt_id(record, layer), "status": part["status"],
+                  "message": part.get("message"), "failedStage": part.get("failedStage"),
+                  "diagnostics": part.get("diagnostics", [])}
     if record.get("failedStage") == "backend_database_resource":
         return {**previous, "status": "failed", "message": "当前失败来自数据库资源，请先处理实体表、SaaS 或连接配置，再重新启动；无需修改业务代码。"}
     evidence = repair_evidence(workspace, record, previous)
     iteration = int(previous.get("iteration", 0))
     if iteration >= 3:
         return {**previous, "status": "failed", "message": "已达到 3 轮修复上限，请查看日志并手动处理。"}
-    roots = [name for name in ("frontend", "Frontend", "backend", "Backend") if (Path(workspace) / name).is_dir()]
+    roots = [name for name in ("frontend", "Frontend", "backend", "Backend")
+             if (not layer or name.lower() == layer) and (Path(workspace) / name).is_dir()]
     # 部署平台与 npm registry 显式注入到 repair_input，让 RepairPlanner 在 prompt 里看到
     # 当前部署目标和应使用的镜像源，进而能指引 SmallTask Agent 选择 macOS/Windows 平台参考、
     # 写入正确的工作区 .npmrc registry。两者都是部署级配置，与工作区状态无关。
@@ -125,6 +133,8 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
         selected = [str(item["path"]) for item in normalized_changes]
         if not selected or len(selected) > 30:
             raise ValueError("修复计划必须明确列出 1–30 个文件。")
+        if layer and any(not path.lower().startswith(layer + "/") for path in selected):
+            raise ValueError("修复计划超出当前调试服务的工程范围。")
         paths.extend(selected)
         for owner in ("backend", "frontend"):
             owner_paths = [path for path in selected if path.lower().startswith(owner + "/")]
@@ -161,12 +171,13 @@ def prepare_repair(workspace: str, thread_id: str, previous: dict[str, Any], fee
     strategy = str(plan.get("strategy") or "修复当前启动失败")
     reason = str(plan.get("reason") or strategy)
     markdown = "# 预览服务修复计划\n\n" + reason + "\n\n" + strategy + "\n\n## 故障证据\n\n" + evidence_markdown(evidence) + "\n\n## 修复任务\n\n" + "\n".join(f"- {task['title']}：{task['description']}\n  文件：{', '.join(task['allowed_paths'])}" for task in tasks)
-    return {"status": "awaiting_confirmation", "planId": uuid4().hex, "attemptId": record.get("attemptId"), "iteration": iteration, "strategy": strategy, "reason": reason, "tasks": tasks, "paths": paths, "digest": source_digest(workspace, paths), "markdown": redact(markdown), "message": "诊断完成，请确认本轮修复计划。", "codeChangeSets": previous.get("codeChangeSets", [])}
+    return {"status": "awaiting_confirmation", "planId": uuid4().hex, "attemptId": record.get("attemptId"), "iteration": iteration, "strategy": strategy, "reason": reason, "tasks": tasks, "paths": paths, "digest": source_digest(workspace, paths), "markdown": redact(markdown), "message": "诊断完成，请确认本轮修复计划。", "codeChangeSets": previous.get("codeChangeSets", []), **({"layer": layer} if layer else {})}
 
 
 def execute_repair(workspace: str, repair: dict[str, Any], report: Any, cancelled: Any) -> dict[str, Any]:
     """执行已确认计划并复用受影响层检查和统一启动器。"""
     from app.services.small_task import execute_small_task_batch
+    from app.services.debug_service_launcher import restart_debug_service
     from app.services.integration_test_runner import run_integration_checks
     from app.services.project_launcher import launch_project_preview
     if source_digest(workspace, repair["paths"]) != repair["digest"]:
@@ -185,8 +196,13 @@ def execute_repair(workspace: str, repair: dict[str, Any], report: Any, cancelle
         return {**updated, "status": "stopped", "message": "修复已停止，已产生的修改保留。"}
     if any(item.get("passed") is False for item in checks.get("test_results", [])):
         return {**updated, "status": "retry", "message": "修复后的检查仍失败，需要重新诊断。"}
-    report("restart", "正在重新启动前后端服务…")
-    launch = launch_project_preview(workspace, force_restart=True, on_progress=lambda stage, status, message: report(stage, message))
+    layer = repair.get("layer")
+    if layer:
+        report("restart", "正在重新启动前端服务…" if layer == "frontend" else "正在重新启动后端服务…")
+        launch = restart_debug_service(workspace, layer, on_progress=lambda stage, status, message: report(stage, message))
+    else:
+        report("restart", "正在重新启动前后端服务…")
+        launch = launch_project_preview(workspace, force_restart=True, on_progress=lambda stage, status, message: report(stage, message))
     if cancelled.is_set():
         return {**updated, "status": "stopped", "message": "修复已停止。"}
     if launch.get("status") == "running":

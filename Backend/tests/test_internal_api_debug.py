@@ -102,6 +102,8 @@ class InternalApiDebugTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sends_once_to_ready_backend_and_preserves_business_failure(self) -> None:
         """前端预览失败仍能调用已就绪后端，并返回实际状态和正文。"""
+        self.runtime["backend"]["attemptId"] = self.runtime["attemptId"]
+        self.runtime.update(attemptId="new-frontend-attempt", maintenance={"action": "restart_frontend"})
         result = await send_internal_debug(self.request)
         self.assertEqual(self.server.calls, [("/api/posts/7?mode=edit+title", "SESSION=test-only", '{"title":"draft"}')])
         self.assertEqual(result["statusCode"], 403)

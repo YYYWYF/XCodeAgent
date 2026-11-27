@@ -20,6 +20,8 @@ def repair_evidence(workspace: str, record: dict[str, Any], previous: dict[str, 
             str(check.get("evidence") or check.get("name") or "验证失败"), check.get("execution"),
         )]
     logs = read_logs(workspace)
+    if layer := previous.get("layer"):
+        logs = {layer: logs[layer]}
     if use_validation:
         # 日志来自最新检查的受控执行结果，不把旧启动日志混成当前失败证据。
         logs = {"frontend": [], "backend": []}

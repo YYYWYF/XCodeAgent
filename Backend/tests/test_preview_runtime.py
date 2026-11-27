@@ -14,6 +14,7 @@ from app.protocols.preview_runtime import build_preview_runtime_stream, blocking
 from app.protocols.revision_preview import build_revision_preview_ag_ui_stream, schedule_revision_preview_cleanup
 from app.agents.repair_planner.planner import _build_failure_repair_prompt
 from app.services.backend_runtime_jar import BACKEND_PROCESS_FILENAME, write_backend_process_record
+from app.services.page_debug_gateway import close_page_debug_gateway
 from app.services.preview_runtime_guard import _owners, claim_maintenance, maintenance_owner, release_maintenance, require_no_maintenance
 from app.services.preview_runtime_repair import execute_repair, load_repair, prepare_repair, save_repair, source_digest, safe_file
 from app.services.preview_runtime_state import (
@@ -243,6 +244,92 @@ class PreviewRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(runtime["logs"]["backend"])
                 self.assertFalse(runtime["repairAvailable"])
                 self.assertIsNone(runtime["maintenance"])
+
+    async def test_debug_restart_keeps_other_service_attempt_and_logs(self) -> None:
+        """单端启动失败不改变另一端的进程、启动身份和日志。"""
+        shared_attempt = begin_attempt(self.workspace)
+        finish_attempt(self.workspace, {"status": "running", "backend": {
+            "status": "running", "server": {"pid": 456, "port": 8080},
+        }})
+        root = runtime_root(self.workspace)
+        (root / "backend.stdout.log").write_text("Started Application in 0.1 seconds\n", encoding="utf-8")
+        (root / "frontend.stdout.log").write_text("old frontend log", encoding="utf-8")
+        write_backend_process_record(
+            root / BACKEND_PROCESS_FILENAME, pid=456, jar=root / "backend-jar" / ("b" * 32) / "app.jar",
+        )
+        with (
+            patch("app.services.preview_runtime_state.pid_is_running", return_value=True),
+            patch("app.services.debug_service_launcher.stop_frontend_project", return_value={"status": "stopped"}),
+            patch("app.services.debug_service_launcher.launch_frontend_project", return_value={"status": "failed", "message": "构建失败"}),
+            patch("app.services.debug_service_launcher.stop_workspace_backend_project") as stop_backend,
+            patch("app.services.debug_service_launcher.launch_backend_project") as start_backend,
+        ):
+            value = self.result(await self.request("restart_frontend"))["runtime"]
+            self.assertEqual(value["frontend"]["status"], "failed")
+            self.assertTrue(value["frontend"]["repairAvailable"])
+            self.assertNotEqual(value["frontend"]["attemptId"], shared_attempt)
+            self.assertEqual(value["backend"]["attemptId"], shared_attempt)
+            self.assertEqual(value["backend"]["status"], "running")
+            self.assertEqual(value["logs"]["frontend"], [])
+            self.assertIn("Started Application", value["logs"]["backend"][0]["content"])
+            stop_backend.assert_not_called()
+            start_backend.assert_not_called()
+
+    async def test_page_debug_launch_returns_ready_gateway_before_next_watch(self) -> None:
+        """启动回执须在解锁后同时给出前端身份和网关地址，关闭日志时跳过读取。"""
+        self.addCleanup(close_page_debug_gateway, self.workspace)
+        root = runtime_root(self.workspace)
+        url = "http://127.0.0.1:3100"
+
+        def launch(_workspace: Path) -> dict:
+            """提供与启动器一致的就绪结果和 PID 文件。"""
+            (root / "frontend.pid").write_text("123", encoding="utf-8")
+            return {"status": "running", "preview_url": url, "server": {"pid": 123, "port": 3100, "ready": True}}
+
+        with (
+            patch("app.services.debug_service_launcher.stop_frontend_project", return_value={"status": "stopped"}),
+            patch("app.services.debug_service_launcher.launch_frontend_project", side_effect=launch),
+            patch("app.services.preview_runtime_state.pid_is_running", return_value=True),
+            patch("app.services.preview_runtime_state._frontend_runtime_is_ready", return_value=True),
+            patch("app.services.preview_runtime_state.read_logs") as logs,
+        ):
+            started = self.result(await self.request("restart_frontend", pageDebug=True, includeLogs=False))
+            self.assertEqual(started["runtime"]["frontend"]["status"], "running")
+            self.assertIsNone(started["runtime"]["maintenance"])
+            self.assertEqual(started["pageDebug"]["frontendAttemptId"], started["launchResult"]["attempt_id"])
+            self.assertRegex(started["pageDebug"]["origin"], r"^http://127\.0\.0\.1:\d+$")
+            read = self.result(await self.request("get", pageDebug=True, includeLogs=False))
+            self.assertEqual(read["pageDebug"], started["pageDebug"])
+            self.assertGreater(read["pageDebugSample"], started["pageDebugSample"])
+            self.assertNotIn("pageDebug", self.result(await self.request("get", includeLogs=False)))
+            logs.assert_not_called()
+
+    async def test_scoped_diagnosis_uses_target_attempt_and_scope(self) -> None:
+        """分端诊断读取本端失败证据，并在计划中保留重启目标。"""
+        self.fail_launch()
+        with patch("app.agents.repair_planner.plan_build_failure_repair_with_repair_planner_agent", return_value={
+            "decision": "repair", "reason": "前端编译失败", "strategy": "修复编译错误",
+            "repair_tasks": [{"title": "修复入口文件", "description": "修正语法",
+                              "change_scope": [{"path": "/frontend/main.ts", "operation": "modify"}]}],
+        }) as plan:
+            attempt = read_record(self.workspace)["attemptId"]
+            value = self.result(await self.request("diagnose", layer="frontend", attemptId=attempt))
+            repair = value["repair"]
+            self.assertEqual(repair["status"], "awaiting_confirmation")
+            self.assertEqual(repair["layer"], "frontend")
+            plan_input = plan.call_args.kwargs["repair_input"]
+            self.assertEqual({path.casefold() for path in plan_input["change_scope"]["allowed_paths"]}, {"frontend"})
+            self.assertEqual(set(plan_input["failure"]["logs"]), {"frontend"})
+        with (
+            patch("app.services.small_task.execute_small_task_batch", return_value={"results": [{"status": "completed"}]}),
+            patch("app.services.integration_test_runner.run_integration_checks", return_value={"test_results": []}),
+            patch("app.services.debug_service_launcher.restart_debug_service", return_value={"status": "running"}) as restart,
+            patch("app.services.project_launcher.launch_project_preview") as combined_restart,
+        ):
+            confirmed = self.result(await self.request("confirm", planId=repair["planId"]))
+            self.assertEqual(confirmed["repair"]["status"], "completed")
+            self.assertEqual(restart.call_args.args, (str(Path(self.workspace).resolve()), "frontend"))
+            combined_restart.assert_not_called()
 
     async def test_service_stop_rejects_stale_attempt_and_reports_process_failure(self) -> None:
         """迟到请求无法终止新进程，终止失败不会把任一端写成已停止。"""

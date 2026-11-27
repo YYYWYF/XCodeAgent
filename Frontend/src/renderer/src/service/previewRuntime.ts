@@ -9,6 +9,8 @@ export type PreviewAction =
   | 'get'
   | 'watch'
   | 'restart'
+  | 'restart_frontend'
+  | 'restart_backend'
   | 'stop'
   | 'stop_frontend'
   | 'stop_backend'
@@ -20,6 +22,9 @@ export type PreviewAction =
 export type PreviewServiceLayer = 'frontend' | 'backend'
 export type PreviewServiceState = {
   status: 'starting' | 'running' | 'failed' | 'stopped' | 'skipped'
+  attemptId?: string
+  failedStage?: string
+  repairAvailable?: boolean
   message?: string
   port?: number
   url?: string
@@ -44,6 +49,7 @@ export type PreviewLog = {
 }
 export type PreviewRepair = {
   interrupted?: boolean
+  layer?: PreviewServiceLayer
   status?:
     | 'awaiting_confirmation'
     | 'running'
@@ -85,13 +91,36 @@ export type PreviewRuntimePayload = {
     repairAvailable?: boolean
     diagnostics?: PreviewDiagnostic[]
     logs?: Record<PreviewServiceLayer, PreviewLog[]>
-    maintenance?: { threadId: string; action: string }
+    maintenance?: { threadId: string; action: string; layer?: PreviewServiceLayer }
   }
+  pageDebug?: {
+    origin?: string
+    frontendAttemptId?: string
+    backendRequestBlockedAt?: number
+  }
+  pageDebugSample?: number
   blockedBy?: { threadId?: string; runId?: string; message: string }
   repair?: PreviewRepair
   launchResult?: ProjectLaunchResult
   error?: { message?: string }
   progress?: { stage: string; message: string }
+}
+
+/** 独立调试使用目标服务身份，联动预览使用整轮身份。 */
+export function previewServiceAttemptId(
+  runtime: PreviewRuntimePayload['runtime'], layer: PreviewServiceLayer
+): string | undefined {
+  return runtime?.[layer].attemptId ?? runtime?.attemptId
+}
+
+/** 判断维护是否影响正在调试的服务，另一端维护时继续使用。 */
+export function previewServiceInMaintenance(
+  runtime: PreviewRuntimePayload['runtime'], layer: PreviewServiceLayer
+): boolean {
+  const maintenance = runtime?.maintenance
+  if (!maintenance) return false
+  return ['restart', 'stop', `restart_${layer}`, `stop_${layer}`].includes(maintenance.action) ||
+    (maintenance.action === 'confirm' && (!maintenance.layer || maintenance.layer === layer))
 }
 
 /** 标记已收到 Backend 业务失败，避免把业务错误误报为连接中断。 */
@@ -112,6 +141,8 @@ export async function runPreviewRuntime(
     planId?: string
     feedback?: string
     includeLogs?: boolean
+    layer?: PreviewServiceLayer
+    pageDebug?: boolean
   },
   options: {
     threadId?: string

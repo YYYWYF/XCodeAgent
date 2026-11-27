@@ -102,6 +102,7 @@ import SourcePanel from './components/SourcePanel'
 import StageOutputPanel from './components/StageOutputPanel'
 import DevelopmentArtifactsPanel from './components/DevelopmentArtifactsPanel'
 import InternalApiDebugPanel from './components/InternalApiDebug'
+import PageDebugPanel from './components/PageDebug'
 import UiDesignPreviewPanel from './components/UiDesignPreviewPanel'
 import MessageList from './components/MessageList'
 import AgentErrorCard from '../AgentErrorCard'
@@ -1204,6 +1205,7 @@ export default function AiChatPanel({
   const iterationToken = String(applicationLifecycle?.initialization?.iterationId || '')
   const internalDebugAllowed = Boolean(application.workspaceRoot && !versionReadOnly &&
     !isApplicationPlanningPhase && lifecycleReadyForWorkbench)
+  const pageDebugAllowed = internalDebugAllowed
   const [enterDevConfirmed, setEnterDevConfirmed] = useState(() =>
     hasApplicationEnteredDevelopment(application.id, iterationScopeId, iterationToken)
   )
@@ -1281,6 +1283,20 @@ export default function AiChatPanel({
   useEffect(() => {
     if (!internalDebugAllowed && rightPanel?.type === 'internal-api-debug') setRightPanel({ type: 'outline' })
   }, [internalDebugAllowed, rightPanel?.type, setRightPanel])
+  const pageDebugVisible = pageDebugAllowed && rightPanel?.type === 'page-debug' && rightPanelLayout !== 'hidden'
+  const pageDebugScope = JSON.stringify([application.workspaceRoot, iterationScopeId, iterationToken])
+  const [visitedPageDebugScope, setVisitedPageDebugScope] = useState<string>()
+  // 从页面调试切去启动后端时保留 iframe，回到调试页继续使用原来的页面状态。
+  const keepPageDebug = pageDebugAllowed && (pageDebugVisible ||
+    (internalDebugVisible && visitedPageDebugScope === pageDebugScope))
+  const [pageDebugLogScope, setPageDebugLogScope] = useState<string>()
+  const pageDebugLogsOpen = pageDebugLogScope === pageDebugScope
+  useEffect(() => {
+    if (pageDebugVisible) setVisitedPageDebugScope(pageDebugScope)
+  }, [pageDebugScope, pageDebugVisible])
+  useEffect(() => {
+    if (!pageDebugAllowed && rightPanel?.type === 'page-debug') setRightPanel({ type: 'outline' })
+  }, [pageDebugAllowed, rightPanel?.type, setRightPanel])
   /**
    * 需要展示右侧内容时确保它可见：隐藏态切回分栏；已是分栏/全宽则保持用户当前布局，
    * 不把用户特意选的「全宽」降级回分栏。
@@ -1766,8 +1782,10 @@ export default function AiChatPanel({
     workspace: application.workspaceRoot || '',
     activeSession,
     watchForAcceptance: activeWorkbenchPhase === 'acceptance' && !versionReadOnly,
-    watchForInternalDebug: internalDebugVisible,
-    includeInternalDebugLogs: internalDebugVisible && internalDebugLogsOpen,
+    watchForDevelopmentDebug: internalDebugVisible || pageDebugVisible,
+    watchForPageDebug: keepPageDebug,
+    includeDevelopmentDebugLogs: (internalDebugVisible && internalDebugLogsOpen) ||
+      (pageDebugVisible && pageDebugLogsOpen),
     localBlocked:
       Object.values(sessionExecutions).some(
         (entry) => entry.identity.workspaceRoot === application.workspaceRoot
@@ -3957,6 +3975,7 @@ export default function AiChatPanel({
     : [
         { key: 'outline', label: '应用产物', available: true },
         ...(internalDebugAllowed ? [{ key: 'internal-api-debug' as const, label: '接口调试', available: true }] : []),
+        ...(pageDebugAllowed ? [{ key: 'page-debug' as const, label: '页面调试', available: true }] : []),
         { key: 'preview', label: '预览', available: Boolean(application.workspaceRoot) },
         { key: 'source', label: '代码', available: Boolean(application.workspaceRoot) },
         { key: 'field-mapping', label: '字段映射', available: Boolean(application.workspaceRoot) },
@@ -3981,19 +4000,21 @@ export default function AiChatPanel({
       designDocs?.find((doc) => doc.available)?.key ||
       designDocs?.[0]?.key ||
       'requirement-spec'
-    : rightPanel?.type === 'internal-api-debug' && internalDebugAllowed
-      ? 'internal-api-debug'
-      : rightPanel?.type === 'field-mapping'
-        ? 'field-mapping'
-        : rightPanel?.type === 'outline'
-          ? 'outline'
-          : rightPanel?.type === 'preview'
-            ? 'preview'
-            : rightPanel?.type === 'source'
-              ? 'source'
-              : rightPanel?.type === 'stage-output' && hasOwnedPendingPlan
-                ? 'stage-output'
-                : 'outline'
+    : rightPanel?.type === 'page-debug' && pageDebugAllowed
+      ? 'page-debug'
+      : rightPanel?.type === 'internal-api-debug' && internalDebugAllowed
+        ? 'internal-api-debug'
+        : rightPanel?.type === 'field-mapping'
+          ? 'field-mapping'
+          : rightPanel?.type === 'outline'
+            ? 'outline'
+            : rightPanel?.type === 'preview'
+              ? 'preview'
+              : rightPanel?.type === 'source'
+                ? 'source'
+                : rightPanel?.type === 'stage-output' && hasOwnedPendingPlan
+                  ? 'stage-output'
+                  : 'outline'
   const openWorkspaceTab = useCallback(
     (key: WorkspaceTabKey) => {
       if (isApplicationPlanningPhase) {
@@ -4007,6 +4028,8 @@ export default function AiChatPanel({
         setRightPanel({ type: 'outline' })
       } else if (key === 'internal-api-debug' && internalDebugAllowed) {
         setRightPanel({ type: 'internal-api-debug' })
+      } else if (key === 'page-debug' && pageDebugAllowed) {
+        setRightPanel({ type: 'page-debug' })
       } else if (key === 'preview') {
         setAcceptancePreviewRequest(undefined)
         setRightPanel({ type: 'preview' })
@@ -4014,7 +4037,7 @@ export default function AiChatPanel({
         setRightPanel({ type: 'source' })
       }
     },
-    [designDocs, generatingDesignDocKey, internalDebugAllowed, isApplicationPlanningPhase, setRightPanel]
+    [designDocs, generatingDesignDocKey, internalDebugAllowed, isApplicationPlanningPhase, pageDebugAllowed, setRightPanel]
   )
 
   // 离开开发会话后退出旧差异，避免切回分栏时重新出现其他会话的文件。
@@ -4147,14 +4170,14 @@ export default function AiChatPanel({
         acceptanceRuntime.backend.message ||
         '验收预览服务未就绪，请重试。'
       : undefined
-  const previewFallbackError = !previewRuntime.control.busy
-    ? previewRuntime.control.error ||
+  const previewFallbackError = previewRuntime.control.busy ? undefined
+    : pageDebugVisible ? previewRuntime.pageDebugError
+    : previewRuntime.control.error ||
       acceptanceLaunchError ||
       ((previewRuntime.repairState?.interrupted && acceptanceRuntime?.status !== 'running') ||
       previewRuntime.repairState?.status === 'failed'
         ? previewRuntime.repairState.message
         : undefined)
-    : undefined
   const previewConnectionUnavailable = previewRuntime.connection.status === 'unavailable'
   // 二次修改断线走原 Workbench 对账与恢复；预览订阅断线不能抢走它的重试入口。
   const conversationNeedsRecovery = conversationUsesWorkflowRecovery({
@@ -6023,6 +6046,36 @@ export default function AiChatPanel({
               onCatalogRetry={onPlanningCatalogRetry}
               control={previewRuntime.control} logsOpen={internalDebugLogsOpen}
               onLogsOpenChange={(open) => setInternalDebugLogsScope(open ? internalDebugScope : undefined)} />
+          </div>
+        </div>
+      )}
+
+      {showRightPanel && keepPageDebug && application.workspaceRoot && (
+        <div className={cx('embedded-preview-pane', 'workspace-pane')} style={pageDebugVisible ? undefined : { display: 'none' }}>
+          <RightPanelTabs
+            tabs={displayedWorkspaceTabs}
+            active={displayedWorkspaceTab}
+            onChange={openDisplayedWorkspaceTab}
+            onClose={() => {
+              setRightPanel(undefined)
+              setRightPanelLayout('hidden')
+            }}
+          />
+          <div className={cx('workspace-content')}>
+            <PageDebugPanel
+              key={pageDebugScope}
+              workspaceRoot={application.workspaceRoot}
+              pages={displayedPlanningPages}
+              artifacts={applicationLifecycle?.developmentArtifacts}
+              preferredPageId={activePageId}
+              catalogLoading={planningCatalogStatus?.loading}
+              catalogError={planningCatalogStatus?.error}
+              onCatalogRetry={onPlanningCatalogRetry}
+              control={{ ...previewRuntime.control, error: previewRuntime.pageDebugError }}
+              active={pageDebugVisible}
+              logsOpen={pageDebugLogsOpen}
+              onLogsOpenChange={(open) => setPageDebugLogScope(open ? pageDebugScope : undefined)}
+            />
           </div>
         </div>
       )}

@@ -35,7 +35,7 @@ def require_no_maintenance(workspace: str | Path, thread_id: str = "") -> None:
 
 
 def claim_maintenance(
-    workspace: str, thread_id: str, action: str, *, attempt_id: str | None = None,
+    workspace: str, thread_id: str, action: str, *, attempt_id: str | None = None, layer: str | None = None,
 ) -> None:
     """调用方持有共享锁时登记独占维护身份。"""
     with maintenance_lock:
@@ -45,6 +45,8 @@ def claim_maintenance(
         record = {"threadId": thread_id, "action": action}
         if attempt_id is not None:
             record["attemptId"] = attempt_id
+        if layer is not None:
+            record["layer"] = layer
         _owners[workspace_key(workspace)] = record
         path = Path(workspace_key(workspace)) / WORKSPACE_ARTIFACT_DIR / 'runtime/preview-maintenance.json'
         path.parent.mkdir(parents=True, exist_ok=True)

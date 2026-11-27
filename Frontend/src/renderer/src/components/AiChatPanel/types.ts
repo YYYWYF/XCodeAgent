@@ -41,6 +41,7 @@ export type WorkspaceDocKey =
 export type RightPanelState =
   | { type: 'field-mapping' }
   | { type: 'internal-api-debug' }
+  | { type: 'page-debug' }
   | { type: 'preview'; requestKey?: string; url?: string; acceptanceLoadKey?: string }
   | {
       type: 'diff'

@@ -25,9 +25,15 @@ Builtin 权限初始化状态通过 `runtime.authorizationAdvisory` 动态投影
 
 ## AG-UI 契约
 
-`/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作包括 `get/watch/restart/stop/stop_frontend/stop_backend/diagnose/confirm/revise/cancel/leave`。分端停止在启动锁内校验 `attemptId`，成功后仅在目标服务写入 `stoppedByUser`。若维护中断，恢复时只对原尝试收口原目标。所有字段在 Pydantic 边界校验；不接受日志文件路径。
+`/preview-runtime/run` 使用 `forwardedProps.previewRuntime`，字段包括 `workspace`、`action` 和动作所需的 `attemptId`、`planId`、`feedback`。动作包括 `get/watch/restart/stop/restart_frontend/restart_backend/stop_frontend/stop_backend/diagnose/confirm/revise/cancel/leave`。分端停止在启动锁内校验目标服务的启动身份，成功后仅在目标服务写入 `stoppedByUser`。若维护中断，恢复时只对原尝试收口原目标。所有字段在 Pydantic 边界校验。
 
 所有响应均使用标准 AG-UI 生命周期、助手消息、`preview-runtime` CustomEvent、`previewRuntime` StateSnapshot 和 RunFinished，包括业务失败。`runtime.frontend` 与 `runtime.backend` 各自包含状态、可选 `port`、兼容保留的 URL 及失败摘要；操作失败含结构化 error。状态包含 runtime、blockedBy、当前会话 repair。`/health` 发布该能力。旧预览 REST 启停路由已移除；renderer 和 Electron 退出清理均通过 AG-UI 客户端调用。
+
+开发阶段调试入口启动与重启只作用于当前服务。分端启动刷新对应服务的 `attemptId`、状态和日志，另一端仍可使用。`diagnose` 可传 `layer`，后续 `confirm/revise` 从已保存的修复计划读取范围，沿用确认、校验和取消流程，并只重启目标服务。标准「预览」继续使用全量启动、诊断和关闭流程。
+
+「页面调试」的前端启动回执和 `get/watch` 均可带 `pageDebug=true`。前端就绪后，回执同时提供 `runtime.frontend`、`pageDebug.origin` 和 `frontendAttemptId`，页面立即加载对应路由。渲染端按 `pageDebugSample` 的取样顺序接收页面状态，文档加载期间在审查工具栏内显示进度提示。
+
+页面调试入口转发前端 HTTP 资源和开发热更新，应用相对 `/api` 请求按同工作区当前 Java 端口转发。后端未就绪时返回 `503` 和 `BACKEND_NOT_READY`。仅当后端尚未启动且实际请求受阻，快照才在 `pageDebug.backendRequestBlockedAt` 提供最近请求的毫秒时间。当前可见页面合并短时间内的多次请求，在顶部提示三秒。后端启动错误可在「接口调试」查看，前端启动或状态读取错误显示在「页面调试」。Java 就绪后保留应用原始 HTTP 状态、响应和 Cookie。运行日志保持白名单、脱敏和长度限制，调试页仅显示当前服务的日志并允许垂直拖动。
 
 `runtime.diagnostics` 保存本轮失败的结构化证据：`stage`、`category`（parse/dependency/compile/process/readiness）、原始 `message` 和错误 `code`，可选的文件 `location`（path/line/column）、真实 `command`（argv/cwd/exitCode/timedOut）、当前 `logPaths` 及有界脱敏 `excerpt`。`/health.tools.preview_runtime` 发布 `diagnosticsField` 和 `diagnosticCategories`，与服务端模型共用定义。异常按类型适配，命令按实际退出和输出适配，不按某个文件名写修复规则。成功或停止清除旧证据；原始读取错误和解析错误不会被合并成一个无法定位的摘要。
 

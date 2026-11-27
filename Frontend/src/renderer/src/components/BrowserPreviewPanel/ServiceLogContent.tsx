@@ -12,6 +12,7 @@ type Props = {
   searchLabel?: string
   following: boolean
   expanded: boolean
+  viewportHeight?: number
   onPauseFollowing: () => void
   onCopy: (text: string) => Promise<void>
 }
@@ -24,6 +25,7 @@ export default function ServiceLogContent({
   searchLabel = '搜索启动日志',
   following,
   expanded,
+  viewportHeight,
   onPauseFollowing,
   onCopy
 }: Props): ReactElement {
@@ -39,7 +41,7 @@ export default function ServiceLogContent({
 
   useEffect(() => {
     if (following && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
-  }, [content, following, label, expanded])
+  }, [content, following, label, expanded, viewportHeight])
 
   useEffect(() => {
     const log = logRef.current

@@ -1,13 +1,14 @@
-import { CloudServerOutlined, FileTextOutlined } from '@ant-design/icons'
-import { Alert, Button, Empty, Popover, Select, Spin } from 'antd'
+import { FileTextOutlined } from '@ant-design/icons'
+import { Alert, Button, Empty, Select, Spin } from 'antd'
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { DevelopmentArtifacts, DevelopmentPlanningApiContract } from '../../../../typings'
 import { describeInternalApi, type InternalDebugDefinition, type InternalDebugTarget } from '../../../../service/internalApiDebug'
 import { cx } from '../../../../utils'
-import type { ServiceStatusControl } from '../../../BrowserPreviewPanel/ServiceStatusDrawer'
-import InternalApiLogs from './InternalApiLogs'
+import { previewServiceInMaintenance } from '../../../../service/previewRuntime'
+import type { DebugServiceControl } from '../../hooks/usePreviewRuntime'
+import DebugServiceLogs from '../DebugRuntime/DebugServiceLogs'
+import DebugServiceStatusButton from '../DebugRuntime/DebugServiceControls'
 import InternalApiRequest, { InternalApiRequestBar } from './InternalApiRequest'
-import { InternalApiMaintenanceActions, InternalBackendServiceCard, statusMeta } from './InternalApiServiceControls'
 import { completedInternalEndpoints, internalDebugService, internalDebugStorageKey } from './internalApiDebugModel'
 import './InternalApiDebug.less'
 
@@ -19,12 +20,11 @@ type Props = {
   catalogLoading?: boolean
   catalogError?: string
   onCatalogRetry?: () => void
-  control: ServiceStatusControl
+  control: DebugServiceControl
   logsOpen: boolean
   onLogsOpenChange: (open: boolean) => void
 }
 type DefinitionState = { key: string; value?: InternalDebugDefinition; error?: string }
-const serviceActions = ['restart', 'stop', 'stop_backend', 'confirm']
 
 /** 让弹层留在当前工作台主题下。 */
 function workspacePopup(trigger: HTMLElement): HTMLElement {
@@ -75,14 +75,9 @@ export default function InternalApiDebugPanel({
 
   const runtime = control.snapshot?.runtime
   const service = internalDebugService(runtime)
-  const backend = runtime?.backend
-  const status = statusMeta[backend?.status ?? 'stopped']
-  const stopping = control.busyStopLayer === 'backend' || runtime?.maintenance?.action === 'stop_backend'
-  const stopped = backend?.status === 'stopped' && backend.stoppedByUser
-  const statusTone = backend?.status === 'running' && !stopping ? 'running' : status.tone
-  const statusLabel = stopping ? '停止中' : stopped ? '已停止' : backend ? status.label : '读取状态'
-  const canSend = Boolean(service && !control.busyLaunchLabel && !stopping &&
-    !serviceActions.includes(runtime?.maintenance?.action || ''))
+  const launchingBackend = control.busyLaunchLabel && control.busyLaunchLayer !== 'frontend'
+  const canSend = Boolean(service && !launchingBackend && control.busyStopLayer !== 'backend' &&
+    !previewServiceInMaintenance(runtime, 'backend'))
   const showExpanded = logsOpen && expanded
   const endpointsError = catalogError || artifacts?.catalogError
 
@@ -107,18 +102,8 @@ export default function InternalApiDebugPanel({
     }))} />
 
   const serviceControls = <>
-    <Popover placement="bottomRight" trigger="click" getPopupContainer={workspacePopup}
-      overlayClassName="internal-api-debug__service-popover"
-      content={<div className="internal-api-debug__service-content">
-        <InternalBackendServiceCard control={control} address={service?.base} />
-        <InternalApiMaintenanceActions control={control} />
-      </div>}>
-      <Button className="internal-api-debug__utility" icon={<CloudServerOutlined />}
-        aria-label={`服务状态：${statusLabel}`} title={statusLabel}>
-        服务状态 <span className={`internal-api-debug__service-status is-${statusTone}`} aria-hidden="true" />
-      </Button>
-    </Popover>
-    <Button className="internal-api-debug__utility" icon={<FileTextOutlined />}
+    <DebugServiceStatusButton control={control} layer="backend" address={service?.base} />
+    <Button className="debug-runtime-utility" icon={<FileTextOutlined />}
       aria-expanded={logsOpen} aria-controls={logsOpen ? logsId : undefined}
       onClick={() => toggleLogs(!logsOpen)}>运行日志</Button>
   </>
@@ -140,9 +125,7 @@ export default function InternalApiDebugPanel({
             </>}
       </div>
     </div>
-    {logsOpen && <div id={logsId} className="internal-api-debug__logs" data-expanded={showExpanded}>
-      <InternalApiLogs runtime={runtime} logsExpanded={showExpanded}
-        onExpandedChange={setExpanded} onClose={() => toggleLogs(false)} />
-    </div>}
+    {logsOpen && <DebugServiceLogs id={logsId} layer="backend" runtime={runtime} logsExpanded={showExpanded}
+      onExpandedChange={setExpanded} onClose={() => toggleLogs(false)} />}
   </section>
 }

@@ -1,5 +1,6 @@
 import type { DevelopmentArtifacts, DevelopmentPlanningApiContract } from '../../../../typings'
 import type { PreviewRuntimePayload } from '../../../../service/previewRuntime'
+import { previewServiceAttemptId } from '../../../../service/previewRuntime'
 import type { DebugMethod, InternalDebugDefinition, InternalDebugTarget } from '../../../../service/internalApiDebug'
 import type { Draft, Row } from '../../../DataSourcesPage/debugDraft'
 import { JSON_FIELD_TYPES, PATH_FIELD_TYPES } from '../../../DataSourcesPage/jsonFieldTypes'
@@ -53,6 +54,7 @@ export function internalDebugStorageKey(target: InternalDebugTarget, definition:
 /** 从同一预览快照读取实际 Java 服务地址。 */
 export function internalDebugService(runtime?: PreviewRuntimePayload['runtime']) {
   const port = runtime?.backend.port
-  if (!runtime?.attemptId || runtime.backend.status !== 'running' || !port || !Number.isInteger(port) || port > 65535 || port < 1) return undefined
-  return { base: `http://127.0.0.1:${port}`, attemptId: runtime.attemptId }
+  const attemptId = previewServiceAttemptId(runtime, 'backend')
+  if (!attemptId || runtime?.backend.status !== 'running' || !port || !Number.isInteger(port) || port > 65535 || port < 1) return undefined
+  return { base: `http://127.0.0.1:${port}`, attemptId }
 }

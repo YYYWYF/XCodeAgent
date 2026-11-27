@@ -86,11 +86,11 @@ test('预览业务拒绝、无有效结果和 HTTP 失败经真实 SDK 保留操
       }
       await act(async () => { root = create(createElement(Probe, { scope: `/preview-${scenario}` })) })
       assert.equal(connection.connection.status, 'healthy')
-      assert.match(connection.businessError, scenario === 'business' ? /已有预览维护任务/ : scenario === 'empty' ? /没有返回有效状态/ : /HTTP 500.*预览状态文件读取失败/)
+      assert.match(connection.readError, scenario === 'business' ? /已有预览维护任务/ : scenario === 'empty' ? /没有返回有效状态/ : /HTTP 500.*预览状态文件读取失败/)
       assert.equal(connection.connection.lastError, undefined)
       globalThis.fetch = async (_url, init) => reply(JSON.parse(String(init?.body)))
       await act(async () => { await connection.read() })
-      assert.equal(connection.businessError, '')
+      assert.equal(connection.readError, '')
       await act(async () => { root?.unmount() })
       root = undefined
     }

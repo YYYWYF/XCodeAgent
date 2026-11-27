@@ -6,6 +6,7 @@ import asyncio
 from contextlib import suppress
 from pathlib import Path
 from threading import Event
+from time import monotonic_ns
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,12 +15,17 @@ from app.protocols.ag_ui_action_stream import AgUiActionProgress, AgUiActionResu
 from app.protocols.revision_preview import schedule_revision_preview_cleanup
 from app.protocols.workflow.run_control import workflow_run_registry
 from app.services.application_lifecycle import load_application_lifecycle
+from app.services.debug_service_launcher import recover_interrupted_debug_service, restart_debug_service
+from app.services.page_debug_gateway import page_debug_projection
 from app.services.preview_runtime_guard import claim_maintenance, maintenance_lock, maintenance_owner, release_maintenance, pending_product_interaction
 from app.services.preview_runtime_repair import execute_repair, load_repair, prepare_repair, repair_path, save_repair, source_digest
 from app.services.preview_runtime_state import (
+    PreviewLayer,
     finish_attempt,
     mark_interrupted_attempt,
     read_record,
+    repair_attempt_id,
+    repair_available,
     runtime_snapshot,
 )
 from app.services.project_launcher import launch_project_preview, stop_preview_service, stop_project_preview
@@ -34,19 +40,26 @@ class PreviewRuntimeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     workspace: str = Field(min_length=1, max_length=4096)
     action: Literal[
-        "get", "watch", "restart", "stop", "stop_frontend", "stop_backend",
+        "get", "watch", "restart", "stop", "restart_frontend", "restart_backend", "stop_frontend", "stop_backend",
         "diagnose", "confirm", "revise", "cancel", "leave",
     ]
     attemptId: str = ""
     planId: str = ""
     feedback: str = Field(default="", max_length=4000)
     includeLogs: bool = True
+    layer: PreviewLayer | None = None
+    pageDebug: bool = False
 
 
-_service_stop_layers: dict[str, Literal["frontend", "backend"]] = {
+_service_stop_layers: dict[str, PreviewLayer] = {
     "stop_frontend": "frontend",
     "stop_backend": "backend",
 }
+_service_restart_layers: dict[str, PreviewLayer] = {
+    "restart_frontend": "frontend",
+    "restart_backend": "backend",
+}
+_process_actions = {"restart", "stop", *_service_stop_layers, *_service_restart_layers}
 _jobs: dict[tuple[str, str], asyncio.Task[Any]] = {}
 _cancellations: dict[tuple[str, str], Event] = {}
 _leave_cleanups: dict[str, asyncio.Task[Any]] = {}
@@ -79,7 +92,7 @@ async def _finish_leave_cleanup(workspace: str, job: asyncio.Task[Any] | None) -
 
 def preview_runtime_capabilities() -> dict[str, Any]:
     """发布当前独立预览协议。"""
-    return {"name": "preview-runtime", "endpoint": "/preview-runtime/run", "transport": "ag-ui-sse", "actions": list(PreviewRuntimeInput.model_fields["action"].annotation.__args__), "customEventName": "preview-runtime", "stateSnapshotKey": "previewRuntime", "workflowIndependent": True, "diagnosticsField": "runtime.diagnostics", "diagnosticCategories": list(PreviewDiagnostic.model_fields["category"].annotation.__args__)}
+    return {"name": "preview-runtime", "endpoint": "/preview-runtime/run", "transport": "ag-ui-sse", "actions": list(PreviewRuntimeInput.model_fields["action"].annotation.__args__), "customEventName": "preview-runtime", "stateSnapshotKey": "previewRuntime", "workflowIndependent": True, "diagnosticsField": "runtime.diagnostics", "diagnosticCategories": list(PreviewDiagnostic.model_fields["category"].annotation.__args__), "pageDebugField": "pageDebug"}
 
 
 def blocking_task(workspace: str, thread_id: str = "") -> dict[str, Any] | None:
@@ -117,7 +130,7 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
         if not owner:
             return
         action = str(owner.get("action") or "")
-        if action not in {"restart", "stop", "diagnose", "confirm", "revise", *_service_stop_layers}:
+        if action not in _process_actions | {"diagnose", "confirm", "revise"}:
             return
         key = (str(Path(workspace).expanduser().resolve()), str(owner.get("threadId") or ""))
         job = _jobs.get(key)
@@ -133,6 +146,12 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
             finally:
                 release_maintenance(workspace, thread_id)
             return
+        if layer := _service_restart_layers.get(action):
+            try:
+                recover_interrupted_debug_service(workspace, layer)
+            finally:
+                release_maintenance(workspace, thread_id)
+            return
         if action in {"diagnose", "confirm", "revise"}:
             repair = load_repair(workspace, thread_id)
             # 待确认是持久暂停，正常情况下没有内存任务；不能把它当成孤儿释放。
@@ -141,7 +160,11 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
             record = read_record(workspace)
             starting_layer = next((layer for layer in ("frontend", "backend") if (record.get(layer) or {}).get("status") == "starting"), "")
             # 修复末尾可能已进入启动器，必须同时收口半启动进程，不能留下永久 starting。
-            if starting_layer:
+            scoped_layer = repair.get("layer") or owner.get("layer")
+            if scoped_layer:
+                if action == "confirm":
+                    recover_interrupted_debug_service(workspace, scoped_layer)
+            elif starting_layer:
                 stop_project_preview(workspace)
                 mark_interrupted_attempt(workspace, layer=starting_layer)
             if repair.get("status") not in {"completed", "failed", "stopped", "requires_revision"}:
@@ -169,10 +192,17 @@ def _recover_orphaned_maintenance(workspace: str) -> None:
         release_maintenance(workspace, str(owner.get("threadId") or ""))
 
 
-def snapshot(workspace: str, thread_id: str, *, logs: bool = True) -> dict[str, Any]:
+def snapshot(workspace: str, thread_id: str, *, logs: bool = True, page_debug: bool = False) -> dict[str, Any]:
     """把运行事实、阻塞原因和当前会话修复投影到同一快照。"""
     _recover_orphaned_maintenance(workspace)
-    return {"runtime": runtime_snapshot(workspace, logs=logs), "blockedBy": blocking_task(workspace), "repair": {key: value for key, value in load_repair(workspace, thread_id).items() if key not in {"tasks", "digest"}}}
+    # 启动回执与订阅并行取样，标记读取起点，避免较慢的旧快照覆盖新入口。
+    sample = monotonic_ns() // 1_000 if page_debug else None
+    runtime = runtime_snapshot(workspace, logs=logs)
+    value = {"runtime": runtime, "blockedBy": blocking_task(workspace), "repair": {key: value for key, value in load_repair(workspace, thread_id).items() if key not in {"tasks", "digest"}}}
+    if page_debug:
+        value["pageDebug"] = page_debug_projection(workspace, runtime)
+        value["pageDebugSample"] = sample
+    return value
 
 
 async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any) -> dict[str, Any]:
@@ -201,6 +231,10 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
         repair = load_repair(workspace, thread_id)
         if cancel.is_set():
             raise RuntimeError("预览维护已请求停止。")
+        if layer := _service_restart_layers.get(request.action):
+            result = await synchronous(restart_debug_service, workspace, layer,
+                                       on_progress=lambda stage, status, message: progress(stage, message))
+            return {"launchResult": result}
         if layer := _service_stop_layers.get(request.action):
             progress("stop", "正在停止前端服务…" if layer == "frontend" else "正在停止后端服务…")
             result = await synchronous(stop_preview_service, workspace, layer, request.attemptId)
@@ -216,7 +250,7 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
         if request.action == "confirm":
             if repair.get("status") != "awaiting_confirmation" or repair.get("planId") != request.planId:
                 raise ValueError("修复确认已失效，请读取当前会话。")
-            if repair.get("attemptId") != read_record(workspace).get("attemptId"):
+            if repair.get("attemptId") != repair_attempt_id(read_record(workspace), repair.get("layer")):
                 raise ValueError("启动记录已变化，请重新诊断。")
             markdown = repair_path(workspace, thread_id).with_suffix(".md").read_text(encoding="utf-8")
             if markdown != repair.get("markdown") or source_digest(workspace, repair["paths"]) != repair["digest"]:
@@ -227,6 +261,8 @@ async def run_mutation(request: PreviewRuntimeInput, thread_id: str, report: Any
             repair = await synchronous(execute_repair, workspace, repair, progress, cancel)
         if not cancel.is_set() and (request.action in {"diagnose", "revise"} or repair.get("status") == "retry"):
             repair = {**repair, "status": "running", "iteration": int(repair.get("iteration", 0))}
+            if request.action == "diagnose" and request.layer:
+                repair["layer"] = request.layer
             save_repair(workspace, thread_id, repair)
             progress("diagnose", "正在结合本次启动日志诊断，并生成修复计划…")
             repair = await synchronous(prepare_repair, workspace, thread_id, repair, request.feedback)
@@ -271,14 +307,19 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
             await asyncio.to_thread(_recover_orphaned_maintenance, request.workspace)
         if request.action in {"get", "watch"}:
             previous: dict[str, Any] = {}
+            delivered: dict[str, Any] = {}
             for _ in range(20 if request.action == "watch" else 1):
-                current = await asyncio.to_thread(snapshot, request.workspace, thread_id, logs=request.includeLogs)
+                current = await asyncio.to_thread(snapshot, request.workspace, thread_id,
+                                                  logs=request.includeLogs, page_debug=request.pageDebug)
+                # 取样顺序只供客户端排除迟到结果，本身不算运行状态变化。
+                sample = current.pop("pageDebugSample", None)
                 if current != previous:
-                    await report(AgUiActionProgress(stage="status", message="服务状态已更新", percent=0, data=current))
                     previous = current
+                    delivered = {**current, "pageDebugSample": sample} if sample is not None else current
+                    await report(AgUiActionProgress(stage="status", message="服务状态已更新", percent=0, data=delivered))
                 if request.action == "watch":
                     await asyncio.sleep(1)
-            return AgUiActionResult(data=current, message="已读取服务状态。")
+            return AgUiActionResult(data=delivered, message="已读取服务状态。")
         if request.action == "leave":
             schedule_revision_preview_cleanup(request.workspace)
             owner = maintenance_owner(request.workspace)
@@ -335,7 +376,7 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
             # 因此允许它与应用任务并行，避免短时重启占用反向打断 Workflow。
             blocker = (
                 None
-                if request.action in {"restart", "stop", *_service_stop_layers}
+                if request.action in _process_actions
                 else blocking_task(request.workspace, thread_id)
             )
             if blocker:
@@ -345,21 +386,24 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
                 raise ValueError("当前应用已有维护任务，请先完成或停止。")
             if key in _jobs and not _jobs[key].done():
                 raise ValueError("当前操作仍在执行，请勿重复提交。")
+            repair_layer = None
             if request.action == "diagnose":
+                repair_layer = request.layer
                 current = runtime_snapshot(request.workspace, logs=False)
-                if not current.get("repairAvailable") or not request.attemptId or current.get("attemptId") != request.attemptId:
+                if not repair_available(current, repair_layer) or repair_attempt_id(current, repair_layer) != request.attemptId:
                     raise ValueError("当前没有对应的启动失败记录，请先重启服务。")
                 if load_repair(request.workspace, thread_id):
                     raise ValueError("本会话已有诊断记录，请使用继续操作。")
             if request.action in {"confirm", "revise"}:
                 pending = load_repair(request.workspace, thread_id)
+                repair_layer = pending.get("layer")
                 interrupted_revision = request.action == "revise" and pending.get("status") == "stopped" and pending.get("interrupted") is True
                 if pending.get("status") != "awaiting_confirmation" and not interrupted_revision:
                     raise ValueError("当前会话没有待确认的修复计划。")
                 if request.action == "confirm":
                     if pending.get("planId") != request.planId:
                         raise ValueError("修复计划确认已失效，请读取当前会话。")
-                    if pending.get("attemptId") != read_record(request.workspace).get("attemptId"):
+                    if pending.get("attemptId") != repair_attempt_id(read_record(request.workspace), repair_layer):
                         raise ValueError("启动记录已变化，请重新诊断。")
                     document = repair_path(request.workspace, thread_id).with_suffix(".md").read_text(encoding="utf-8")
                     if document != pending.get("markdown") or source_digest(request.workspace, pending["paths"]) != pending["digest"]:
@@ -367,6 +411,7 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
             claim_maintenance(
                 request.workspace, thread_id, request.action,
                 attempt_id=request.attemptId if request.action in _service_stop_layers else None,
+                layer=repair_layer,
             )
             _cancellations[key] = Event()
             job = asyncio.create_task(run_mutation(request, thread_id, report))
@@ -374,7 +419,8 @@ def build_preview_runtime_stream(*, payload: dict[str, Any], accept: str | None 
             job.add_done_callback(lambda task: _job_finished(key, task))
         # 抽屉或订阅关闭不取消工作区操作；占用直到实际同步任务退出才释放。
         data = await asyncio.shield(job)
-        data.update(snapshot(request.workspace, thread_id))
+        data.update(await asyncio.to_thread(snapshot, request.workspace, thread_id,
+                                            logs=request.includeLogs, page_debug=request.pageDebug))
         return AgUiActionResult(data=data, message=str(data.get("repair", {}).get("message") or data.get("launchResult", {}).get("message") or "操作完成。"))
 
     return build_ag_ui_action_stream(payload=payload, event_name="preview-runtime", state_key="previewRuntime", run_id_prefix="preview-runtime", progress_operation=operation, error_message_prefix="预览服务操作失败", accept=accept)

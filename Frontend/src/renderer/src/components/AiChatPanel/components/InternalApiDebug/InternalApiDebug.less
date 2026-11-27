@@ -18,20 +18,6 @@
     &[hidden] { display: none; }
   }
 
-  &__service-status {
-    flex: none;
-    width: 6px;
-    height: 6px;
-    margin-inline-start: 6px;
-    border-radius: 50%;
-    background: currentColor;
-    color: var(--wb-text-secondary);
-
-    &.is-accent { color: var(--wb-accent); }
-    &.is-running { color: var(--wb-code-add-text); }
-    &.is-danger { color: var(--wb-code-delete-text); }
-  }
-
   &__scroll {
     min-width: 0;
     min-height: 0;
@@ -106,20 +92,6 @@
     }
   }
 
-  &__utility.ant-btn {
-    display: inline-flex;
-    align-items: center;
-    color: var(--wb-text);
-    border-color: var(--wb-border-strong);
-    background: var(--wb-surface-subtle);
-
-    &:hover, &:focus-visible, &[aria-expanded='true'] {
-      color: var(--wb-accent);
-      border-color: var(--wb-accent);
-      background: var(--wb-accent-soft);
-    }
-  }
-
   &__send.ant-btn-primary {
     min-width: 78px;
 
@@ -139,9 +111,7 @@
   &__exchange .ant-tabs-ink-bar { background: var(--wb-accent); }
   &__exchange .debug-history-row { justify-content: flex-start; }
 
-  &__options.ant-select-dropdown,
-  &__service-popover .ant-popover-inner,
-  &__service-popover .ant-popover-arrow-content {
+  &__options.ant-select-dropdown {
     color: var(--wb-text);
     background: var(--wb-surface);
   }
@@ -155,43 +125,7 @@
     code { color: var(--wb-text-secondary); font-size: 12px; }
   }
 
-  &__service-content {
-    display: grid;
-    gap: 12px;
-    width: min(320px, calc(100vw - 48px));
-    max-height: 65vh;
-    overflow: auto;
-    color: var(--wb-text);
-    .preview-service-card:hover { transform: none; }
-    .preview-service-actions { padding: 10px 0 0; border: 0; border-top: 1px solid var(--wb-border); border-radius: 0; background: transparent; }
-  }
-
-  // 日志从底边占用面板空间，标题和操作常驻，日志正文单独滚动。
-  &__logs {
-    display: flex;
-    flex: 0 0 54%;
-    min-width: 0;
-    min-height: 0;
-    overflow: auto;
-    border-top: 1px solid var(--wb-border);
-    background: var(--wb-surface);
-    animation: internal-api-log-rise 160ms ease-out;
-
-    &[data-expanded='true'] { flex: 1; }
-    .preview-log-panel { flex: 1; min-width: 0; min-height: 0; padding: 10px 14px 12px; border: 0; border-radius: 0; }
-    .preview-log-panel__header, .preview-log-toolbar, .preview-service-callout { flex: none; }
-    .preview-log-panel__summary { display: flex; align-items: center; gap: 8px; }
-    .preview-log-content { flex: 1; min-height: 70px; }
-    .preview-service-logs, .preview-log-empty { flex: 1; min-height: 0; height: auto; }
-    .preview-service-logs { overflow: auto; }
-  }
 }
-
-@keyframes internal-api-log-rise {
-  from { transform: translateY(8px); }
-  to { transform: translateY(0); }
-}
-
 @container (max-width: 380px) {
   .internal-api-debug .internal-api-debug__scroll { padding-inline: 9px; }
   .internal-api-debug__request-actions {
@@ -202,8 +136,4 @@
     grid-template-columns: 18px minmax(38px, 1fr) minmax(60px, .85fr) minmax(50px, 1.3fr) 22px;
     gap: 4px;
   }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .internal-api-debug__logs { animation: none; }
 }

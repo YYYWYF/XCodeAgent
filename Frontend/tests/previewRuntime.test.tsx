@@ -7,6 +7,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { act, create } from 'react-test-renderer'
 import { PreviewRuntimeBusinessError, leavePreviewRuntime, runPreviewRuntime } from '../src/renderer/src/service/previewRuntime'
 import { previewRecoveryAction } from '../src/renderer/src/components/AiChatPanel/previewRuntimeRecovery'
+import DebugServiceLogs from '../src/renderer/src/components/AiChatPanel/components/DebugRuntime/DebugServiceLogs'
+import { internalDebugService } from '../src/renderer/src/components/AiChatPanel/components/InternalApiDebug/internalApiDebugModel'
+import { debugPageOptions, debugPageUrl } from '../src/renderer/src/components/AiChatPanel/components/PageDebug/pageDebugModel'
 import { usePreviewRuntime } from '../src/renderer/src/components/AiChatPanel/hooks/usePreviewRuntime'
 import { SessionRuntimeProvider } from '../src/renderer/src/components/AiChatPanel/hooks/useSessionRuntimeStore'
 import type { SessionIdentity } from '../src/renderer/src/components/AiChatPanel/hooks/sessionRuntime'
@@ -213,6 +216,47 @@ async function verifyExternalBrowserRetry(): Promise<void> {
 
 await verifyExternalBrowserRetry()
 
+// 后端迟启动、换端口与前端失败都按目标服务判断，不把另一端当成本轮调试实例。
+const pageOrigin = 'http://127.0.0.1:45233'
+const splitRuntime: NonNullable<PreviewRuntimePayload['runtime']> = {
+  attemptId: 'backend-restarted', status: 'starting',
+  frontend: { status: 'running', attemptId: 'frontend-1' },
+  backend: { status: 'starting', attemptId: 'backend-restarted' },
+  logs: {
+    frontend: [{ name: 'frontend.stdout.log', stage: 'start', stream: 'stdout', content: 'frontend-output', truncated: false }],
+    backend: [{ name: 'backend.stdout.log', stage: 'start', stream: 'stdout', content: 'backend-output', truncated: false }]
+  }
+}
+const pageSnapshot: PreviewRuntimePayload = {
+  status: 'completed', runtime: splitRuntime,
+  pageDebug: { origin: pageOrigin, frontendAttemptId: 'frontend-1' }
+}
+const lookupPage = { pageId: 'test_device_lookup', key: 'lookup', label: '查询设备', path: '/devices/lookup', purpose: '', designed: true }
+const homePage = { ...lookupPage, pageId: 'home', key: 'home', label: '首页', path: '/' }
+const [debugLookup, debugHome] = debugPageOptions([lookupPage, homePage], {
+  pages: {
+    test_device_lookup: { initialDevelopmentStatus: 'completed' },
+    home: { initialDevelopmentStatus: 'completed' }
+  },
+  entities: {},
+  endpoints: {}
+})
+assert.equal(debugPageUrl(pageSnapshot, debugLookup.path), `${pageOrigin}/page/test-device-lookup`)
+assert.equal(debugPageUrl(pageSnapshot, debugHome.path), `${pageOrigin}/page/home`)
+assert.equal(lookupPage.path, '/devices/lookup')
+assert.equal(debugPageUrl(pageSnapshot, '//different.test/articles'), '')
+assert.equal(debugPageUrl({ ...pageSnapshot, pageDebug: { origin: pageOrigin, frontendAttemptId: 'older' } }, '/articles'), '')
+assert.deepEqual(internalDebugService({ ...splitRuntime, attemptId: 'frontend-restarted', status: 'failed',
+  backend: { status: 'running', attemptId: 'backend-1', port: 8081 } }), { base: 'http://127.0.0.1:8081', attemptId: 'backend-1' })
+assert.equal(previewRecoveryAction({ status: 'completed', runtime: { ...splitRuntime, status: 'failed',
+  backend: { status: 'failed', failedStage: 'launch_interrupted' } },
+  repair: { status: 'stopped', interrupted: true, layer: 'backend' } }, 'restart_frontend'), undefined)
+const frontendLogs = renderToStaticMarkup(<DebugServiceLogs id="logs" layer="frontend" runtime={splitRuntime}
+  logsExpanded={false} onExpandedChange={() => {}} onClose={() => {}} />)
+assert.match(frontendLogs, /调整运行日志高度/)
+assert.match(frontendLogs, /frontend-output/)
+assert.doesNotMatch(frontendLogs, /backend-output/)
+
 /** 用规范 AG-UI 生命周期验证真实 HttpAgent 的事件消费，不模拟客户端内部解析。 */
 function mockStream(failed = false): void {
   globalThis.fetch = async (_input, init) => {
@@ -291,7 +335,7 @@ try {
     action: 'leave',
     includeLogs: false
   })
-  for (const action of ['stop_frontend', 'stop_backend'] as const) {
+  for (const action of ['stop_frontend', 'stop_backend', 'restart_frontend', 'restart_backend'] as const) {
     await runPreviewRuntime({ workspace: '/workspace', action, attemptId: 'attempt-1' })
     assert.deepEqual(forwarded, { workspace: '/workspace', action, attemptId: 'attempt-1' })
   }

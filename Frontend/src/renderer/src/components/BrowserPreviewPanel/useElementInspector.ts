@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { message as antdMessage } from 'antd'
 import type { InspectedElementContext } from '../../typings'
+import type { ElementInspectorSelectionMessage } from './elementInspectorProtocol'
 import {
   createElementInspectorCommand,
   elementInspectorPreviewOrigin,
@@ -15,6 +16,7 @@ type Options = {
   disabled?: boolean
   frameKey: string
   onElementContextChange?: (context: InspectedElementContext | undefined) => void
+  onSelectionChange?: (selection: ElementInspectorSelectionMessage | undefined) => void
   onInspectingChange?: (active: boolean) => void
   previewUrl: string
 }
@@ -33,6 +35,7 @@ export function useElementInspector({
   disabled = false,
   frameKey,
   onElementContextChange,
+  onSelectionChange,
   onInspectingChange,
   previewUrl
 }: Options): ElementInspectorController {
@@ -43,6 +46,7 @@ export function useElementInspector({
   const previewOrigin = useMemo(() => elementInspectorPreviewOrigin(previewUrl), [previewUrl])
   const inspectingChangeRef = useRef(onInspectingChange)
   const elementContextChangeRef = useRef(onElementContextChange)
+  const selectionChangeRef = useRef(onSelectionChange)
 
   /** 向当前 iframe 文档发送明确 targetOrigin 的审查命令。 */
   const postActiveCommand = useCallback(
@@ -60,8 +64,9 @@ export function useElementInspector({
   useEffect(() => {
     inspectingChangeRef.current = onInspectingChange
     elementContextChangeRef.current = onElementContextChange
+    selectionChangeRef.current = onSelectionChange
     postActiveCommandRef.current = postActiveCommand
-  }, [onElementContextChange, onInspectingChange, postActiveCommand])
+  }, [onElementContextChange, onInspectingChange, onSelectionChange, postActiveCommand])
 
   /** 切换审查状态并同步父级布局状态和 iframe 运行时。 */
   const toggle = useCallback((): void => {
@@ -86,6 +91,7 @@ export function useElementInspector({
   useEffect(() => {
     setReady(false)
     elementContextChangeRef.current?.(undefined)
+    selectionChangeRef.current?.(undefined)
   }, [frameKey])
 
   useEffect(() => {
@@ -101,6 +107,11 @@ export function useElementInspector({
         return
       }
       if (disabled) return
+      // 页面调试在预览下方展示选中元素，预览页继续沿用原有提示及聊天上下文。
+      if (selectionChangeRef.current) {
+        if (activeRef.current) selectionChangeRef.current(message)
+        return
+      }
       const context = inspectedElementContextFromMessage(message)
       const selectionContent = context
         ? inspectedElementLocationMessage(context)

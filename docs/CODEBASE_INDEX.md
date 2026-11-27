@@ -373,9 +373,13 @@ API 映射门禁的“确认并检测”使用原 Run 引用。工作台准入�
 
 `OperationTabLayout.tsx` 为调试和编辑共用滚动正文及固定底栏，两个页面的子页签共用主题样式。`debugDraft.ts` 按原接口键在客户端恢复普通请求草稿、最近一次脱敏响应及其请求快照和最近 20 条调用摘要。`debugPrivacy.ts` 自动过滤识别到的敏感字段、鉴权值及其回显，页面无需手动标为临时。`operationDebugSync.ts` 从请求快照同步字段名、类型和样例；请求方式或路径不同时，先保存基本信息再导入同一次调用，只导入完整成功的 JSON 响应样例。
 
-当前迭代进入开发后，工作台 `InternalApiDebug` 在「应用产物」与「预览」之间提供「接口调试」。`/internal-api-debug/run` 通过独立 AG-UI `describe/send` 只读获取当前生命周期和已确认 TechnicalPlan。发送前核对接口完成状态、方法路径及预览 `attemptId`，由 `internal_api_debug_http.py` 请求当前受管后端的回环端口。默认超时为 10 秒，支持本次输入的应用凭据和 Cookie。`useInternalApiDebugSession.ts` 按工作区、迭代及正式接口保存脱敏草稿、最近响应和二十条调用摘要。
+当前迭代进入开发后，工作台 `InternalApiDebug` 在「应用产物」与「预览」之间提供「接口调试」。`/internal-api-debug/run` 通过独立 AG-UI `describe/send` 只读获取当前生命周期和已确认 TechnicalPlan。发送前核对接口完成状态、方法路径及当前后端服务的启动身份，由 `internal_api_debug_http.py` 请求当前受管后端的回环端口。默认超时为 10 秒，支持本次输入的应用凭据和 Cookie。`useInternalApiDebugSession.ts` 按工作区、迭代及正式接口保存脱敏草稿、最近响应和二十条调用摘要。
 
-接口调试的请求栏按发送、服务状态、运行日志排列。`InternalApiServiceControls.tsx` 使用原有预览运行时执行启动、停止和诊断修复。`InternalApiLogs.tsx` 只展示后端构建、启动和运行日志，复用日志搜索、复制及滚动交互。原有预览抽屉保留自己的前后端启动日志页签。回归入口为 `tests.test_internal_api_debug`、`tests.test_external_api_debug`、`pnpm test:preview-runtime` 和 `pnpm test:service-logs`。
+接口调试和页面调试共用 `DebugRuntime/DebugServiceControls.tsx` 的原接口调试服务状态弹层，以及 `DebugRuntime/DebugServiceLogs.tsx` 的底部日志。顶部拖动条调节日志高度，保留展开、还原、搜索、复制和滚动。两端各自展示目标服务的受管日志，Java 后端进程运行期间输出到 stdout/stderr 的业务日志也随订阅更新。标准预览抽屉沿用原有布局。
+
+开发阶段的「页面调试」在「接口调试」与「预览」之间。`PageDebug` 按当前正式目录和生命周期选择已完成页面，只需前端服务即可渲染，重新加载不重启服务。元素审查复用现有 iframe 协议，从当前应用 `frontend/src` 按需读取有限源码行。切到接口调试启动后端时保留当前 iframe。
+
+`debug_service_launcher.py` 通过 `/preview-runtime/run` 的 `restart_frontend/restart_backend` 启停对应受管进程，保留另一端启动身份和日志。分端诊断按目标服务绑定证据、确认和修复后的重启。「预览」继续使用联动 `restart`。页面调试在前端启动回执中直接获取 `page_debug_gateway.py` 为当前轮次分配的回环入口，后续订阅按取样顺序更新。静态资源、页面路由和热更新走当前前端，`/api` 走同工作区当前 Java 实际端口。未就绪的后端返回 `503`。后端尚未启动时，`PageDebugRequestNotice` 根据网关记录的实际受阻请求显示三秒提示；后端启动失败详情在接口调试查看。回归入口为 `tests.test_page_debug_gateway`、`tests.test_preview_runtime`、`tests.test_internal_api_debug`、`pnpm test:preview-runtime` 和 `pnpm test:service-logs`。
 
 ## Update Policy
 

@@ -10,20 +10,20 @@ export function usePreviewRuntimeConnection(
   threadId: string | undefined,
   includeLogs: boolean,
   receive: (value: PreviewRuntimePayload, threadId?: string) => void,
-  watchEnabled: boolean
+  watchEnabled: boolean,
+  pageDebug = false
 ) {
   const [connection, setConnection] = useState(() => initialConnectionState())
-  const [businessError, setBusinessError] = useState('')
+  const [readError, setReadError] = useState('')
   const generationRef = useRef(0)
   const [subscriptionRevision, setSubscriptionRevision] = useState(0)
   const readScopeRef = useRef<string>()
   const scopeRef = useRef(workspace)
   scopeRef.current = workspace
 
-  /** 只投影本工作区当前请求的通信错误；业务失败意味着 Backend 已响应。 */
+  /** 维护操作的失败更新连接状态，错误详情由发起该操作的服务持有。 */
   const reportFailure = useCallback((reason: unknown): void => {
     const generation = ++generationRef.current
-    setBusinessError(isBackendTransportError(reason) ? '' : backendRequestErrorMessage(reason, '读取预览服务状态失败'))
     setConnection((current) => !isBackendTransportError(reason)
       ? completeConnectionRequest(current, generation)
       : failConnectionRequest(current, generation, reason instanceof Error ? reason.message : '读取预览服务状态失败'))
@@ -33,30 +33,32 @@ export function usePreviewRuntimeConnection(
   const read = useCallback(async (currentThread = threadId): Promise<PreviewRuntimePayload> => {
     const generation = ++generationRef.current
     try {
-      const value = await runPreviewRuntime({ workspace, action: 'get', includeLogs }, { threadId: currentThread })
+      const value = await runPreviewRuntime({ workspace, action: 'get', includeLogs, pageDebug: pageDebug || undefined }, { threadId: currentThread })
       if (scopeRef.current === workspace) {
-        setBusinessError('')
+        setReadError('')
         setConnection((current) => completeConnectionRequest(current, generation))
         receive(value, currentThread)
         // 用户正常读取成功后才恢复必要的业务订阅，不用定时器探测服务是否恢复。
-        readScopeRef.current = JSON.stringify([workspace, threadId, includeLogs])
+        readScopeRef.current = JSON.stringify([workspace, threadId, includeLogs, pageDebug])
         setSubscriptionRevision((revision) => revision + 1)
       }
       return value
     } catch (reason) {
       if (scopeRef.current === workspace) {
-        setBusinessError(isBackendTransportError(reason) ? '' : backendRequestErrorMessage(reason, '读取预览服务状态失败'))
+        setReadError(backendRequestErrorMessage(reason, '读取预览服务状态失败'))
         setConnection((current) => !isBackendTransportError(reason)
           ? completeConnectionRequest(current, generation)
           : failConnectionRequest(current, generation, String(reason)))
       }
       throw reason
     }
-  }, [workspace, threadId, includeLogs, receive])
+  }, [workspace, threadId, includeLogs, pageDebug, receive])
+
+  useEffect(() => { setReadError('') }, [workspace])
 
   useEffect(() => {
     const controller = new AbortController()
-    const scope = JSON.stringify([workspace, threadId, includeLogs])
+    const scope = JSON.stringify([workspace, threadId, includeLogs, pageDebug])
     const alreadyRead = readScopeRef.current === scope
     readScopeRef.current = undefined
     /** 工作区首次读取及可见/运行中的预览订阅；失败后停止，等待下一次正常请求。 */
@@ -66,12 +68,12 @@ export function usePreviewRuntimeConnection(
         if (!initialRead && !watchEnabled) return
         const generation = ++generationRef.current
         try {
-          await runPreviewRuntime({ workspace, action: initialRead ? 'get' : 'watch', includeLogs }, {
+          await runPreviewRuntime({ workspace, action: initialRead ? 'get' : 'watch', includeLogs, pageDebug: pageDebug || undefined }, {
             threadId,
             signal: controller.signal,
             onUpdate: (value) => {
               if (controller.signal.aborted) return
-              setBusinessError(value.status === 'failed' ? value.error?.message || '读取预览服务状态失败' : '')
+              setReadError(value.status === 'failed' ? value.error?.message || '读取预览服务状态失败' : '')
               setConnection((current) => completeConnectionRequest(current, generation))
               receive(value, threadId)
             }
@@ -79,7 +81,7 @@ export function usePreviewRuntimeConnection(
           initialRead = false
         } catch (reason) {
           if (controller.signal.aborted) return
-          setBusinessError(isBackendTransportError(reason) ? '' : backendRequestErrorMessage(reason, '读取预览服务状态失败'))
+          setReadError(backendRequestErrorMessage(reason, '读取预览服务状态失败'))
           // watch 是长连接，同代次失败必须覆盖此前收到的状态。
           setConnection((current) => !isBackendTransportError(reason)
             ? completeConnectionRequest(current, generation)
@@ -90,6 +92,6 @@ export function usePreviewRuntimeConnection(
     }
     void watch()
     return () => controller.abort()
-  }, [workspace, threadId, includeLogs, receive, watchEnabled, subscriptionRevision])
-  return { connection, read, reportFailure, businessError }
+  }, [workspace, threadId, includeLogs, pageDebug, receive, watchEnabled, subscriptionRevision])
+  return { connection, read, reportFailure, readError }
 }

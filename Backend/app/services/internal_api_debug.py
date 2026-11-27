@@ -14,7 +14,7 @@ from app.services.api_schema_refs import normalize_local_schema_ref
 from app.services.application_lifecycle import read_application_lifecycle_snapshot
 from app.services.development_artifacts import read_confirmed_technical_plan
 from app.services.internal_api_debug_http import PATH_PARAMETER, HttpDebugRequest, execute_debug_http, expand_debug_path
-from app.services.preview_runtime_state import runtime_snapshot
+from app.services.preview_runtime_state import runtime_snapshot, service_attempt_id, service_in_maintenance
 
 
 class InternalDebugTarget(BaseModel):
@@ -107,13 +107,12 @@ def _resolve_runtime_target(data: SendInternalDebug) -> tuple[str, str]:
     if (method, path) != (data.expectedMethod, data.expectedPath):
         raise ValueError("接口定义已变化，请重新选择接口。")
     runtime = runtime_snapshot(root, logs=False)
-    if runtime.get("attemptId") != data.attemptId:
+    if service_attempt_id(runtime, "backend") != data.attemptId:
         raise ValueError("后端运行实例已变化，请等待刷新后再发送。")
     backend = runtime["backend"]
     port = backend.get("port")
-    maintenance = runtime.get("maintenance") or {}
     if (backend.get("status") != "running" or not isinstance(port, int) or not 0 < port <= 65535
-            or maintenance.get("action") in {"restart", "stop", "stop_backend", "confirm"}):
+            or service_in_maintenance(runtime.get("maintenance"), "backend")):
         raise ValueError("后端服务尚未就绪，请查看服务状态。")
     route = expand_debug_path(path, data.pathValues)
     return method, f"http://127.0.0.1:{port}{route}"

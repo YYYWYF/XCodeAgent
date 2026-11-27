@@ -260,11 +260,11 @@ def stop_preview_service(
     """串行停止指定标准预览进程，避免迟到请求影响新的启动尝试。"""
 
     from app.services.backend_process_registry import backend_launch_lock
-    from app.services.preview_runtime_state import read_record, record_service_stop
+    from app.services.preview_runtime_state import read_record, record_service_stop, service_attempt_id
 
     root = Path(workspace_path).expanduser().resolve()
     with backend_launch_lock(root):
-        if read_record(root)["attemptId"] != attempt_id:
+        if not attempt_id or service_attempt_id(read_record(root), layer) != attempt_id:
             raise ValueError("服务启动记录已变化，请刷新状态后再停止。")
         stop = stop_frontend_project if layer == "frontend" else stop_workspace_backend_project
         result = stop(root)
@@ -302,11 +302,13 @@ def stop_project_preview(workspace_path: str | Path) -> dict[str, Any]:
         "ui_design_frontend": ui_design_frontend,
         "backend": backend,
     }
+    from app.services.page_debug_gateway import close_page_debug_gateway
     from app.services.preview_runtime_state import finish_attempt
 
     # 外部删除后的停机仍需清理进程登记，但不能为了保存停止状态重建项目目录。
     if root.is_dir():
         finish_attempt(root, result)
+    close_page_debug_gateway(root)
     return result
 
 

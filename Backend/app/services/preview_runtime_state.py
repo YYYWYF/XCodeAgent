@@ -8,7 +8,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -27,6 +27,34 @@ LOG_FILES = {
     "frontend": ("install.stdout.log", "install.stderr.log", "frontend.stdout.log", "frontend.stderr.log"),
     "backend": ("backend-build.stdout.log", "backend-build.stderr.log", "backend-repackage.stdout.log", "backend-repackage.stderr.log", "backend.stdout.log", "backend.stderr.log"),
 }
+PreviewLayer = Literal["frontend", "backend"]
+_NON_REPAIRABLE = {"stop", "launch_interrupted", "backend_database_resource"}
+
+
+def service_attempt_id(record: dict[str, Any], layer: PreviewLayer) -> str:
+    """读取分端启动身份，标准预览共用整轮的启动身份。"""
+    return str(record[layer].get("attemptId", record.get("attemptId")) or "")
+
+
+def repair_attempt_id(record: dict[str, Any], layer: PreviewLayer | None) -> str:
+    """按诊断入口选择需要绑定的启动轮次。"""
+    return service_attempt_id(record, layer) if layer else str(record.get("attemptId") or "")
+
+
+def service_in_maintenance(owner: dict[str, Any] | None, layer: PreviewLayer) -> bool:
+    """判断当前维护是否会停止或替换目标服务。"""
+    owner = owner or {}
+    action = owner.get("action")
+    return action in {"restart", "stop", f"restart_{layer}", f"stop_{layer}"} or (
+        action == "confirm" and owner.get("layer") in {None, layer}
+    )
+
+
+def repair_available(record: dict[str, Any], layer: PreviewLayer | None = None) -> bool:
+    """仅允许诊断当前启动失败，排除需要手动恢复的环境与停止问题。"""
+    part = record[layer] if layer else record
+    return bool(repair_attempt_id(record, layer) and part.get("status") == "failed"
+                and part.get("failedStage") not in _NON_REPAIRABLE)
 
 
 def _coerce_port(value: Any) -> int | None:
@@ -116,13 +144,35 @@ def begin_attempt(workspace: str | Path) -> str:
     with _lock:
         root = runtime_root(workspace)
         root.mkdir(parents=True, exist_ok=True)
-        for names in LOG_FILES.values():
-            for name in names:
-                path = root / name
-                if path.exists() and not path.is_symlink():
-                    path.write_text("", encoding="utf-8")
+        _clear_service_logs(root, "frontend")
+        _clear_service_logs(root, "backend")
         attempt = uuid4().hex
         write_record(workspace, {"attemptId": attempt, "startedAt": datetime.now(UTC).isoformat(), "status": "starting", "diagnostics": [], "frontend": {"status": "stopped"}, "backend": {"status": "starting"}})
+        return attempt
+
+
+def _clear_service_logs(root: Path, layer: PreviewLayer) -> None:
+    """只清理目标一端的受管日志。"""
+    for name in LOG_FILES[layer]:
+        path = root / name
+        if path.exists() and not path.is_symlink():
+            path.write_text("", encoding="utf-8")
+
+
+def begin_service_attempt(workspace: str | Path, layer: PreviewLayer) -> str:
+    """建立独立启动轮次，保留另一端的身份、日志和运行事实。"""
+    with _lock:
+        value = read_record(workspace)
+        _clear_service_logs(runtime_root(workspace), layer)
+        other = "backend" if layer == "frontend" else "frontend"
+        value[other].setdefault("attemptId", service_attempt_id(value, other))
+        attempt = uuid4().hex
+        value.update(attemptId=attempt, startedAt=datetime.now(UTC).isoformat())
+        value[layer] = {"attemptId": attempt, "status": "starting"}
+        if layer == "backend":
+            value.pop("databaseCheck", None)
+        _summarize_services(value, layer)
+        write_record(workspace, value)
         return attempt
 
 
@@ -163,22 +213,22 @@ def record_database_check(workspace: str | Path, report: dict[str, Any]) -> None
         write_record(workspace, value)
 
 
-def mark_interrupted_attempt(workspace: str | Path, *, layer: str) -> None:
+def mark_interrupted_attempt(workspace: str | Path, *, layer: str, scoped: bool = False) -> None:
     """把平台进程重启时遗留的启动中状态收口为可重新启动的失败状态。"""
 
     with _lock:
         value = read_record(workspace)
         message = "预览启动任务意外中断，已清理残留进程，请重新启动服务。"
-        value.update(
-            status="failed",
-            message=message,
-            previewUrl=None,
-            failedStage="launch_interrupted",
-            diagnostics=diagnostics_from_command(workspace, "launch_interrupted", "process", message),
-        )
+        diagnostics = diagnostics_from_command(workspace, "launch_interrupted", "process", message)
         if layer in {"frontend", "backend"}:
             part = value.get(layer) if isinstance(value.get(layer), dict) else {}
-            value[layer] = {**part, "status": "failed", "message": message}
+            value[layer] = {**part, "status": "failed", "message": message,
+                            "failedStage": "launch_interrupted", "diagnostics": diagnostics}
+        if scoped:
+            _summarize_services(value, layer)
+        else:
+            value.update(status="failed", message=message, previewUrl=None,
+                         failedStage="launch_interrupted", diagnostics=diagnostics)
         write_record(workspace, value)
 
 
@@ -189,8 +239,11 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
         value.update({"status": result.get("status", "failed"), "message": redact(str(result.get("message") or "")), "previewUrl": result.get("preview_url") if result.get("status") == "running" else None, "failedStage": result.get("failed_stage")})
         for layer in ("backend", "frontend"):
             part = result.get(layer) or {}
-            server = part.get("server") or {}
-            value[layer] = {"status": part.get("status", "stopped"), "message": redact(str(part.get("message") or ("未启动：后端启动失败" if layer == "frontend" and result.get("status") == "failed" else ""))), "pid": server.get("pid"), "port": _coerce_port(server.get("port") or part.get("port")) or _port_from_url(part.get("preview_url")), "url": part.get("preview_url"), "command": str(server.get("command") or ""), "ready": server.get("ready", False)}
+            value[layer] = _service_result(part)
+            if not part.get("message") and layer == "frontend" and result.get("status") == "failed":
+                value[layer]["message"] = "未启动：后端启动失败"
+            if part.get("status") == "failed":
+                _record_service_failure(value[layer], workspace, layer, part, result.get("failed_stage"))
         # 只保留本轮失败证据，成功或主动停止不得带入旧故障。
         value["diagnostics"] = result.get("diagnostics", []) if result.get("status") == "failed" else []
         if result.get("status") == "failed" and not value["diagnostics"]:
@@ -198,22 +251,59 @@ def finish_attempt(workspace: str | Path, result: dict[str, Any]) -> None:
         write_record(workspace, value)
 
 
-def record_service_stop(workspace: str | Path, layer: str, result: dict[str, Any]) -> None:
+def _service_result(result: dict[str, Any]) -> dict[str, Any]:
+    """从启动器结果提取可公开的进程身份和就绪信息。"""
+    server = result.get("server") or {}
+    return {
+        "status": result.get("status", "stopped"), "message": redact(str(result.get("message") or "")),
+        "pid": server.get("pid"), "port": _coerce_port(server.get("port") or result.get("port")) or _port_from_url(result.get("preview_url")),
+        "url": result.get("preview_url"), "command": str(server.get("command") or ""), "ready": server.get("ready", False),
+    }
+
+
+def _record_service_failure(part: dict[str, Any], workspace: str | Path, layer: str,
+                            result: dict[str, Any], failed_stage: str | None) -> None:
+    """保留只属于当前服务的失败证据，用于分端诊断。"""
+    part["failedStage"] = failed_stage or result.get("failed_stage") or f"{layer}_start"
+    part["diagnostics"] = launch_diagnostics(workspace, layer, result)
+
+
+def _summarize_services(value: dict[str, Any], layer: str) -> None:
+    """为标准预览投影聚合状态，分端操作继续读取独立的进程状态。"""
+    parts = (value[layer], value["backend" if layer == "frontend" else "frontend"])
+    for status in ("failed", "starting", "running"):
+        current = next((part for part in parts if part["status"] == status), None)
+        if current is not None:
+            break
+    else:
+        status, current = "stopped", parts[0]
+    value.update(status=status, message=current.get("message", ""),
+                 previewUrl=value["frontend"].get("url") if status == "running" else None,
+                 failedStage=current.get("failedStage"), diagnostics=current.get("diagnostics", []))
+
+
+def finish_service_attempt(workspace: str | Path, layer: PreviewLayer, result: dict[str, Any]) -> None:
+    """提交单端启动结果，避免触碰仍在运行的另一端。"""
+    with _lock:
+        value = read_record(workspace)
+        part = {**_service_result(result), "attemptId": service_attempt_id(value, layer)}
+        if part["status"] == "failed":
+            _record_service_failure(part, workspace, layer, result, result.get("failed_stage"))
+        value[layer] = part
+        _summarize_services(value, layer)
+        write_record(workspace, value)
+
+
+def record_service_stop(workspace: str | Path, layer: PreviewLayer, result: dict[str, Any]) -> None:
     """只提交已停止的一端，保留另一端运行事实和本轮日志。"""
     with _lock:
         value = read_record(workspace)
         message = redact(str(result["message"]))
-        value[layer] = {"status": result["status"], "message": message, "stoppedByUser": True}
-        states = {value["frontend"]["status"], value["backend"]["status"]}
-        value["status"] = next(
-            (status for status in ("failed", "starting", "running") if status in states),
-            "stopped",
-        )
-        value["previewUrl"] = (
-            value["frontend"].get("url") if value["status"] == "running" else None
-        )
+        value[layer] = {"status": result["status"], "message": message, "stoppedByUser": True,
+                        "attemptId": service_attempt_id(value, layer)}
+        _summarize_services(value, layer)
         if value["status"] != "failed":
-            value.update(message=message, failedStage=None, diagnostics=[])
+            value["message"] = message
         write_record(workspace, value)
 
 
@@ -222,8 +312,11 @@ def record_frontend_runtime(workspace: str | Path, result: dict[str, Any]) -> No
     with _lock:
         value = read_record(workspace)
         server = result.get("server") or {}
+        previous = value["frontend"]
+        attempt = service_attempt_id(value, "frontend") if previous.get("pid") == server.get("pid") else ""
         value["frontend"] = {
             "status": result.get("status", "stopped"),
+            "attemptId": attempt or uuid4().hex,
             "message": redact(str(result.get("message") or "")),
             "pid": server.get("pid"),
             "port": _coerce_port(server.get("port") or result.get("port")) or _port_from_url(result.get("preview_url")),
@@ -323,19 +416,19 @@ def runtime_snapshot(workspace: str | Path, *, logs: bool = True) -> dict[str, A
                         raise ProcessLookupError()
             except (OSError, ValueError):
                 message = "服务进程已退出或就绪检测失败，请重启服务。"
-                part.update(status="failed", ready=False, message=message)
-                value.update(status="failed", message=message, failedStage=f"{layer}_process", previewUrl=None)
-                value["diagnostics"] = diagnostics_from_command(workspace, f"{layer}_process", "readiness", message, {
+                stage = f"{layer}_process"
+                diagnostics = diagnostics_from_command(workspace, stage, "readiness", message, {
                     "stdout_log": str(root / f"{layer}.stdout.log"),
                     "stderr_log": str(root / f"{layer}.stderr.log"),
                 })
+                part.update(status="failed", ready=False, message=message, failedStage=stage, diagnostics=diagnostics)
+                value.update(status="failed", message=message, failedStage=stage, previewUrl=None, diagnostics=diagnostics)
     # 必须在实时健康校准之后计算；否则历史 running 在本轮变成 failed 时，
     # UI 会显示失败却仍把诊断按钮禁用。
-    value["repairAvailable"] = bool(
-        value.get("attemptId")
-        and value.get("status") == "failed"
-        and value.get("failedStage") not in {"stop", "launch_interrupted", "backend_database_resource"}
-    )
+    value["repairAvailable"] = repair_available(value)
+    for layer in ("frontend", "backend"):
+        if value[layer]["status"] == "failed":
+            value[layer]["repairAvailable"] = repair_available(value, layer)
     value["maintenance"] = maintenance_owner(workspace)
     value["authorizationAdvisory"] = get_preview_authorization_advisory(Path(workspace).expanduser().resolve())
     return value
