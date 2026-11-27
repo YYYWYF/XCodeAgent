@@ -72,3 +72,27 @@ description: 前端npm包版本风险发现技能。用于检测项目中的已�
       form-data: 4.0.5
     ```
     然后执行pnpm i安装依赖更新`pnpm-lock.yaml`
+
+
+
+## qs 版本安全规则
+
+- **安全版本范围**：
+  - `>=6.14.1` — 即 6.14.1 及以上版本
+- **修复方案**：
+  如果版本号不符合安全版本范围：
+  - 如果`package.json` 中dependencies或者devDependencies内有qs依赖声明，则将qs版本改为6.14.1
+  - 如果`pnpm-lock.yaml`中有不符合安全版本范围的qs依赖，则第一，在package.json中，与dependencies同级的层级添加如下代码
+    ```js
+    "pnpm": {
+      "overrides": {
+        "qs": "6.14.1",
+      }
+    }
+    ```
+    第二，在`pnpm-workspace.yaml`文件中添加如下代码:
+    ```yaml
+    overrides:
+      qs: 6.14.1
+    ```
+    然后执行pnpm i安装依赖更新`pnpm-lock.yaml`
